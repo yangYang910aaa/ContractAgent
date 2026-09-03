@@ -131,3 +131,25 @@ def test_build_missing_and_messy_input() -> None:
     assert messy.expiry_date is None
     assert messy.total_amount is None
     assert messy.extraction_meta == {}  # 未知证据字段被忽略
+
+
+def test_build_real_model_shaped_output() -> None:
+    """镜像真实模型输出：percent 给数字、evidence 给 {字段名: 证据} 对象。"""
+    raw = {
+        "total_amount": "800,000 元",
+        "payment_schedule": [
+            {"name": "预付款", "amount": "480,000 元", "percent": 60},  # int 而非 str
+            {"name": "验收合格后支付", "amount": "320,000 元", "percent": 40},
+        ],
+        "evidence": {
+            "total_amount": {"quote": "合同总价款为 800,000 元", "clause_ref": "第一条", "confidence": 1.0},
+            "penalty_rate": {"quote": "每逾期一日按总价款的 1.5%", "clause_ref": "第五条", "confidence": 0.6},
+            "不存在的字段": {"quote": "x", "clause_ref": "", "confidence": 0.9},
+        },
+    }
+    cm = build_contract_model(raw)
+    assert cm.total_amount == Decimal("800000")
+    assert cm.payment_schedule[0].percent == 60.0  # int 60 → 归一化成 60.0
+    assert cm.extraction_meta["total_amount"].clause_ref == "第一条"
+    assert cm.extraction_meta["penalty_rate"].needs_human_review is True  # 0.6 < 0.7
+    assert "不存在的字段" not in cm.extraction_meta
