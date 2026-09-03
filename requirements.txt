@@ -17,6 +17,8 @@ python-docx>=1.1
 rank_bm25>=0.2
 jieba>=0.42
 pytest>=8
+# 生成 PDF 合成样本用（格式真实、内容合成）
+reportlab>=4
 # 可选 Postgres checkpointer：
 # psycopg[binary]>=3.2
 # langgraph-checkpoint-postgres>=2.0

@@ -1,6 +1,6 @@
 """第 1 版合成合同生成器。
 
-生成 5 份中文「采购合同」纯文本样本到 data/contracts/:
+生成 5 份中文「采购合同」样本到 data/contracts/（md / docx / pdf 三格式）:
 - sample_01 / sample_02:无缺陷（正常放行）
 - sample_03:违约金比例过高 + 责任上限过低 + 分项加总与总额不一致
 - sample_04:预付款 60%（超 30% 政策）+ 缺失保密条款
@@ -8,7 +8,8 @@
 
 写法:每份合同按「第X条」成块(Phase 1 parser 将按此边界切分)，
 内容由参数化 spec 渲染，同一种缺陷形态可复现、可批量扩展。
-全部为合成数据，不含任何真实公司/个人信息。
+全部为合成数据，不含任何真实公司/个人信息；docx/pdf 只是"格式真实"，
+用于验证 PDF/Word 上传链路，内容仍是合成的（合规红线）。
 
 用法：
     python -m backend.eval.generate_samples
@@ -16,6 +17,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -298,15 +300,86 @@ def render_contract(spec: SampleSpec) -> str:
     return "\n".join(parts)
 
 
+def _cjk_font_path() -> Path | None:
+    """找系统中文字体（PDF 嵌入用）：优先单文件 TTF，TTC 集合其次。"""
+    font_dir = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
+    for name in ("simhei.ttf", "simkai.ttf", "msyh.ttc", "simsun.ttc"):
+        path = font_dir / name
+        if path.exists():
+            return path
+    return None
+
+
+def _escape_pdf_text(text: str) -> str:
+    """reportlab Paragraph 走 XML，转义 & < > 防解析报错。"""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def render_docx(spec: SampleSpec, path: Path) -> None:
+    """按 spec 生成 Word 版样本（正文与 md 一致，供 .docx 上传链路测试）。"""
+    from docx import Document  # 延迟导入：只在生成 Word 时拉 python-docx
+
+    doc = Document()
+    for line in render_contract(spec).splitlines():
+        if not line.strip():
+            continue
+        # 分支：markdown 标题行 → 转成 Word 一级标题（去掉 "# " 前缀）
+        if line.startswith("# "):
+            doc.add_heading(line[2:], level=1)
+        else:
+            doc.add_paragraph(line)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc.save(str(path))
+
+
+def render_pdf(spec: SampleSpec, path: Path) -> None:
+    """按 spec 生成 PDF 版样本（中文用系统字体嵌入，reportlab 自动分页）。"""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import Paragraph, SimpleDocTemplate
+
+    font_path = _cjk_font_path()
+    # 分支：找不到中文字体 → 中文 PDF 无法渲染，直接报错便于发现
+    if font_path is None:
+        raise RuntimeError("未找到可用中文字体（Windows Fonts 下 simhei/msyh/simsun）")
+    font_name = "CJK"
+    # TTC 是字体集合，需指定 subfontIndex=0 取第一个子字体；TTF 不需要该参数
+    ttf_kwargs = {"subfontIndex": 0} if font_path.suffix.lower() == ".ttc" else {}
+    pdfmetrics.registerFont(TTFont(font_name, str(font_path), **ttf_kwargs))
+
+    body_style = ParagraphStyle(
+        "cjk_body", fontName=font_name, fontSize=10.5, leading=16, wordWrap="CJK"
+    )
+    title_style = ParagraphStyle(
+        "cjk_title", parent=body_style, fontSize=14, leading=20, spaceAfter=10
+    )
+    flowables = []
+    for line in render_contract(spec).splitlines():
+        if not line.strip():
+            continue
+        # 分支：markdown 标题行 → PDF 标题段落
+        if line.startswith("# "):
+            flowables.append(Paragraph(line[2:], title_style))
+        else:
+            flowables.append(Paragraph(_escape_pdf_text(line), body_style))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    SimpleDocTemplate(str(path), pagesize=A4).build(flowables)
+
+
 def main() -> None:
-    """把 SPECS 全部渲染落盘到 data/contracts/，并打印生成清单供人工核对。"""
+    """把 SPECS 全部渲染成 md/docx/pdf 落盘到 data/contracts/，并打印清单。"""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     manifest: list[str] = []
     for spec in SPECS:
-        path = OUTPUT_DIR / spec.filename
-        path.write_text(render_contract(spec), encoding="utf-8")
+        stem = Path(spec.filename).stem
+        # 三格式同源输出：正文来自同一份 render_contract，保证内容一致
+        (OUTPUT_DIR / spec.filename).write_text(render_contract(spec), encoding="utf-8")
+        render_docx(spec, OUTPUT_DIR / "docx" / f"{stem}.docx")
+        render_pdf(spec, OUTPUT_DIR / "pdf" / f"{stem}.pdf")
         manifest.append(f"{spec.sample_id}\t{spec.filename}\t{spec.note}")
-    print(f"已生成 {len(SPECS)} 份合成合同 -> {OUTPUT_DIR}")
+    print(f"已生成 {len(SPECS)} 份合成合同（md/docx/pdf）-> {OUTPUT_DIR}")
     for line in manifest:
         print(" -", line)
 

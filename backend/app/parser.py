@@ -39,9 +39,23 @@ def extract_text(path: str | Path) -> str:
     # 分支 3：Word → python-docx 按段落取文本
     if suffix == ".docx":
         from docx import Document  # 延迟导入，同 pypdf
+        from docx.oxml.ns import qn
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
 
         doc = Document(str(path))
-        return "\n".join(p.text for p in doc.paragraphs)
+        parts: list[str] = []
+        # 按文档真实顺序（段落与表格交错）抽取：付款期次等常放表格里，
+        # 若只读 doc.paragraphs 会整块丢失
+        for child in doc.element.body.iterchildren():
+            if child.tag == qn("w:p"):
+                parts.append(Paragraph(child, doc).text)
+            elif child.tag == qn("w:tbl"):
+                # 表格逐行读出，单元格用 " | " 连接成一行，便于抽取/检索
+                table = Table(child, doc)
+                for row in table.rows:
+                    parts.append(" | ".join(cell.text.strip() for cell in row.cells))
+        return "\n".join(part for part in parts if part)
     # 分支 4：其他后缀 → 明确报不支持，提示可上传格式
     raise ValueError(f"暂不支持 {suffix} 格式，请上传 PDF / Word / 文本文件")
 
