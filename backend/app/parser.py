@@ -1,8 +1,6 @@
-"""合同解析与切分（Phase 1）。
+"""合同解析与切分。
 
-职责：文件 → 全文文本；全文 → 按「第X条」切条款（条款成块不截断，
-超长条款带条款头续切，无条文结构退回句子级通用切分）。
-规则参考 Contract-compliance-agent 的合同切分设计。
+职责：文件 → 全文文本；全文 → 按「第X条」切条款(条款成块不截断,超长条款带条款头续切,无条文结构退回句子级通用切分)。
 """
 
 from __future__ import annotations
@@ -17,15 +15,15 @@ _CLAUSE_HEADER_RE = re.compile(r"(?m)^\s*(第[0-9一二三四五六七八九十�
 
 @dataclass
 class Clause:
-    """一个条款块：ref=条款号（如"第一条"），title=条款头整行，text=含条款头的全文。"""
+    """一个条款块: ref=条款号（如"第一条"), title=条款头整行, text=含条款头的全文。"""
 
-    ref: str
-    title: str
-    text: str
+    ref: str  # 条款号（如"第一条"）
+    title: str  # 条款头整行
+    text: str  # 含条款头的全文
 
 
 def extract_text(path: str | Path) -> str:
-    """读取 PDF / Word / 文本文件为全文（PDF 扫描件暂不支持，属 P2 OCR）。"""
+    """读取 PDF / Word / 文本文件为全文(PDF 扫描件暂不支持，属 P2 OCR)"""
     path = Path(path)
     suffix = path.suffix.lower()
     if suffix in {".txt", ".md", ".markdown"}:
@@ -45,7 +43,7 @@ def extract_text(path: str | Path) -> str:
 
 
 def split_clauses(text: str) -> list[Clause]:
-    """按「第X条」边界把全文切成条款块；无条文结构返回空列表（调用方走兜底）。"""
+    """按「第X条」边界把全文切成条款块; 无条文结构返回空列表（调用方走兜底)"""
     if not text or not text.strip():
         return []
     matches = list(_CLAUSE_HEADER_RE.finditer(text))
@@ -60,6 +58,7 @@ def split_clauses(text: str) -> list[Clause]:
             clauses.append(Clause(ref="", title="前言", text=preamble))
 
     for i, m in enumerate(matches):
+        # 每个条款块从条款头开始，到下一个条款头或文本结束
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         chunk = text[m.start() : end].strip()
         header = m.group(1).strip()

@@ -1,5 +1,5 @@
 """
-应用配置。
+应用配置。读取 .env 文件。
 """
 
 from pathlib import Path
