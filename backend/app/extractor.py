@@ -44,9 +44,12 @@ EXTRACT_LABELS: dict[str, str] = {
 
 
 class ExtractionEvidence(BaseModel):
-    """LLM 返回的单条字段证据（field 对应 ContractModel 字段名）。"""
+    """单条字段证据：原文摘录 + 条款引用 + 置信度。
 
-    field: str
+    模型实测把 evidence 输出成 {字段名: 证据} 对象而非列表，故 schema 直接按
+    dict 声明（键即 ContractModel 字段名），build 阶段再回填 extraction_meta。
+    """
+
     quote: str = ""  # 原文摘录（模型必须抄原文，不允许改写）
     clause_ref: str = ""  # 条款引用（第X条 / 前言）
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)  # 置信度 0~1
@@ -57,7 +60,8 @@ class PaymentRaw(BaseModel):
 
     name: str = ""  # 期次名称
     amount: str | None = None  # 金额（原文，如 "200,000"）
-    percent: str | None = None  # 占总额比例（如 "20" = 20%）
+    # 比例模型可能给数字或字符串（实测返回 int），归一化统一兜底
+    percent: int | float | str | None = None  # 占总额比例（如 20 = 20%）
 
 
 class ExtractionSchema(BaseModel):
@@ -78,18 +82,18 @@ class ExtractionSchema(BaseModel):
     ip_ownership: str | None = None  # 知识产权归属表述（原句）
     confidentiality_months: str | None = None  # 保密期（月数）
     governing_law: str | None = None  # 适用法律
-    evidence: list[ExtractionEvidence] = Field(default_factory=list)
+    evidence: dict[str, ExtractionEvidence] = Field(default_factory=dict)  # 字段名 → 证据
 
 
 # ---- 确定性归一化（纯函数，核心测试面）----
 
 
-def _parse_amount(value: str | None) -> Decimal | None:
+def _parse_amount(value: str | int | float | None) -> Decimal | None:
     """金额串 → Decimal（元）。容忍千分位/单位/空格；解析不到返回 None。"""
-    if not value:
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
     # 只取数字主体（含千分位与小数），丢弃"元/人民币"等字样
-    match = re.search(r"\d[\d,]*(?:\.\d+)?", value)
+    match = re.search(r"\d[\d,]*(?:\.\d+)?", str(value))
     if not match:
         return None
     try:
@@ -114,22 +118,22 @@ def _parse_cn_date(value: str | None) -> date | None:
     return None
 
 
-def _parse_percent(value: str | None) -> float | None:
+def _parse_percent(value: str | int | float | None) -> float | None:
     """百分比文本 → 数值口径（1.5% / 每日 1.5% / 20 → 1.5 / 1.5 / 20.0）。
 
     注意：口径与 rules 一致——存百分比数值而非小数（30 表示 30%）。
     """
-    if not value:
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
-    match = re.search(r"\d+(?:\.\d+)?", value)
+    match = re.search(r"\d+(?:\.\d+)?", str(value))
     return float(match.group(0)) if match else None
 
 
-def _parse_int(value: str | None) -> int | None:
+def _parse_int(value: str | int | float | None) -> int | None:
     """月数/天数文本 → int（"24 个月"→24）；解析不到返回 None。"""
-    if not value:
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
-    match = re.search(r"\d+", value)
+    match = re.search(r"\d+", str(value))
     return int(match.group(0)) if match else None
 
 
@@ -168,15 +172,22 @@ def build_contract_model(raw: dict) -> ContractModel:
         )
 
     meta: dict[str, Evidence] = {}
-    for item in raw.get("evidence") or []:
-        field = item.get("field") if isinstance(item, dict) else None
+    evidence = raw.get("evidence")
+    # 兼容两种形态：{字段名: 证据} 对象（模型实测）或 [{field, quote,...}] 列表
+    if isinstance(evidence, dict):
+        items = list(evidence.items())
+    elif isinstance(evidence, list):
+        items = [(ev.get("field"), ev) for ev in evidence if isinstance(ev, dict)]
+    else:
+        items = []
+    for field, item in items:
         # 分支：字段不在可抽取集合 → 忽略（防模型编造字段名）
-        if field not in CONTRACT_FIELD_NAMES:
+        if not field or field not in CONTRACT_FIELD_NAMES:
             continue
-        confidence = _clamp_confidence(float(item.get("confidence") or 0.0))
+        confidence = _clamp_confidence(float(_get(item, "confidence", 0.0) or 0.0))
         meta[field] = Evidence(
-            quote=str(item.get("quote") or ""),
-            clause_ref=str(item.get("clause_ref") or ""),
+            quote=str(_get(item, "quote", "") or ""),
+            clause_ref=str(_get(item, "clause_ref", "") or ""),
             confidence=confidence,
             needs_human_review=confidence < CONFIDENCE_REVIEW_THRESHOLD,
         )
@@ -201,6 +212,11 @@ def build_contract_model(raw: dict) -> ContractModel:
     )
 
 
+def _get(item, key: str, default=""):
+    """从 dict 或 pydantic 模型取值（兼容模型输出的两种形态）。"""
+    return item.get(key, default) if isinstance(item, dict) else getattr(item, key, default)
+
+
 # ---- LLM 调用----
 
 _SYSTEM_PROMPT = """你是中文采购合同的结构化抽取器。请从合同正文中逐项抽取以下字段：
@@ -210,14 +226,17 @@ _SYSTEM_PROMPT = """你是中文采购合同的结构化抽取器。请从合同
 1. 金额、日期、比例一律【原样抄写正文】，不要换算、不要改格式（如 1,000,000、2026年3月10日、每日 1.5%）；
 2. 正文里找不到的字段填 null，且不要在 evidence 里编造；
 3. payment_schedule 逐期输出：name（期次名）、amount（金额原文）、percent（占总额比例数值，如 20 表示 20%）；
-4. evidence 对每个抽到的字段给一条：quote 必须是正文原句，clause_ref 填条款号（如"第四条"，无条款结构填"前言"），confidence 是 0~1 的把握度；
+4. evidence 输出为一个 JSON 对象：key 是字段名，value 是 {quote, clause_ref, confidence}。
+   quote 必须是正文原句；clause_ref 填条款号（如"第四条"，无条款结构填"前言"）；
+   confidence：原文明确命中给 0.9+，有推断或表述含糊给 0.6~0.85，找不到的字段不写 key；
 5. 只输出 JSON。"""
 
 
 def _system_message() -> str:
     """拼系统提示：把抽取字段清单（中文含义）写进去。"""
     labels = "\n".join(f"- {name}：{meaning}" for name, meaning in EXTRACT_LABELS.items())
-    return _SYSTEM_PROMPT.format(labels=labels)
+    # 用 replace 而非 format：prompt 里含 {quote, ...} 字面花括号，format 会误当占位符
+    return _SYSTEM_PROMPT.replace("{labels}", labels)
 
 
 def extract_contract(llm=None, text: str = "") -> ContractModel:
