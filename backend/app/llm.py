@@ -48,12 +48,14 @@ class DashScopeCompatEmbeddings(Embeddings):
         base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
         batch_size: int = 10,
     ) -> None:
+        """初始化向量客户端参数；base_url 去尾斜杠，防止拼 URL 时出现双斜杠。"""
         self.model = model
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.batch_size = batch_size
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
+        """调一次 DashScope 兼容 /embeddings 接口（单批），按 index 排序保证与输入同序。"""
         resp = httpx.post(
             f"{self.base_url}/embeddings",
             headers={"Authorization": f"Bearer {self.api_key}"},
@@ -67,12 +69,14 @@ class DashScopeCompatEmbeddings(Embeddings):
         return [item["embedding"] for item in ordered]
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """批量向量化：按 batch_size 分批调 _embed，规避 DashScope 单次条数上限。"""
         results: list[list[float]] = []
         for i in range(0, len(texts), self.batch_size):
             results.extend(self._embed(texts[i : i + self.batch_size]))
         return results
 
     def embed_query(self, text: str) -> list[float]:
+        """单条文本向量化（检索 query / 维度探测用）。"""
         return self._embed([text])[0]
 
 

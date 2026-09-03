@@ -26,19 +26,23 @@ def extract_text(path: str | Path) -> str:
     """读取 PDF / Word / 文本文件为全文(PDF 扫描件暂不支持，属 P2 OCR)"""
     path = Path(path)
     suffix = path.suffix.lower()
+    # 分支 1：纯文本类（.txt/.md）→ UTF-8 直读全文
     if suffix in {".txt", ".md", ".markdown"}:
         return path.read_text(encoding="utf-8", errors="replace")
+    # 分支 2：PDF → pypdf 逐页抽取文本（扫描件无文本层，不在此范围）
     if suffix == ".pdf":
         # 延迟导入：只在真遇到 PDF 时拉 pypdf，避免拖慢纯文本路径
         from pypdf import PdfReader
 
         reader = PdfReader(str(path))
         return "\n".join(page.extract_text() or "" for page in reader.pages)
+    # 分支 3：Word → python-docx 按段落取文本
     if suffix == ".docx":
         from docx import Document  # 延迟导入，同 pypdf
 
         doc = Document(str(path))
         return "\n".join(p.text for p in doc.paragraphs)
+    # 分支 4：其他后缀 → 明确报不支持，提示可上传格式
     raise ValueError(f"暂不支持 {suffix} 格式，请上传 PDF / Word / 文本文件")
 
 
@@ -100,11 +104,13 @@ def chunk_for_index(text: str, max_chars: int = 600) -> list[Clause]:
     - 无条款结构：整体按句子通用切分（兜底，等价通用文本切分器）。
     """
     clauses = split_clauses(text)
+    # 分支 1：全文没有条款结构 → 整篇按句子通用切分（兜底，供 RAG 入库）
     if not clauses:
         return [Clause(ref="", title="", text=c) for c in _pack_chunks(_sentence_units(text), max_chars)]
 
     out: list[Clause] = []
     for clause in clauses:
+        # 分支 2：条款未超长 → 整块作为一个检索单元，直接保留
         if len(clause.text) <= max_chars:
             out.append(clause)
             continue

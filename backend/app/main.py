@@ -17,6 +17,7 @@ app = FastAPI(
 
 @app.get("/")
 def root() -> dict:
+    """入口页：返回应用名与文档/健康检查地址，便于快速调试。"""
     return {"app": "ContractAgent", "docs": "/docs", "health": "/api/health"}
 
 

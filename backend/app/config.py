@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
     chat_model: str = "deepseek-ai/DeepSeek-V4-flash"
     chat_temperature: float = 0.1
-    chat_enable_thinking: bool = False  
+    chat_enable_thinking: bool = False  # False=关闭 DeepSeek thinking，控制抽取时延与成本
 
     # ---- 向量模型：阿里 DashScope（OpenAI 兼容 embedding 端点）----
     dashscope_api_key: str = ""
@@ -45,6 +45,7 @@ class Settings(BaseSettings):
 
     @property
     def embedding_api_key(self) -> str:
+        """取 embedding 密钥：新键名 DASHSCOPE_API_KEY 优先，旧键名 QWEN_EMBEDDING 兜底。"""
         return self.dashscope_api_key or self.qwen_embedding_api_key
 
     @property

@@ -26,35 +26,36 @@ OUTPUT_DIR = Path(__file__).resolve().parents[2] / "data" / "contracts"
 class SampleSpec:
     """一份合成合同的参数化规格。"""
 
-    sample_id: str
-    filename: str
-    contract_no: str
-    title: str
-    buyer: str
-    supplier: str
-    signature_date: str
-    effective_date: str
-    expiry_date: str
-    currency: str = "人民币"
-    total_amount: str = "1,000,000"  # 元（含千分位)
+    sample_id: str  # 样本编号（如 sample_01，评测对齐用）
+    filename: str  # 输出文件名（含缺陷特征，便于人眼区分）
+    contract_no: str  # 合同编号（渲染进正文）
+    title: str  # 合同标题
+    buyer: str  # 甲方（采购方）名称
+    supplier: str  # 乙方（供应商）名称
+    signature_date: str  # 签署日期（中文文本，如 2026年3月10日）
+    effective_date: str  # 生效日期
+    expiry_date: str  # 到期日
+    currency: str = "人民币"  # 币种
+    total_amount: str = "1,000,000"  # 合同总额（元，字符串保留千分位，测抽取鲁棒性）
     # 分项：[(名称, 金额, 比例)]，用于金额一致性核验
-    payment_terms: list = field(default_factory=list)
+    payment_terms: list = field(default_factory=list)  # 付款期次（名称/金额/占总额百分比）
     # 首期（预付款）比例，百分比数值
-    prepayment_percent: float = 20.0
-    warranty_months: int = 24
+    prepayment_percent: float = 20.0  # 预付款占总额比例（%）
+    warranty_months: int = 24  # 质保期（月）
     # 违约金：每日比例（百分比数值），如 0.05 表示日 0.05%
     penalty_daily_percent: float = 0.05
     # 责任上限（占合同总额百分比），None 表示未单独约定上限
     liability_cap_percent: float | None = 100.0
-    confidentiality_months: int = 24
-    confidentiality_clause: bool = True
-    termination_notice_days: int = 30
-    ip_ownership: str = "定制成果知识产权归甲方（采购方）所有"
-    governing_law: str = "中华人民共和国法律"
+    confidentiality_months: int = 24  # 保密期（月）
+    confidentiality_clause: bool = True  # True=渲染保密条款；False=整节缺失（构造缺陷）
+    termination_notice_days: int = 30  # 提前解约通知期（天）
+    ip_ownership: str = "定制成果知识产权归甲方（采购方）所有"  # IP 权属表述
+    governing_law: str = "中华人民共和国法律"  # 适用法律
     note: str = ""  # 缺陷说明（写进生成清单）
 
 
 SPECS: list[SampleSpec] = [
+    # sample_01：正常合同（对照基线：字段齐全、金额一致）
     SampleSpec(
         sample_id="sample_01",
         filename="sample_01_电子元件采购合同_正常.md",
@@ -71,6 +72,7 @@ SPECS: list[SampleSpec] = [
         ],
         note="正常合同：字段齐全、金额一致、条款合规。",
     ),
+    # sample_02：正常合同（质保恰为下限 12 个月，验证边界合规）
     SampleSpec(
         sample_id="sample_02",
         filename="sample_02_办公设备采购合同_正常.md",
@@ -94,6 +96,7 @@ SPECS: list[SampleSpec] = [
         termination_notice_days=45,
         note="正常合同：质保恰为 12 个月（政策下限，合规）。",
     ),
+    # sample_03：缺陷 违约金日1.5% / 责任上限5% / 分项加总≠总额
     SampleSpec(
         sample_id="sample_03",
         filename="sample_03_服务器采购合同_违约金超限_金额不一致.md",
@@ -117,6 +120,7 @@ SPECS: list[SampleSpec] = [
         confidentiality_months=24,
         note="缺陷：违约金率过高 + 责任上限过低；且分项金额 20+50+40=110 万 ≠ 总额 100 万（金额不一致）。",
     ),
+    # sample_04：缺陷 预付款60%（超30%上限）/ 全篇缺保密条款
     SampleSpec(
         sample_id="sample_04",
         filename="sample_04_原材料采购合同_预付款超限_缺保密条款.md",
@@ -137,6 +141,7 @@ SPECS: list[SampleSpec] = [
         confidentiality_clause=False,  # 缺陷②：缺失保密条款
         note="缺陷：预付款比例 60% 超政策上限 30%；全篇无保密条款。",
     ),
+    # sample_05：缺陷 质保6个月（<12）/ 保密期60个月（>36）
     SampleSpec(
         sample_id="sample_05",
         filename="sample_05_软件采购合同_质保过短_保密期过长.md",
@@ -161,6 +166,7 @@ SPECS: list[SampleSpec] = [
 
 
 def _money(amount_str: str) -> str:
+    """金额字符串后补单位，正文统一为「xxx 元」格式。"""
     return f"{amount_str} 元"
 
 
@@ -175,23 +181,32 @@ def _payment_lines(spec: SampleSpec) -> list[str]:
 
 
 def _penalty_lines(spec: SampleSpec) -> list[str]:
+    """生成违约责任正文（违约金率 + 责任上限两句）。
+
+    分支：配置了责任上限 → 渲染上限句；未配置 → 写「按法律规定承担」兜底句，
+    避免正文出现空条款。
+    """
     lines = [
         f"乙方逾期交付的，每逾期一日按合同总价款的 "
         f"{spec.penalty_daily_percent:g}% 向甲方支付违约金。"
     ]
+    # 分支 1：有责任上限配置 → 正文写明上限比例
     if spec.liability_cap_percent is not None:
         lines.append(
             f"除违约金外，乙方对甲方承担的赔偿责任总额以合同总价款的 "
             f"{spec.liability_cap_percent:g}% 为上限。"
         )
+    # 分支 2：未配置上限 → 写法定兜底句（正文不出现空条款）
     else:
         lines.append("双方按法律规定承担违约责任。")
     return lines
 
 
 def _confidentiality_lines(spec: SampleSpec) -> list[str]:
+    """生成保密条款正文；返回空列表表示该节不渲染（缺保密条款缺陷）。"""
+    # 分支：confidentiality_clause=False（如 sample_04）→ 返回空，整节不渲染
     if not spec.confidentiality_clause:
-        return []  # sample_04 刻意缺失该条款（整节不渲染）
+        return []
     return (
         "双方对因履行本合同而知悉的对方商业秘密负有保密义务。",
         f"保密期限自本合同终止之日起 {spec.confidentiality_months} 个月。",
@@ -230,6 +245,7 @@ def render_contract(spec: SampleSpec) -> str:
         ),
         ("违约责任", _penalty_lines(spec)),
     ]
+    # 分支：需要保密条款才把该节加入，否则条款顺延（贴近真实"缺失"合同）
     if spec.confidentiality_clause:
         sections.append(("保密条款", _confidentiality_lines(spec)))
     sections.extend(
@@ -283,6 +299,7 @@ def render_contract(spec: SampleSpec) -> str:
 
 
 def main() -> None:
+    """把 SPECS 全部渲染落盘到 data/contracts/，并打印生成清单供人工核对。"""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     manifest: list[str] = []
     for spec in SPECS:
