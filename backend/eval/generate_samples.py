@@ -1,12 +1,12 @@
 """第 1 版合成合同生成器。
 
-生成 5 份中文「采购合同」纯文本样本到 data/contracts/：
-- sample_01 / sample_02：无缺陷（正常放行）
-- sample_03：违约金比例过高 + 责任上限过低 + 分项加总与总额不一致
-- sample_04：预付款 60%（超 30% 政策）+ 缺失保密条款
-- sample_05：质保期 6 个月（不足 12）+ 保密期 60 个月（超 36）
+生成 5 份中文「采购合同」纯文本样本到 data/contracts/:
+- sample_01 / sample_02:无缺陷（正常放行）
+- sample_03:违约金比例过高 + 责任上限过低 + 分项加总与总额不一致
+- sample_04:预付款 60%（超 30% 政策）+ 缺失保密条款
+- sample_05:质保期 6 个月(不足 12)+ 保密期 60 个月(超 36)
 
-写法：每份合同按「第X条」成块（Phase 1 parser 将按此边界切分），
+写法:每份合同按「第X条」成块(Phase 1 parser 将按此边界切分)，
 内容由参数化 spec 渲染，同一种缺陷形态可复现、可批量扩展。
 全部为合成数据，不含任何真实公司/个人信息。
 
@@ -36,7 +36,7 @@ class SampleSpec:
     effective_date: str
     expiry_date: str
     currency: str = "人民币"
-    total_amount: str = "1,000,000"  # 元（含千分位，测试抽取/规则鲁棒性）
+    total_amount: str = "1,000,000"  # 元（含千分位)
     # 分项：[(名称, 金额, 比例)]，用于金额一致性核验
     payment_terms: list = field(default_factory=list)
     # 首期（预付款）比例，百分比数值
@@ -51,7 +51,7 @@ class SampleSpec:
     termination_notice_days: int = 30
     ip_ownership: str = "定制成果知识产权归甲方（采购方）所有"
     governing_law: str = "中华人民共和国法律"
-    note: str = ""  # 缺陷说明（写进生成清单，不出现在合同正文）
+    note: str = ""  # 缺陷说明（写进生成清单）
 
 
 SPECS: list[SampleSpec] = [

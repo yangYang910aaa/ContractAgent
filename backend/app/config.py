@@ -9,8 +9,7 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(BASE_DIR / ".env")
 
-from pydantic_settings import BaseSettings, SettingsConfigDict  # noqa: E402
-
+from pydantic_settings import BaseSettings, SettingsConfigDict  
 
 class Settings(BaseSettings):
     """集中管理 .env 配置。未设置的键留空，由 /api/health 报告，不在启动时崩溃。"""
@@ -26,10 +25,9 @@ class Settings(BaseSettings):
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
     chat_model: str = "deepseek-ai/DeepSeek-V4-flash"
     chat_temperature: float = 0.1
-    chat_enable_thinking: bool = False  # DeepSeek-V4 系列默认 thinking，抽取消掉
+    chat_enable_thinking: bool = False  
 
     # ---- 向量模型：阿里 DashScope（OpenAI 兼容 embedding 端点）----
-    # 键名兼容：新项目用 DASHSCOPE_API_KEY，旧笔记里叫 QWEN_EMBEDDING_API_KEY
     dashscope_api_key: str = ""
     qwen_embedding_api_key: str = ""
     embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -40,9 +38,9 @@ class Settings(BaseSettings):
     # ---- 向量库 / 数据库 ----
     milvus_uri: str = "http://127.0.0.1:19530"
     milvus_collection: str = "contract_policies"
-    database_url: str = ""  # 可选 Postgres（checkpointer）
+    database_url: str = ""  # Postgres
 
-    # ---- 检索后端：milvus 不可用时自动退回内存，别卡死（计划风险预案）----
+    # ---- 检索后端：milvus 不可用时自动退回内存----
     retrieval_backend: str = "auto"  # auto | milvus | memory
 
     @property
