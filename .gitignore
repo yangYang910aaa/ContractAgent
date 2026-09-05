@@ -17,6 +17,7 @@ frontend/dist/
 
 # 本地数据产物（合成合同、报告等临时输出）
 backend/eval/output/
+data/uploads/
 
 # 合成样本二进制（docx/pdf）不入库：可由生成器随时重建；md 已由下方 *.md 规则忽略
 data/contracts/docx/

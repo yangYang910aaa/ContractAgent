@@ -2,6 +2,7 @@
 
 from datetime import date
 from decimal import Decimal
+import json
 
 from backend.app.extractor import (
     _parse_amount,
@@ -171,6 +172,66 @@ def test_extraction_schema_tolerates_numeric_months() -> None:
     assert cm.confidentiality_months == 36
     assert cm.penalty_rate == 1.5
     assert cm.termination_notice_days == 30
+
+
+def test_build_normalizes_evidence_wrapped_drift() -> None:
+    """漂移形态归一化：字段值=evidence 对象 → 值取 quote，引用回填 evidence。"""
+    from backend.app.extractor import _normalize_drifted
+
+    raw = {
+        "buyer": {"quote": "星辰智造科技有限公司", "clause_ref": "甲方（采购方）", "confidence": 1.0},
+        "total_amount": {"quote": "1,000,000 元", "clause_ref": "第一条", "confidence": 1.0},
+        "warranty_months": {"quote": "24个月", "clause_ref": "第四条", "confidence": 1.0},
+        "penalty_rate": {"quote": "1.5%", "clause_ref": "第五条", "confidence": 0.9},
+        "currency": "人民币",  # 半漂移：正常标量应原样保留
+        "evidence": {"ignore": {"quote": "x"}},  # 漂移输出里的伪 evidence 键应被跳过
+    }
+    cm = build_contract_model(_normalize_drifted(raw))
+    assert cm.buyer == "星辰智造科技有限公司"
+    assert cm.total_amount == Decimal("1000000")
+    assert cm.warranty_months == 24
+    assert cm.penalty_rate == 1.5
+    assert cm.currency == "人民币"
+    assert cm.extraction_meta["buyer"].clause_ref == "甲方（采购方）"
+    assert cm.extraction_meta["warranty_months"].quote == "24个月"
+    assert "ignore" not in cm.extraction_meta
+
+
+class _DriftLLM:
+    """假模型：with_structured_output 后 invoke 直接抛"证据包裹型"解析错误。"""
+
+    def __init__(self, completion: str) -> None:
+        self._completion = completion
+
+    def with_structured_output(self, schema, method=None):
+        return self
+
+    def invoke(self, messages):
+        # 镜像 langchain 实测报错文案（completion 后跟原始 JSON，Got: 后是校验明细）
+        raise RuntimeError(
+            f"Failed to parse ExtractionSchema from completion {self._completion} "
+            "Got: 25 validation errors for ExtractionSchema"
+        )
+
+
+def test_extract_fallback_rescues_evidence_wrapped_drift() -> None:
+    """parse 失败时能从报错还原 completion 并走漂移归一化，合同不再整体 error。"""
+    from backend.app.extractor import extract_contract
+
+    completion = json.dumps(
+        {
+            "buyer": {"quote": "星辰智造科技有限公司", "clause_ref": "甲方（采购方）", "confidence": 1.0},
+            "total_amount": {"quote": "1,000,000 元", "clause_ref": "第一条", "confidence": 1.0},
+            "expiry_date": {"quote": "2027年5月19日", "clause_ref": "第八条", "confidence": 1.0},
+            "warranty_months": {"quote": "24个月", "clause_ref": "第四条", "confidence": 1.0},
+        },
+        ensure_ascii=False,
+    )
+    cm = extract_contract(llm=_DriftLLM(completion), text="正文")
+    assert cm.buyer == "星辰智造科技有限公司"
+    assert cm.total_amount == Decimal("1000000")
+    assert cm.expiry_date == date(2027, 5, 19)
+    assert cm.warranty_months == 24
 
 
 def test_build_sample03_percent_values() -> None:

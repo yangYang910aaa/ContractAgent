@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import re
+import json
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
@@ -300,14 +301,78 @@ def _system_message() -> str:
     return _SYSTEM_PROMPT.replace("{labels}", labels)
 
 
-def extract_contract(llm=None, text: str = "") -> ContractModel:
-    """对合同全文做一次结构化抽取：LLM 抄原文 → build 归一化回填证据。
+# ---- json_mode 解析失败兜底（模型漂移：把字段值包成 evidence 对象）----
 
-    llm 可注入（测试用假模型）；不传则用默认 chat 模型（低温、关 thinking，
+
+def _unwrap_drifted(value):
+    """把"证据包裹型"值还原：dict 且带 quote → 取 quote 当字段值；其余原样返回。
+
+    递归处理列表（payment_schedule 逐项也可能是包裹型）。
+    """
+    if isinstance(value, dict) and "quote" in value:
+        return value["quote"]
+    if isinstance(value, list):
+        return [_unwrap_drifted(item) for item in value]
+    return value
+
+
+def _normalize_drifted(raw: dict) -> dict:
+    """把漂移输出整形成 build_contract_model 认识的形态 (字段标量 + 独立 evidence)。
+    """
+    out: dict = {}
+    evidence: dict = {}
+    for key, value in raw.items():
+        # 分支：漂移输出里没有独立 evidence（都内嵌在字段里），跳过避免覆盖
+        if key == "evidence":
+            continue
+        # 分支：字段值是证据对象 → 值取 quote，并把引用信息收集进 evidence
+        if isinstance(value, dict) and "quote" in value:
+            out[key] = value.get("quote", "")
+            evidence[key] = {
+                "quote": value.get("quote", ""),
+                "clause_ref": value.get("clause_ref", ""),
+                "confidence": value.get("confidence", 0.0) or 0.0,
+            }
+        # 分支：正常标量或半漂移（列表/其余 dict）→ 递归拆包
+        else:
+            out[key] = _unwrap_drifted(value)
+    out["evidence"] = evidence
+    return out
+
+
+def _recover_completion(exc: Exception) -> dict | None:
+    """从 with_structured_output 的解析报错里还原模型原始 JSON。
+
+    langchain 报错形如 "Failed to parse X from completion {json} Got: …"；
+    提取花括号正文后 json 解析。解析失败返回 None（上层按原异常抛给 error 报告）。
+    """
+    text = str(exc)
+    match = re.search(r"completion (\{.*\}) Got:", text, re.S)
+    if not match:
+        return None
+    try:
+        raw = json.loads(match.group(1))
+    except Exception:
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def extract_contract(llm=None, text: str = "") -> ContractModel:
+    """对合同全文做一次结构化抽取: LLM 抄原文 → build 归一化回填证据。
+
+    llm 可注入（测试用假模型）；不传则用默认 chat 模型（低温、关 thinking,
     抽取任务不需要深度推理，能显著降时延与成本）。
     """
     model = llm or get_chat_model(temperature=0.0, enable_thinking=False)
     structured = model.with_structured_output(ExtractionSchema, method="json_mode")
-    result = structured.invoke([("system", _system_message()), ("human", text)])
+    try:
+        result = structured.invoke([("system", _system_message()), ("human", text)])
+    except Exception as exc:
+        raw = _recover_completion(exc)
+        # 这种情况是：解析失败但报错里带原始 completion → 归一化兜底后照常审核
+        if raw is not None:
+            return build_contract_model(_normalize_drifted(raw))
+        # 这种情况是：还原失败（接口/超时/格式不支持）→ 原样抛出走 error 报告
+        raise
     raw = result.model_dump() if hasattr(result, "model_dump") else result
     return build_contract_model(raw)
