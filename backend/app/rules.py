@@ -1,10 +1,10 @@
 """确定性规则引擎。
 
 输入 ContractModel → 输出 RiskItem[] + 评级。纯函数、无 LLM 调用，可离线单测。
-政策阈值集中定义在本文件顶部（来源 data/policies/P-01~05）。
+政策阈值集中定义在本文件顶部
 
 风险等级约定：存在 high → gate 人工审批；只有 medium/low → 有条件通过。
-evaluate（产风险）与 grade_report（评级）分离，方便 Phase 2 的 grade→gate 节点复用。
+
 """
 
 from __future__ import annotations
@@ -25,6 +25,17 @@ AMOUNT_TOLERANCE_RATIO = Decimal("0.01")  # 分项加总 vs 总额允许偏差 1
 CORE_REQUIRED = ("buyer", "supplier", "effective_date", "expiry_date", "total_amount", "currency")
 # 金额/日期缺失视为 high（审查无法继续）；主体信息缺失降为 medium
 HIGH_IF_MISSING = ("total_amount", "effective_date", "expiry_date")
+
+# 品类应含条款基线：某字段只在基线内才做"缺失 → medium"检查。
+# 背景：政采校服类天然不写责任上限/保密/IP/适用法律；农副类有保密与适用法律但无责任
+# 上限/IP——没有品类感知会把"品类正常的省略"误报成风险（易错点）。
+# None（历史数据/未分类）按 enterprise_goods 全量处理，向后兼容。
+KIND_BASELINE: dict[str, set[str]] = {
+    "enterprise_goods": {"liability_cap", "confidentiality_months", "ip_ownership", "governing_law"},
+    "gov_goods": set(),
+    "agri_goods": {"confidentiality_months", "governing_law"},
+    "tech_service": {"liability_cap", "confidentiality_months", "ip_ownership", "governing_law"},
+}
 
 # IP 权属合规判断用关键词（合同以甲方/采购方视角表述）
 _BUYER_KEYWORDS = ("甲方", "采购方")
@@ -181,11 +192,12 @@ def _prepay_ratio(model: ContractModel) -> tuple[PaymentTerm, float] | None:
     return None
 
 
-def _check_policies(model: ContractModel) -> list[RiskItem]:
+def _check_policies(model: ContractModel, required: set[str]) -> list[RiskItem]:
     """政策类规则汇总（输出带 policy_ref，可回指政策库文档）。
 
     依次检查：预付款比例(P-01)、质保期(P-02)、责任上限(P-03)、
     保密期(P-04)、违约金日利率（行业惯例，无对应政策条目故 policy_ref 留空）。
+    required=该品类"应含条款"字段集合（缺失才报 medium，见 KIND_BASELINE）。
     返回：风险列表（可能为空）。
     """
     out: list[RiskItem] = []
@@ -225,16 +237,18 @@ def _check_policies(model: ContractModel) -> list[RiskItem]:
     cap = model.liability_cap
     # 分支 1：完全没约定上限 → medium（建议按 P-03 明确，避免履约争议）
     if cap is None:
-        out.append(
-            _mk(
-                model,
-                risk_type="liability_cap_unclear",
-                severity=Severity.medium,
-                field="liability_cap",
-                policy_ref="P-03",
-                suggestion="未明确责任上限，建议按 P-03 约定合理上限（不低于总额 50%）。",
+        # 这种情况是：品类要求责任上限但正文没写 → medium 提示补条款
+        if "liability_cap" in required:
+            out.append(
+                _mk(
+                    model,
+                    risk_type="liability_cap_unclear",
+                    severity=Severity.medium,
+                    field="liability_cap",
+                    policy_ref="P-03",
+                    suggestion="未明确责任上限，建议按 P-03 约定合理上限（不低于总额 50%）。",
+                )
             )
-        )
     # 分支 2：有约定但低于政策底线 → high（供应商赔偿被压得过低）
     elif cap < LIABILITY_CAP_MIN_PERCENT:
         out.append(
@@ -252,16 +266,18 @@ def _check_policies(model: ContractModel) -> list[RiskItem]:
     conf = model.confidentiality_months
     # 分支 1：未约定保密期 → medium（提示补条款，24~36 个月为宜）
     if conf is None:
-        out.append(
-            _mk(
-                model,
-                risk_type="confidentiality_missing",
-                severity=Severity.medium,
-                field="confidentiality_months",
-                policy_ref="P-04",
-                suggestion="缺少保密条款，建议补充（保密期宜 24 个月以上、不超过 36 个月）。",
+        # 这种情况是：品类要求保密条款但正文没写 → medium 提示补条款
+        if "confidentiality_months" in required:
+            out.append(
+                _mk(
+                    model,
+                    risk_type="confidentiality_missing",
+                    severity=Severity.medium,
+                    field="confidentiality_months",
+                    policy_ref="P-04",
+                    suggestion="缺少保密条款，建议补充（保密期宜 24 个月以上、不超过 36 个月）。",
+                )
             )
-        )
     # 分支 2：保密期超上限 → high（约束过重，超出政策允许范围）
     elif conf > CONFIDENTIALITY_MAX_MONTHS:
         out.append(
@@ -292,30 +308,33 @@ def _check_policies(model: ContractModel) -> list[RiskItem]:
     return out
 
 
-def _check_ip_and_law(model: ContractModel) -> list[RiskItem]:
+def _check_ip_and_law(model: ContractModel, required: set[str]) -> list[RiskItem]:
     """知识产权归属与适用法律检查（P-05）。
 
     处理三种情况（均为 medium，需人工确认/补条款）：
     1) 完全没提 IP 归属；2) 写了归属但未归甲方/采购方；
     3) 缺适用法律约定。
+    只有 required 含对应字段的品类才检查（品类本身不要求时可省略）。
     返回：风险列表（可能为空）。
     """
     out: list[RiskItem] = []
     ip = model.ip_ownership
     # 分支 1：完全未提 IP 归属 → medium，建议补充归属采购方
     if ip is None:
-        out.append(
-            _mk(
-                model,
-                risk_type="ip_ownership_missing",
-                severity=Severity.medium,
-                field="ip_ownership",
-                policy_ref="P-05",
-                suggestion="未约定知识产权归属，建议明确定制成果归采购方。",
+        # 这种情况是：品类要求 IP 归属条款但正文没写 → medium
+        if "ip_ownership" in required:
+            out.append(
+                _mk(
+                    model,
+                    risk_type="ip_ownership_missing",
+                    severity=Severity.medium,
+                    field="ip_ownership",
+                    policy_ref="P-05",
+                    suggestion="未约定知识产权归属，建议明确定制成果归采购方。",
+                )
             )
-        )
     # 分支 2：写了归属但没出现「甲方/采购方」关键词 → 权属可能不在我方，需人工核实
-    elif not any(kw in ip for kw in _BUYER_KEYWORDS):
+    elif ip is not None and "ip_ownership" in required and not any(kw in ip for kw in _BUYER_KEYWORDS):
         out.append(
             _mk(
                 model,
@@ -328,16 +347,18 @@ def _check_ip_and_law(model: ContractModel) -> list[RiskItem]:
         )
     # 分支 3：缺适用法律 → medium（争议解决无依据）
     if model.governing_law is None:
-        out.append(
-            _mk(
-                model,
-                risk_type="governing_law_missing",
-                severity=Severity.medium,
-                field="governing_law",
-                policy_ref="P-05",
-                suggestion="缺少适用法律/争议解决约定，请补充。",
+        # 这种情况是：品类要求适用法律条款但正文没写 → medium
+        if "governing_law" in required:
+            out.append(
+                _mk(
+                    model,
+                    risk_type="governing_law_missing",
+                    severity=Severity.medium,
+                    field="governing_law",
+                    policy_ref="P-05",
+                    suggestion="缺少适用法律/争议解决约定，请补充。",
+                )
             )
-        )
     return out
 
 
@@ -346,13 +367,16 @@ def evaluate(model: ContractModel) -> list[RiskItem]:
 
     执行顺序固定：必填 → 日期 → 金额 → 政策 → IP/法律
     （先基础后政策），保证输出稳定，便于测试与前端展示。
+    品类基线：contract_kind 决定"应含条款"，缺失类检查只在基线内生效。
     """
+    kind = model.contract_kind or "enterprise_goods"
+    required = KIND_BASELINE.get(kind, KIND_BASELINE["enterprise_goods"])
     return (
         _check_required(model)
         + _check_dates(model)
         + _check_amount(model)
-        + _check_policies(model)
-        + _check_ip_and_law(model)
+        + _check_policies(model, required)
+        + _check_ip_and_law(model, required)
     )
 
 

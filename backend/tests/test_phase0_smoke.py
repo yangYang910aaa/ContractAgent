@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from backend.app.config import BASE_DIR
+from backend.app.parser import split_clauses
 from backend.eval.generate_samples import OUTPUT_DIR, SPECS, render_contract
 
 
@@ -18,11 +19,12 @@ def test_policy_docs_exist_and_readable() -> None:
 
 def test_sample_contracts_generated() -> None:
     files = sorted(OUTPUT_DIR.glob("sample_*.md"))
-    assert len(files) == 5, "应生成 5 份合成合同"
+    assert len(files) == 7, "应生成 7 份合成合同（企业 01~05 + 校服 06/07）"
     for f in files:
         text = f.read_text(encoding="utf-8")
-        assert "第" in text and "条" in text, f"{f.name} 缺少条款结构"
         assert "甲方" in text and "乙方" in text
+        # 正文结构：企业「第X条」式 / 校服章节式，两者都必须能切出条文块
+        assert split_clauses(text), f"{f.name} 缺少可切分的条款/章节结构"
 
 
 def test_generator_reproducible() -> None:

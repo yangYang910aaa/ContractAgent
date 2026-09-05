@@ -115,6 +115,58 @@ def test_missing_governing_law_and_ip() -> None:
     assert "ip_ownership_missing" in types
 
 
+def test_gov_goods_genre_missing_fields_not_flagged() -> None:
+    """政采校服类：天然不含责任上限/保密/IP/适用法律条款 → 不应误报 medium。"""
+    model = _with(
+        contract_kind="gov_goods",
+        liability_cap=None,
+        confidentiality_months=None,
+        ip_ownership=None,
+        governing_law=None,
+    )
+    assert _risk_types(model) == set()
+
+
+def test_agri_goods_requires_conf_and_law_only() -> None:
+    """农副类基线：要求保密与适用法律；不要求责任上限/IP。"""
+    model = _with(
+        contract_kind="agri_goods",
+        liability_cap=None,
+        confidentiality_months=None,
+        ip_ownership=None,
+        governing_law=None,
+    )
+    types = _risk_types(model)
+    assert types == {"confidentiality_missing", "governing_law_missing"}
+
+
+def test_enterprise_and_tech_require_all_genre_fields() -> None:
+    """企业/技术类基线：责任上限、保密、IP、适用法律都属应有条款。"""
+    for kind in ("enterprise_goods", "tech_service"):
+        model = _with(
+            contract_kind=kind,
+            liability_cap=None,
+            confidentiality_months=None,
+            ip_ownership=None,
+            governing_law=None,
+        )
+        types = _risk_types(model)
+        assert {
+            "liability_cap_unclear",
+            "confidentiality_missing",
+            "ip_ownership_missing",
+            "governing_law_missing",
+        } <= types
+
+
+def test_gov_goods_present_defects_still_flagged() -> None:
+    """品类不豁免"写出来的缺陷"：质保过短/违约金畸高在 gov_goods 下同样命中。"""
+    model = _with(contract_kind="gov_goods", warranty_months=6, penalty_rate=1.5)
+    types = _risk_types(model)
+    assert "warranty_too_short" in types
+    assert "penalty_rate_too_high" in types
+
+
 def test_empty_model_does_not_crash() -> None:
     risks = evaluate(ContractModel())
     assert risks  # 全空合同应至少报出必填缺失类风险

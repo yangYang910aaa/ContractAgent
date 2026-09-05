@@ -18,6 +18,13 @@ frontend/dist/
 # 本地数据产物（合成合同、报告等临时输出）
 backend/eval/output/
 
+# 合成样本二进制（docx/pdf）不入库：可由生成器随时重建；md 已由下方 *.md 规则忽略
+data/contracts/docx/
+data/contracts/pdf/
+
+# 合同示范模板参考语料（本地参考用，不入库不上传）
+data/合同模板/
+
 # IDE / 系统
 .idea/
 .vscode/

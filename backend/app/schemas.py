@@ -55,6 +55,9 @@ class ContractModel(BaseModel):
     """
 
     buyer: str | None = None  # 采购方名称
+    # 合同品类：规则按品类判断"应含条款"基线（如校服类天然不含责任上限/保密条款，
+    # 企业采购默认含全）；None 按 enterprise_goods 处理（向后兼容）
+    contract_kind: Literal["enterprise_goods", "gov_goods", "agri_goods", "tech_service"] | None = None
     supplier: str | None = None  # 供应商名称
     signature_date: date | None = None  # 合同签订日期
     effective_date: date | None = None  # 合同生效日期
@@ -84,7 +87,7 @@ class RiskItem(BaseModel):
     severity: Severity  # 风险等级（如 high）
     clause_ref: str = ""  # 条款引用
     evidence: str = ""  # 证据说明
-    policy_ref: str | None = None  # P-01..P-05，来自政策库检索
+    policy_ref: str | None = None  # 政策引用（如 "政策库检索结果）
     suggestion: str = ""  # 建议
     field: str | None = None  # 关联的 ContractModel 字段名
 

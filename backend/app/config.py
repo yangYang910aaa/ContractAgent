@@ -1,5 +1,6 @@
 """
-应用配置。读取 .env 文件。
+从 `.env` 读密钥和端点；`Settings` 类集中管理 chat 模型 (硅基流动 DeepSeek)、
+embedding (DashScope Qwen3.7-text-embedding)、Milvus、检索后端 ;`env_ready` 供健康检查
 """
 
 from pathlib import Path

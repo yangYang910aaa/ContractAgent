@@ -37,6 +37,59 @@ def test_split_clauses_without_marker_returns_empty() -> None:
     assert split_clauses("这是一段没有任何条款编号的普通文本。") == []
 
 
+def test_split_chapter_style_like_uniform_contract() -> None:
+    """章节式文本（校服合同那种「一、二、三」）也能按章切分。"""
+    text = (
+        "甲方（采购方）：广州市晨光实验中学\n"
+        "一、校服材质、数量、单价等明细\n"
+        "1、夏季运动服套装，单价 150 元；\n"
+        "二、单个学生校服的总价\n"
+        "单个学生校服的总价为人民币（大写）陆佰贰拾元整。\n"
+        "三、质量要求\n"
+        "1、全新设计制造，无次品。\n"
+        "2、经多次洗擦而不褪色。\n"
+    )
+    clauses = split_clauses(text)
+    refs = [c.ref for c in clauses]
+    # 前言（甲乙信息）独立成块，其后才是章节序列
+    assert refs[0] == ""
+    assert refs[1:] == [
+        "一、校服材质、数量、单价等明细",
+        "二、单个学生校服的总价",
+        "三、质量要求",
+    ]
+    assert clauses[0].title == "前言"
+    # 章节正文里的「1、2、」子条不得被当成新章节头
+    assert all(c.text.startswith(c.ref) for c in clauses)
+    assert "150 元" in clauses[1].text
+
+
+def test_split_prefers_tiao_when_both_styles_exist() -> None:
+    """同时出现「第X条」与「一、」时，以「第X条」为顶级结构（章节行算正文）。"""
+    text = (
+        "第一条 总则\n"
+        "1、双方按民法典订立本合同。\n"
+        "第二条 其他约定\n"
+        "一、双方确认本合同附件与正文具有同等效力。\n"
+    )
+    clauses = split_clauses(text)
+    refs = [c.ref for c in clauses]
+    assert refs == ["第一条", "第二条"]
+    # 该行属第二条正文，不得被拆成第三个条款
+    assert "同等效力" in clauses[1].text
+
+
+def test_long_chapter_clause_keeps_header_on_continuation() -> None:
+    """章节式超长条款续切时，续块仍带章节头（如 五、…（续））。"""
+    body = "乙方应依照确认的样衣组织生产，并送有资质机构检验。\n" * 40
+    text = f"五、校服的生产加工与送检\n{body}\n六、交货时间、地点及货物包装\n乙方应于 2026 年 8 月 10 日前交货。\n"
+    chunks = chunk_for_index(text, max_chars=200)
+    assert len(chunks) > 2
+    heads = [c for c in chunks if c.ref.startswith("五、")]
+    assert any("（续）" in c.title for c in heads)
+    assert all(c.ref.startswith("五、") for c in heads)
+
+
 def test_long_clause_keeps_header_on_continuation() -> None:
     long_body = "乙方逾期交付的，每逾期一日应向甲方支付违约金，甲方并有权顺延付款。\n" * 40
     text = f"第一条 违约责任\n{long_body}\n第二条 其他\n本合同未尽事宜双方协商。\n"

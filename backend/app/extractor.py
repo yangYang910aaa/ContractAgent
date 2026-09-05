@@ -26,6 +26,8 @@ CONTRACT_FIELD_NAMES = {k for k in ContractModel.model_fields if k != "extractio
 
 # 抽取字段 → 中文含义（写进系统提示，指导模型逐项抽取）
 EXTRACT_LABELS: dict[str, str] = {
+    "contract_kind": "合同品类（从标题/正文判断）：enterprise_goods=企业货物采购, gov_goods=政府采购/校服类, "
+    "agri_goods=农副产品买卖, tech_service=技术开发/软件/技术服务；无法判断填 null",
     "buyer": "甲方（采购方）名称",
     "supplier": "乙方（供应商）名称",
     "signature_date": "合同签署日期",
@@ -67,6 +69,7 @@ class PaymentRaw(BaseModel):
 class ExtractionSchema(BaseModel):
     """with_structured_output 用的输出结构：普通字段 + 证据列表。"""
 
+    contract_kind: str | None = None  # 合同品类（enterprise_goods/gov_goods/agri_goods/tech_service）
     buyer: str | None = None  # 采购方名称
     supplier: str | None = None  # 供应商名称
     signature_date: str | None = None  # 合同签订日期
@@ -75,17 +78,42 @@ class ExtractionSchema(BaseModel):
     total_amount: str | None = None  # 合同总额（元）
     currency: str | None = None  # 合同货币（如 CNY）
     payment_schedule: list[PaymentRaw] = Field(default_factory=list)
-    penalty_rate: str | None = None  # 逾期违约金比例（% 数值，如 1.5% 就写 1.5%）
-    liability_cap: str | None = None  # 责任上限（占合同总额 %）
-    warranty_months: str | None = None  # 质保期（月数）
-    termination_notice_days: str | None = None  # 解约提前通知期（天数）
+    # 数值类字段容忍 str/int/float：模型对"质保 2 年"可能直接给折算好的数字 24，
+    # 只声明 str 会让 json_mode 校验直接失败（2026-09-04 校服样本实测踩坑）；
+    # 归一化阶段 _parse_* 本就兼容数字输入，故仅放宽声明不做逻辑改动。
+    penalty_rate: str | int | float | None = None  # 逾期违约金比例（% 数值，如 1.5% 就写 1.5%）
+    liability_cap: str | int | float | None = None  # 责任上限（占合同总额 %）
+    warranty_months: str | int | float | None = None  # 质保期（月数，可给 24 或 "24 个月"）
+    termination_notice_days: str | int | float | None = None  # 解约提前通知期（天数）
     ip_ownership: str | None = None  # 知识产权归属表述（原句）
-    confidentiality_months: str | None = None  # 保密期（月数）
+    confidentiality_months: str | int | float | None = None  # 保密期（月数，可给数字或 "3 年"）
     governing_law: str | None = None  # 适用法律
     evidence: dict[str, ExtractionEvidence] = Field(default_factory=dict)  # 字段名 → 证据
 
 
 # ---- 确定性归一化（纯函数，核心测试面）----
+
+
+def _parse_kind(value: str | None) -> str | None:
+    """LLM 品类输出 → 枚举值；识别不到返回 None（规则按企业采购默认处理）。
+
+    兼容模型直接给枚举值或给中文描述/含关键词的文本两种形态。
+    """
+    if not value:
+        return None
+    text = value.strip()
+    kinds = ("enterprise_goods", "gov_goods", "agri_goods", "tech_service")
+    # 分支 1：直接命中枚举值 → 原样返回
+    if text in kinds:
+        return text
+    # 分支 2：关键词判别（政府采购/校服 → gov；农副 → agri；技术/软件/服务 → tech）
+    if any(kw in text for kw in ("校服", "政采", "政府采购")):
+        return "gov_goods"
+    if any(kw in text for kw in ("农副", "农产品")):
+        return "agri_goods"
+    if any(kw in text for kw in ("技术开发", "技术服务", "软件", "系统集成")):
+        return "tech_service"
+    return None
 
 
 def _parse_amount(value: str | int | float | None) -> Decimal | None:
@@ -137,6 +165,30 @@ def _parse_int(value: str | int | float | None) -> int | None:
     return int(match.group(0)) if match else None
 
 
+def _parse_months(value: str | int | float | None) -> int | None:
+    """质保/保密期等「月数」字段 → int（单位感知：2 年→24、6 个月→6、裸数→原值）。
+
+    作用：真实合同常按「年」写期限（如校服合同「质保 2 年」），LLM 按"原样抄写"
+    原则可能返回 "2 年"——直接取数字会得到 2，被规则误判成不足 12 个月（易错点）。
+    判定口径：文本带「N 年」→ N×12；带「N 个月/月」→ N；只有裸数字 → 原值；
+    解析不到返回 None。
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    text = str(value).strip()
+    # 分支 1：按「年」书写（如 2 年 / 1.5 年）→ 折算成月
+    match = re.search(r"(\d+(?:\.\d+)?)\s*年", text)
+    if match:
+        return round(float(match.group(1)) * 12)
+    # 分支 2：按「月」书写（如 24 个月 / 6 个月）→ 原值
+    match = re.search(r"(\d+(?:\.\d+)?)\s*个?月", text)
+    if match:
+        return int(match.group(1))
+    # 分支 3：裸数字（历史/简化写法，如 36）→ 原值
+    match = re.search(r"\d+", text)
+    return int(match.group(0)) if match else None
+
+
 # ---- LLM 原始输出 → ContractModel ----
 
 
@@ -157,6 +209,12 @@ def build_contract_model(raw: dict) -> ContractModel:
     def _s(key: str) -> str | None:
         value = raw.get(key)
         return value.strip() if isinstance(value, str) and value.strip() else None
+
+    # 数字类字段（月数/比例/天数）：模型可能给 int/float（json_mode 实测给数字），
+    # 不能走 _s 把数字折叠成 None，需原样交给下方 _parse_*（它们兼容数字输入）
+    def _n(key: str):
+        value = raw.get(key)
+        return value.strip() or None if isinstance(value, str) else value
 
     terms: list[PaymentTerm] = []
     for item in raw.get("payment_schedule") or []:
@@ -193,6 +251,7 @@ def build_contract_model(raw: dict) -> ContractModel:
         )
 
     return ContractModel(
+        contract_kind=_parse_kind(raw.get("contract_kind")),
         buyer=_s("buyer"),
         supplier=_s("supplier"),
         signature_date=_parse_cn_date(_s("signature_date")),
@@ -201,12 +260,12 @@ def build_contract_model(raw: dict) -> ContractModel:
         total_amount=_parse_amount(_s("total_amount")),
         currency=_s("currency"),
         payment_schedule=terms,
-        penalty_rate=_parse_percent(_s("penalty_rate")),
-        liability_cap=_parse_percent(_s("liability_cap")),
-        warranty_months=_parse_int(_s("warranty_months")),
-        termination_notice_days=_parse_int(_s("termination_notice_days")),
+        penalty_rate=_parse_percent(_n("penalty_rate")),
+        liability_cap=_parse_percent(_n("liability_cap")),
+        warranty_months=_parse_months(_n("warranty_months")),
+        termination_notice_days=_parse_int(_n("termination_notice_days")),
         ip_ownership=_s("ip_ownership"),
-        confidentiality_months=_parse_int(_s("confidentiality_months")),
+        confidentiality_months=_parse_months(_n("confidentiality_months")),
         governing_law=_s("governing_law"),
         extraction_meta=meta,
     )
@@ -227,9 +286,11 @@ _SYSTEM_PROMPT = """你是中文采购合同的结构化抽取器。请从合同
 2. 正文里找不到的字段填 null，且不要在 evidence 里编造；
 3. payment_schedule 逐期输出：name（期次名）、amount（金额原文）、percent（占总额比例数值，如 20 表示 20%）；
 4. evidence 输出为一个 JSON 对象：key 是字段名，value 是 {quote, clause_ref, confidence}。
-   quote 必须是正文原句；clause_ref 填条款号（如"第四条"，无条款结构填"前言"）；
+   quote 必须是正文原句；clause_ref 填所在条款/章节号（如"第四条"，章节式文本填
+   "一、质量要求"这类章节头，无条款结构填"前言"）；
    confidence：原文明确命中给 0.9+，有推断或表述含糊给 0.6~0.85，找不到的字段不写 key；
-5. 只输出 JSON。"""
+5. contract_kind 只从标题/首部/条款风格判断，不要凭正文金额猜；
+6. 只输出 JSON。"""
 
 
 def _system_message() -> str:

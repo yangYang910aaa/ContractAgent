@@ -1,13 +1,17 @@
-"""第 1 版合成合同生成器。
+"""合成合同生成器（v2：docx/pdf「合同感」排版）。
 
-生成 5 份中文「采购合同」样本到 data/contracts/（md / docx / pdf 三格式）:
+生成中文「采购合同」样本到 data/contracts/（md / docx / pdf 三格式）:
 - sample_01 / sample_02:无缺陷（正常放行）
 - sample_03:违约金比例过高 + 责任上限过低 + 分项加总与总额不一致
 - sample_04:预付款 60%（超 30% 政策）+ 缺失保密条款
 - sample_05:质保期 6 个月(不足 12)+ 保密期 60 个月(超 36)
+- sample_06:校服式 gov_goods 正常合同（章节式一、二、…+明细表，质保 2 年/违约金日 0.05%）
+- sample_07:校服式缺陷合同（质保 6 个月 < 12 + 违约金日 1.5% 畸高）
 
-写法:每份合同按「第X条」成块(Phase 1 parser 将按此边界切分)，
-内容由参数化 spec 渲染，同一种缺陷形态可复现、可批量扩展。
+写法:企业样本按「第X条」成块、校服样本按「一、二、…」章节成块
+(parser 双模式都支持)，内容由参数化 spec 渲染，同一种缺陷形态可复现。
+md 正文与 docx/pdf 正文同源（都来自 render_contract）；docx/pdf 的排版
+外壳（宋体/首行缩进/双方信息表/签署区/页码）在 format_render.py 实现。
 全部为合成数据，不含任何真实公司/个人信息；docx/pdf 只是"格式真实"，
 用于验证 PDF/Word 上传链路，内容仍是合成的（合规红线）。
 
@@ -17,7 +21,7 @@
 
 from __future__ import annotations
 
-import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -167,13 +171,311 @@ SPECS: list[SampleSpec] = [
 ]
 
 
+# ---- 校服式（gov_goods）样本：章节式固定骨架 + 缺陷载荷参数化 ----
+
+
+@dataclass
+class UniformSampleSpec:
+    """校服式（gov_goods）合成合同规格，骨架仿 55.广州市校服采购合同（2021 版）。
+
+    与 SampleSpec 的关系：企业样本逐条字段驱动「第X条」模板；校服正文是
+    章节式固定骨架（一、二、…章节 + 1、2、3 子条 + 明细表 + 附件清单），
+    只有缺陷载荷字段参数化，保证同骨架可复现 normal / defect 两版对比。
+    骨架内容与填充口径见 docs/合同模板观察笔记.md 第一、二节（本地）。
+    """
+
+    sample_id: str  # 样本编号（sample_06/07，评测对齐用）
+    filename: str  # 输出文件名（含缺陷特征，便于人眼区分）
+    contract_no: str  # 合同编号（渲染进正文）
+    title: str  # 合同标题
+    buyer: str  # 甲方（采购方）名称
+    supplier: str  # 乙方（供应商）名称
+    signature_date: str  # 签署日期（中文文本，如 2026年3月10日）
+    expiry_date: str  # 合同到期日（中文文本）
+    warranty_months: int  # 质保期（月）：24=正常写「2 年」；6=缺陷（不足政策下限 12）
+    penalty_daily_percent: float  # 违约金每日比例（百分比数值，0.05=日 0.05%）
+    note: str = ""  # 缺陷说明（写进生成清单）
+
+
+# 校服明细表（合成数据）：数量×单价加总须等于全校总价 198,400（金额一致锚点）
+_DETAIL_HEADERS = ("序号", "品名", "面料/规格", "单价（元）", "数量（套）", "金额（元）")
+_DETAIL_ROWS = (
+    # (序号, 品名, 面料/规格, 单价, 数量, 金额) —— 640×150+320×200+320×120=198,400
+    ("1", "夏季运动服套装", "涤棉混纺（短袖上衣、长裤各一件）", "150", "640", "96,000"),
+    ("2", "冬季外套", "涤纶面料、抓绒内胆", "200", "320", "64,000"),
+    ("3", "冬季长裤", "涤棉卡其布", "120", "320", "38,400"),
+)
+# 附件清单（学年汇总表）：数量与单人总价须与正文一致
+_ATTACH_HEADERS = ("学年", "在校学生数（人）", "夏季运动服（套）", "冬季外套（件）", "冬季长裤（条）", "单人学年总价（元）")
+_ATTACH_ROWS = (
+    ("2026-2027 学年", "320", "640", "320", "320", "620"),
+)
+
+
+UNIFORM_SPECS: list[UniformSampleSpec] = [
+    # sample_06：校服式正常合同（gov_goods 基线不要求责任上限/保密/IP/适用法律）
+    UniformSampleSpec(
+        sample_id="sample_06",
+        filename="sample_06_学生校服采购合同_正常.md",
+        contract_no="HT-2026-XF-0118",
+        title="广州市晨光实验中学学生校服采购合同",
+        buyer="广州市晨光实验中学",
+        supplier="广州星海校服服饰有限公司",
+        signature_date="2026年3月10日",
+        expiry_date="2027年9月30日",
+        warranty_months=24,  # 质保写「2 年」= 24 个月，合规（正文按年写，考验抽取折算）
+        penalty_daily_percent=0.05,  # 违约金日 0.05%（参考模板十一.4 的 0.5‰）
+        note="校服式正常合同：质保 2 年 / 违约金日 0.05% / 清单总价一致，应零风险 pass。",
+    ),
+    # sample_07：校服式缺陷合同（两条"写出来的数字"，抽取稳、规则必命中）
+    UniformSampleSpec(
+        sample_id="sample_07",
+        filename="sample_07_学生校服采购合同_质保过短_违约金畸高.md",
+        contract_no="HT-2026-XF-0119",
+        title="广州市晨光实验中学学生校服采购合同",
+        buyer="广州市晨光实验中学",
+        supplier="广州星海校服服饰有限公司",
+        signature_date="2026年3月10日",
+        expiry_date="2027年9月30日",
+        warranty_months=6,  # 缺陷①：质保 6 个月 < 政策下限 12 个月（P-02）
+        penalty_daily_percent=1.5,  # 缺陷②：违约金日 1.5% 畸高（行业惯例上限 1%）
+        note="缺陷：质保 6 个月不足 12 个月；违约金日 1.5% 明显偏高，应 fail 命中 P-02/违约金。",
+    ),
+]
+
+
+def _warranty_text(months: int) -> str:
+    """质保月数 → 正文写法：整年按「N 年」写（贴真实合同），其余按「N 个月」。"""
+    # 分支：12 的整数倍（且非 0）→ 按年写；其余（含 6 个月缺陷）按月写
+    return f"{months // 12} 年" if months and months % 12 == 0 else f"{months} 个月"
+
+
+def _md_table(headers: tuple[str, ...], rows: tuple[tuple[str, ...], ...]) -> list[str]:
+    """markdown 明细表块（表头 + 分隔行 + 数据行）。
+
+    约定：行首以 | 开头、连续成块，docx/pdf 渲染器据此识别为真表格，
+    parser 对 md 原样读取不受影响。表内金额不进 rules 抽取锚点（见 D2 取舍）。
+    """
+    parts = ["| " + " | ".join(headers) + " |"]
+    parts.append("| " + " | ".join("---" for _ in headers) + " |")
+    for row in rows:
+        parts.append("| " + " | ".join(row) + " |")
+    return parts
+
+
+def render_uniform_contract(spec: UniformSampleSpec) -> str:
+    """渲染校服式章节正文（一、二、…十四 + 附件清单），返回 md 全文。
+
+    输出结构：合同头/双方/鉴于段（parser 归入「前言」）→ 十四个章节
+    （章节头顶格、子条 1、2、3；八/十一章嵌入质保与违约金缺陷载荷）。
+    关键金额只以正文句出现（二 单人价、一-2 全校总价），表内金额仅作明细展示。
+    """
+    total_line = (
+        "上表各品类金额合计即本合同校服采购总价款：人民币（大写）"
+        f"{_cn_upper_amount('198,400')}（小写：198,400 元），币种为人民币。"
+        "如实际发放学生人数发生增减，按实际数量结算、多退少补。"
+    )
+    parts: list[str] = [
+        f"# {spec.title}",
+        "",
+        f"合同编号：{spec.contract_no}",
+        "",
+        f"甲方（采购方）：{spec.buyer}",
+        f"乙方（供应商）：{spec.supplier}",
+        "签约地点：广州市天河区",
+        f"签约时间：{spec.signature_date}",
+        "",
+        "为明确双方权利义务，依据《中华人民共和国民法典》《中华人民共和国产品质量法》"
+        "及广州市中小学生校服管理相关规定，甲乙双方本着平等自愿、诚实信用的原则，"
+        "就学生校服采购事宜协商一致，订立本合同。",
+        "",
+    ]
+    # 章节 = (章节头, 正文行列表)；行以「1、」子条或普通句呈现，紧贴模板写法
+    chapters: list[tuple[str, list[str]]] = [
+        (
+            "一、校服材质、数量、单价等明细",
+            ["1、校服品类、面料、单价与数量如下表所示："]
+            + _md_table(_DETAIL_HEADERS, _DETAIL_ROWS)
+            + ["2、" + total_line],
+        ),
+        (
+            "二、单个学生校服的总价",
+            [
+                "单个学生每学年校服总价为人民币（大写）陆佰贰拾元整（小写：620 元），"
+                "其中夏季运动服套装两套计 300 元、冬季外套 200 元、冬季长裤 120 元。",
+            ],
+        ),
+        (
+            "三、质量要求",
+            [
+                "1、校服质量与安全指标应符合 GB/T 31888《中小学生校服》及国家相关"
+                "强制性标准，甲醛含量、pH 值、可分解致癌芳香胺染料等安全项目应符合要求。",
+                "2、面料应耐穿耐洗，经多次洗涤不褪色、不变形、不起球。",
+                "3、交付的校服应全部为合格品，产品合格率 100%。",
+            ],
+        ),
+        (
+            "四、校服的样式与封样",
+            [
+                "1、校服样式由甲方确定，乙方据此制作样衣并送甲方书面确认。",
+                "2、经甲方确认的样衣由双方共同封存，作为生产加工与验收的依据。",
+            ],
+        ),
+        (
+            "五、校服的生产加工与送检",
+            [
+                "1、乙方应严格按照封样组织生产，未经甲方书面同意不得变更面料、工艺与规格。",
+                "2、每批次产品出厂前，乙方应送具有资质的检验机构检测，并向甲方提供检测报告。",
+            ],
+        ),
+        (
+            "六、交货时间、地点及货物包装",
+            [
+                "1、乙方应于2026年8月10日前将全部校服运送至甲方指定地点（甲方校内指定地点）。",
+                "2、货物应按班级与规格分类包装并附清单，包装应防潮、防污、防损，包装费用由乙方承担。",
+            ],
+        ),
+        (
+            "七、校服验收",
+            [
+                "1、甲方收到校服后，应在10个工作日内完成数量与外观查验。",
+                "2、数量异议应在收货后3个工作日内以书面形式提出，质量异议应在收货后"
+                "7个工作日内提出；逾期未提出的，视为该批校服验收合格，但隐蔽的质量问题除外。",
+            ],
+        ),
+        (
+            "八、售后服务与附加服务",
+            [
+                f"1、质保期：校服自验收合格之日起质保 {_warranty_text(spec.warranty_months)}。"
+                "质保期内出现起球、褪色、开线、拉链损坏等质量问题的，"
+                "乙方应在接到甲方通知后5日内免费维修或更换。",
+                "2、甲方提出补货或增订需求后，乙方应在2日内回复并安排生产，不得无故拒绝。",
+                "3、甲方可要求乙方按学生身材提供上门量身定做服务，相关约定以补充协议为准。",
+            ],
+        ),
+        (
+            "九、付款日期与方式",
+            [
+                "1、校服款项由甲方统一代收，乙方不直接向学生收取。",
+                "2、甲方应在2026年9月30日前将本合同总价款一次性支付给乙方，付款币种为人民币。",
+            ],
+        ),
+        (
+            "十、履约保证金",
+            [
+                "乙方应在本合同签订后10日内，向甲方提供金额为合同总价款20%的银行保函"
+                "作为履约担保，保函有效期至2027年3月31日。",
+            ],
+        ),
+        (
+            "十一、违约责任",
+            [
+                f"1、乙方逾期交付校服的，每逾期一日按本合同总价款的 "
+                f"{spec.penalty_daily_percent:g}% 向甲方支付违约金。",
+                "2、乙方交付的校服与封样在质量、规格上不符的，甲方有权拒收，并可要求乙方"
+                "在5日内调换；逾期调换的，按前款约定标准支付违约金。",
+                "3、违约金不足以弥补实际损失的，守约方有权另行主张赔偿。",
+            ],
+        ),
+        (
+            "十二、合同的解除",
+            [
+                "1、经双方协商一致，可以解除本合同。",
+                "2、一方迟延履行主要义务，经催告后15日内仍未履行的，另一方有权书面通知解除合同。",
+            ],
+        ),
+        (
+            "十三、争议解决",
+            [
+                "本合同履行过程中发生争议的，双方应友好协商解决；协商不成的，"
+                "任何一方均可向甲方所在地人民法院提起诉讼。",
+            ],
+        ),
+        (
+            "十四、其他事项与附则",
+            [
+                "1、本合同未尽事宜，由双方协商后签订补充协议，补充协议与本合同具有同等效力。",
+                f"2、本合同自{spec.signature_date}双方签字盖章之日起生效，"
+                f"有效期至{spec.expiry_date}。",
+                "3、本合同一式五份，甲方执两份、乙方执两份、一份报送教育主管部门备案。",
+            ],
+        ),
+    ]
+    for title, lines in chapters:
+        parts.append(title)
+        parts.extend(lines)
+        parts.append("")
+    # 附件清单：行首非章节头，parser 归入末章正文；数量与总价以正文为准
+    parts.append("附件：校服采购清单")
+    parts.extend(_md_table(_ATTACH_HEADERS, _ATTACH_ROWS))
+    parts.append("本清单所列数量与单人总价同正文约定一致，采购总价款以正文约定为准。")
+    return "\n".join(parts).rstrip() + "\n"
+
+
 def _money(amount_str: str) -> str:
     """金额字符串后补单位，正文统一为「xxx 元」格式。"""
     return f"{amount_str} 元"
 
 
+# 中文大写金额用字与位（银行票据写法：壹佰万元整）
+_CN_UPPER_DIGITS = "零壹贰叁肆伍陆柒捌玖"
+_CN_UPPER_UNITS = ("", "拾", "佰", "仟")
+
+
+def _cn_upper_four(n: int) -> str:
+    """0~9999 → 中文大写（不含位组名）；中间零按「零」连接（如 1001 → 壹仟零壹）。"""
+    out = ""
+    zero = False  # 是否刚跳过零位（决定下个非零位前要不要补「零」）
+    for idx in (3, 2, 1):
+        unit = 10**idx
+        digit = n // unit % 10
+        # 分支：该位为 0 → 记 zero 标记，等后面非零位补零
+        if digit == 0:
+            if out:
+                zero = True
+            continue
+        # 分支：该位非 0 → 前面跳了零则先写「零」再写数字+位名
+        if zero and out:
+            out += "零"
+        out += _CN_UPPER_DIGITS[digit] + _CN_UPPER_UNITS[idx]
+        zero = False
+    digit = n % 10
+    if digit:
+        out += _CN_UPPER_DIGITS[digit]
+    return out
+
+
+def _cn_upper_amount(amount: str) -> str:
+    """阿拉伯金额串 → 人民币中文大写（如 1,000,000 → 壹佰万元整）。
+
+    只支持整数元（样本总额均为整万元）；输入先剥离千分位/单位再转换。
+    """
+    n = int(re.sub(r"[^\d]", "", amount))
+    if n == 0:
+        return "零元整"
+    # 按 万/亿 位组由高到低拼；组间零桥接（如 1,001,000 → 壹佰万零壹仟元整）
+    groups: list[int] = []
+    while n:
+        groups.append(n % 10000)
+        n //= 10000
+    big_units = ("", "万", "亿")
+    out = ""
+    zero_bridge = False  # 高位组结尾有零、低位组又非空时需要补「零」
+    for idx in range(len(groups) - 1, -1, -1):
+        group = groups[idx]
+        if group == 0:
+            if out:
+                zero_bridge = True
+            continue
+        if zero_bridge and out:
+            out += "零"
+        out += _cn_upper_four(group) + big_units[idx]
+        zero_bridge = group % 10 == 0
+    return out + "元整"
+
+
 def _payment_lines(spec: SampleSpec) -> list[str]:
-    """付款方式正文行（不带序号前缀，编号由 render_contract 统一生成）。"""
+    """付款方式正文行：期次自带（一）（二）中文序号，正文段落不再加工程编号。"""
     lines = [f"双方约定按如下期次支付合同价款（币种：{spec.currency}）："]
     cn_ordinals = ["一", "二", "三", "四", "五"]
     for idx, (name, amount, _) in enumerate(spec.payment_terms):
@@ -226,8 +528,10 @@ def render_contract(spec: SampleSpec) -> str:
         (
             "合同标的与总价款",
             [
-                f"乙方向甲方供应本合同项下货物/服务，合同总价款为 "
-                f"{_money(spec.total_amount)}（币种：{spec.currency}）。"
+                # 大小写并用贴近真实合同；小写金额保留千分位作抽取锚点
+                f"乙方向甲方供应本合同项下货物/服务。合同总价款为人民币（大写）"
+                f"{_cn_upper_amount(spec.total_amount)}"
+                f"（小写：{_money(spec.total_amount)}；币种：{spec.currency}）。"
             ],
         ),
         ("付款方式", _payment_lines(spec)),
@@ -294,92 +598,42 @@ def render_contract(spec: SampleSpec) -> str:
     ]
     for idx, (title, lines) in enumerate(sections):
         parts.append(f"第{cn_numbers[idx]}条 {title}")
-        for sub_idx, line in enumerate(lines, start=1):
-            parts.append(f"{idx + 1}.{sub_idx} {line}")
+        # 正文行直接落段：不再加「1.1/2.1」工程编号（贴近中文合同写法）
+        for line in lines:
+            parts.append(line)
         parts.append("")
     return "\n".join(parts)
 
 
-def _cjk_font_path() -> Path | None:
-    """找系统中文字体（PDF 嵌入用）：优先单文件 TTF，TTC 集合其次。"""
-    font_dir = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
-    for name in ("simhei.ttf", "simkai.ttf", "msyh.ttc", "simsun.ttc"):
-        path = font_dir / name
-        if path.exists():
-            return path
-    return None
+# docx/pdf 排版渲染在 format_render.py（v2）；此处仅 re-export，保持调用方/测试兼容
+from backend.eval.format_render import _cjk_font_path, render_docx, render_pdf  # noqa: F401
 
 
-def _escape_pdf_text(text: str) -> str:
-    """reportlab Paragraph 走 XML，转义 & < > 防解析报错。"""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+ALL_SPECS: list = [*SPECS, *UNIFORM_SPECS]  # 企业基线(01~05) + 校服式 v3 试点(06/07)
 
 
-def render_docx(spec: SampleSpec, path: Path) -> None:
-    """按 spec 生成 Word 版样本（正文与 md 一致，供 .docx 上传链路测试）。"""
-    from docx import Document  # 延迟导入：只在生成 Word 时拉 python-docx
-
-    doc = Document()
-    for line in render_contract(spec).splitlines():
-        if not line.strip():
-            continue
-        # 分支：markdown 标题行 → 转成 Word 一级标题（去掉 "# " 前缀）
-        if line.startswith("# "):
-            doc.add_heading(line[2:], level=1)
-        else:
-            doc.add_paragraph(line)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    doc.save(str(path))
-
-
-def render_pdf(spec: SampleSpec, path: Path) -> None:
-    """按 spec 生成 PDF 版样本（中文用系统字体嵌入，reportlab 自动分页）。"""
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import ParagraphStyle
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.platypus import Paragraph, SimpleDocTemplate
-
-    font_path = _cjk_font_path()
-    # 分支：找不到中文字体 → 中文 PDF 无法渲染，直接报错便于发现
-    if font_path is None:
-        raise RuntimeError("未找到可用中文字体（Windows Fonts 下 simhei/msyh/simsun）")
-    font_name = "CJK"
-    # TTC 是字体集合，需指定 subfontIndex=0 取第一个子字体；TTF 不需要该参数
-    ttf_kwargs = {"subfontIndex": 0} if font_path.suffix.lower() == ".ttc" else {}
-    pdfmetrics.registerFont(TTFont(font_name, str(font_path), **ttf_kwargs))
-
-    body_style = ParagraphStyle(
-        "cjk_body", fontName=font_name, fontSize=10.5, leading=16, wordWrap="CJK"
-    )
-    title_style = ParagraphStyle(
-        "cjk_title", parent=body_style, fontSize=14, leading=20, spaceAfter=10
-    )
-    flowables = []
-    for line in render_contract(spec).splitlines():
-        if not line.strip():
-            continue
-        # 分支：markdown 标题行 → PDF 标题段落
-        if line.startswith("# "):
-            flowables.append(Paragraph(line[2:], title_style))
-        else:
-            flowables.append(Paragraph(_escape_pdf_text(line), body_style))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    SimpleDocTemplate(str(path), pagesize=A4).build(flowables)
+def _body_for(spec) -> str:
+    """按 spec 类型返回正文 md：企业「第X条」式 vs 校服章节式（docx/pdf 同源共用）。"""
+    # 分支 1：校服式 spec → 章节式正文（一、二、… 章节头）
+    if isinstance(spec, UniformSampleSpec):
+        return render_uniform_contract(spec)
+    # 分支 2：企业式 spec → 原有「第X条」正文
+    return render_contract(spec)
 
 
 def main() -> None:
-    """把 SPECS 全部渲染成 md/docx/pdf 落盘到 data/contracts/，并打印清单。"""
+    """把全部 spec（企业 01~05 + 校服 06/07）渲染成 md/docx/pdf 落盘并打印清单。"""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     manifest: list[str] = []
-    for spec in SPECS:
+    for spec in ALL_SPECS:
         stem = Path(spec.filename).stem
-        # 三格式同源输出：正文来自同一份 render_contract，保证内容一致
-        (OUTPUT_DIR / spec.filename).write_text(render_contract(spec), encoding="utf-8")
-        render_docx(spec, OUTPUT_DIR / "docx" / f"{stem}.docx")
-        render_pdf(spec, OUTPUT_DIR / "pdf" / f"{stem}.pdf")
+        # 三格式同源输出：正文来自同一份 _body_for(spec)，保证内容一致
+        body = _body_for(spec)
+        (OUTPUT_DIR / spec.filename).write_text(body, encoding="utf-8")
+        render_docx(spec, OUTPUT_DIR / "docx" / f"{stem}.docx", body=body)
+        render_pdf(spec, OUTPUT_DIR / "pdf" / f"{stem}.pdf", body=body)
         manifest.append(f"{spec.sample_id}\t{spec.filename}\t{spec.note}")
-    print(f"已生成 {len(SPECS)} 份合成合同（md/docx/pdf）-> {OUTPUT_DIR}")
+    print(f"已生成 {len(ALL_SPECS)} 份合成合同（md/docx/pdf）-> {OUTPUT_DIR}")
     for line in manifest:
         print(" -", line)
 

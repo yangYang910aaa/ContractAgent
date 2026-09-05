@@ -7,6 +7,8 @@ from backend.app.extractor import (
     _parse_amount,
     _parse_cn_date,
     _parse_int,
+    _parse_kind,
+    _parse_months,
     _parse_percent,
     build_contract_model,
 )
@@ -45,6 +47,37 @@ def test_parse_int_variants() -> None:
     assert _parse_int("30") == 30
     assert _parse_int("6个月") == 6
     assert _parse_int("") is None
+
+
+def test_parse_months_unit_aware() -> None:
+    """月数归一化须单位感知：按年书写 ×12（校服合同「质保 2 年」→24 个月）。"""
+    assert _parse_months("2 年") == 24
+    assert _parse_months("自验收合格之日起质保 2 年") == 24
+    assert _parse_months("6 个月") == 6
+    assert _parse_months("24 个月") == 24
+    assert _parse_months("60") == 60  # 裸数字按原值
+    assert _parse_months("长期") is None
+    assert _parse_months("") is None
+    assert _parse_months(None) is None
+
+
+def test_parse_kind_variants() -> None:
+    """品类解析：直接枚举值 / 关键词文本 / 空值。"""
+    assert _parse_kind("gov_goods") == "gov_goods"
+    assert _parse_kind("校服采购") == "gov_goods"
+    assert _parse_kind("政府采购（校服）") == "gov_goods"
+    assert _parse_kind("农副产品买卖") == "agri_goods"
+    assert _parse_kind("软件技术开发合同") == "tech_service"
+    assert _parse_kind("enterprise_goods") == "enterprise_goods"
+    assert _parse_kind("") is None
+    assert _parse_kind(None) is None
+
+
+def test_build_contract_model_keeps_parsed_kind() -> None:
+    """LLM 原始输出里的 contract_kind 经解析后写入 ContractModel。"""
+    model = build_contract_model({"contract_kind": "农副产品买卖合同"})
+    assert model.contract_kind == "agri_goods"
+    assert build_contract_model({}).contract_kind is None
 
 
 # ---- LLM 原始输出 → ContractModel ----
@@ -110,6 +143,34 @@ def test_build_normal_sample01() -> None:
     # 低置信度标黄
     assert cm.extraction_meta["penalty_rate"].needs_human_review is True
     assert cm.extraction_meta["total_amount"].needs_human_review is False
+
+
+def test_build_warranty_in_years_converts_to_months() -> None:
+    """LLM 按原文抄「质保 2 年」时，归一化应折算成 24 个月而非 2。"""
+    raw = _sample01_raw()
+    raw["warranty_months"] = "2 年"
+    raw["confidentiality_months"] = "3 年"
+    cm = build_contract_model(raw)
+    assert cm.warranty_months == 24
+    assert cm.confidentiality_months == 36
+
+
+def test_extraction_schema_tolerates_numeric_months() -> None:
+    """json_mode 输出里月数可能是数字（质保 24/6）而非字符串，schema 应放行。"""
+    from backend.app.extractor import ExtractionSchema
+
+    raw = ExtractionSchema(
+        contract_kind="gov_goods",
+        warranty_months=24,
+        confidentiality_months="3 年",
+        penalty_rate=1.5,
+        termination_notice_days=30,
+    )
+    cm = build_contract_model(raw.model_dump())
+    assert cm.warranty_months == 24
+    assert cm.confidentiality_months == 36
+    assert cm.penalty_rate == 1.5
+    assert cm.termination_notice_days == 30
 
 
 def test_build_sample03_percent_values() -> None:

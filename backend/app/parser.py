@@ -11,6 +11,8 @@ from pathlib import Path
 
 # 条款头：行首的「第X条[标题]」，X 支持阿拉伯数字与中文数字
 _CLAUSE_HEADER_RE = re.compile(r"(?m)^\s*(第[0-9一二三四五六七八九十百千万零〇]+条[^\n]*)")
+# 章节头：行首的「一、标题」（校服/政采示范文本常用），中文序号支持到「十五、」以上
+_CHAPTER_HEADER_RE = re.compile(r"(?m)^\s*([一二三四五六七八九十]+、[^\n]*)")
 
 
 @dataclass
@@ -23,7 +25,8 @@ class Clause:
 
 
 def extract_text(path: str | Path) -> str:
-    """读取 PDF / Word / 文本文件为全文(PDF 扫描件暂不支持，属 P2 OCR)"""
+    """读取 PDF / Word / 文本文件为全文(PDF 扫描件暂不支持)"""
+    
     path = Path(path)
     suffix = path.suffix.lower()
     # 分支 1：纯文本类（.txt/.md）→ UTF-8 直读全文
@@ -61,27 +64,45 @@ def extract_text(path: str | Path) -> str:
 
 
 def split_clauses(text: str) -> list[Clause]:
-    """按「第X条」边界把全文切成条款块; 无条文结构返回空列表（调用方走兜底)"""
+    """按条款/章节边界把全文切成块。
+
+    双模式判定：优先「第X条」（企业/GF 式）；没有第X条但有「一、二、三」章节头
+    （校服/政采式）→ 按章节切；两者都没有 → 返回空列表（调用方走句子兜底）。
+    易错点：章节文本里的子条（1、2、3 / （一）（二））必须留在所在章节内，
+    不能当成新的顶级边界——所以这里只认「一、」行首章节头。
+    """
     if not text or not text.strip():
         return []
-    matches = list(_CLAUSE_HEADER_RE.finditer(text))
+    tiao_matches = list(_CLAUSE_HEADER_RE.finditer(text))
+    zhang_matches = list(_CHAPTER_HEADER_RE.finditer(text))
+    # 分支 1：出现「第X条」→ 以条款为顶级结构（章节行降级为正文，防误切）
+    if tiao_matches:
+        matches = tiao_matches
+        ref_of = lambda header: header[: header.index("条") + 1]
+    # 分支 2：无第X条但有章节头 → 以章节为顶级结构
+    elif zhang_matches:
+        matches = zhang_matches
+        # 章节没有「第X条」式短引用，直接用整行标题当 ref（续块可读、证据可回指）
+        ref_of = lambda header: header
+    # 分支 3：都没有 → 无条文结构，交回调用方兜底
+    else:
+        return []
     if not matches:
         return []
 
     clauses: list[Clause] = []
-    # 条款前的合同头（标题/编号/甲乙方）单独成块，便于证据回指
+    # 顶级结构前的合同头（标题/编号/甲乙方/鉴于段）单独成块，便于证据回指
     if matches[0].start() > 0:
         preamble = text[: matches[0].start()].strip()
         if preamble:
             clauses.append(Clause(ref="", title="前言", text=preamble))
 
     for i, m in enumerate(matches):
-        # 每个条款块从条款头开始，到下一个条款头或文本结束
+        # 每个块从条款/章节头开始，到下一个顶级头或文本结束
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         chunk = text[m.start() : end].strip()
         header = m.group(1).strip()
-        ref = header[: header.index("条") + 1]  # "第一条 付款方式" -> "第一条"
-        clauses.append(Clause(ref=ref, title=header, text=chunk))
+        clauses.append(Clause(ref=ref_of(header), title=header, text=chunk))
     return clauses
 
 
