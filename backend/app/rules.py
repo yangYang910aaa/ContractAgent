@@ -18,7 +18,7 @@ PREPAY_MAX_PERCENT = 30.0  # P-01：预付款不超过总额 30%
 WARRANTY_MIN_MONTHS = 12  # P-02：质保期不少于 12 个月
 LIABILITY_CAP_MIN_PERCENT = 50.0  # P-03：责任上限不低于总额 50%
 CONFIDENTIALITY_MAX_MONTHS = 36  # P-04：保密期不超过 36 个月
-PENALTY_DAILY_MAX_PERCENT = 1.0  # 违约金日利率上限（行业惯例，非政策硬指标）
+PENALTY_DAILY_MAX_PERCENT = 1.0  # 违约金日利率上限
 AMOUNT_TOLERANCE_RATIO = Decimal("0.01")  # 分项加总 vs 总额允许偏差 1%
 
 # 必填核心字段：缺失会削弱整份审查的可信度
@@ -196,7 +196,8 @@ def _check_policies(model: ContractModel, required: set[str]) -> list[RiskItem]:
     """政策类规则汇总（输出带 policy_ref，可回指政策库文档）。
 
     依次检查：预付款比例(P-01)、质保期(P-02)、责任上限(P-03)、
-    保密期(P-04)、违约金日利率（行业惯例，无对应政策条目故 policy_ref 留空）。
+    保密期(P-04)、违约金日利率(P-03——细则第三条明文后从"惯例提示"升级为
+    可回指制度，2026-09-05 语料 v2 起)。
     required=该品类"应含条款"字段集合（缺失才报 medium，见 KIND_BASELINE）。
     返回：风险列表（可能为空）。
     """
@@ -291,9 +292,9 @@ def _check_policies(model: ContractModel, required: set[str]) -> list[RiskItem]:
             )
         )
 
-    # ---- 违约金日利率（行业惯例）：>1%/日 → high ----
-    # 分支：违约金率有值且超过阈值 → 罚则畸高；该阈值无政策条目，
-    # policy_ref 留空，避免"凭空引用政策"，仅按惯例提示。
+    # ---- 违约金日利率（P-03）：>1%/日 → high ----
+    # 分支：违约金率有值且超过阈值 → 罚则畸高。P-03 细则第三条已写明
+    # "日费率超过每日 1% 属畸高"，故 policy_ref 挂 P-03 不算凭空引用。
     if model.penalty_rate is not None and model.penalty_rate > PENALTY_DAILY_MAX_PERCENT:
         out.append(
             _mk(
@@ -301,18 +302,18 @@ def _check_policies(model: ContractModel, required: set[str]) -> list[RiskItem]:
                 risk_type="penalty_rate_too_high",
                 severity=Severity.high,
                 field="penalty_rate",
-                policy_ref=None,
-                suggestion=f"逾期违约金日 {model.penalty_rate:g}% 明显偏高（行业惯例 0.05%~0.1%），建议协商下调。",
+                policy_ref="P-03",
+                suggestion=f"逾期违约金日 {model.penalty_rate:g}% 超过 P-03 允许的 1% 上限（实务 0.05%~0.1%），建议协商下调。",
             )
         )
     return out
 
 
 def _check_ip_and_law(model: ContractModel, required: set[str]) -> list[RiskItem]:
-    """知识产权归属与适用法律检查（P-05）。
+    """知识产权归属与适用法律检查 (P-05)。
 
-    处理三种情况（均为 medium，需人工确认/补条款）：
-    1) 完全没提 IP 归属；2) 写了归属但未归甲方/采购方；
+    处理三种情况（均为 medium, 需人工确认/补条款）：
+    1) 完全没提 IP 归属;2) 写了归属但未归甲方/采购方；
     3) 缺适用法律约定。
     只有 required 含对应字段的品类才检查（品类本身不要求时可省略）。
     返回：风险列表（可能为空）。

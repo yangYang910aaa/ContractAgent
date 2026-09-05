@@ -88,8 +88,8 @@ def test_defect_sample07_hits_warranty_and_penalty() -> None:
     assert types == {"warranty_too_short", "penalty_rate_too_high"}
     assert all(r.severity == Severity.high for r in risks)
     assert grade_report(risks) == Grade.fail
-    # P-02 引用只在质保风险上
-    assert {r.policy_ref for r in risks} == {"P-02", None}
+    # 质保风险引 P-02；违约金风险引 P-03（细则第三条明文 1% 上限，语料 v2 起可回指）
+    assert {r.policy_ref for r in risks} == {"P-02", "P-03"}
 
 
 @pytest.mark.parametrize("idx", range(len(UNIFORM_SPECS)))
