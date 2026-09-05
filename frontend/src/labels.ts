@@ -19,6 +19,7 @@ export const RISK_LABELS: Record<string, string> = {
   ip_ownership_missing: '未约定知识产权归属',
   ip_ownership_unclear: '知识产权归属不清',
   governing_law_missing: '缺少适用法律约定',
+  blank_template_suspected: '疑似空白模板',
 }
 
 /** ContractModel 字段 key → 中文名（建议文案里出现字段名时用中文）。 */
@@ -39,6 +40,51 @@ export const FIELD_LABELS: Record<string, string> = {
   ip_ownership: '知识产权归属',
   confidentiality_months: '保密期',
   governing_law: '适用法律',
+}
+
+/** 合同品类机器码 → 中文（抽取字段里的 contract_kind 展示用）。 */
+export const KIND_LABELS: Record<string, string> = {
+  enterprise_goods: '企业货物采购',
+  gov_goods: '政府采购 / 校服',
+  agri_goods: '农副产品买卖',
+  tech_service: '技术开发 / 软件 / 服务',
+}
+
+/** 品类展示：未知/null 回退原文（别把 agri_goods 这类机器码直接给用户）。 */
+export function kindLabel(kind: string | null | undefined): string {
+  return (kind && KIND_LABELS[kind]) || kind || '未识别'
+}
+
+/**
+ * 政策条文重排：把源文件里"手工折行"的半句续行合并成逻辑行，返回每行一条。
+ * 背景：政策细则源文档每行约 40~50 字就换行，直接按行渲染会出现"一页纸只有
+ * 左边有内容、右半空白"（用户反馈，2026-09-05）。规则：结构行（细则标题/
+ * 第X条/「标签：」前缀行）另起一行；普通续行接续到上一逻辑行，直到句末
+ * （。；！？）才断——渲染时每行按整行宽度自然换行，右侧不再空。
+ */
+export function policyReflow(text: string): string[] {
+  const logical: string[] = []
+  for (const raw of text.split('\n')) {
+    const line = raw.trim().replace(/^#{1,6}\s*/, '')
+    if (!line) continue
+    // 同行多段元信息（文件编号／版本／生效日期 等全角空格分隔）先拆成独立段
+    const segments = line.split(/\s{2,}|\u3000{2,}/).map((s) => s.trim()).filter(Boolean)
+    for (const seg of segments) {
+      const isHead = /^(采购合同审核制度|细则|第[一二三四五六七八九十\d]+条|附则)/.test(seg)
+      const isLabel = /^[^：:，。！？\n]{1,10}[：:]/.test(seg)
+      const prev = logical[logical.length - 1]
+      const prevEndsSentence = prev ? /[。；！？]$/.test(prev) : true
+      // 上一行若是标题/条文头（第X条等），正文不能并进标题行
+      const prevIsHead = prev ? /^(采购合同审核制度|细则|第[一二三四五六七八九十\d]+条|附则)/.test(prev) : true
+      // 续行合并：非结构行、上一行不是标题、且上一行没到句末 → 接上去
+      if (prev && !prevIsHead && !isHead && !isLabel && !prevEndsSentence) {
+        logical[logical.length - 1] += seg
+      } else {
+        logical.push(seg)
+      }
+    }
+  }
+  return logical
 }
 
 /** 带机器码与可选 label 的风险形状（闸口摘要与报告风险通用）。 */

@@ -43,7 +43,8 @@ export interface RiskItem {
 export interface PolicyHit {
   policy_ref: string
   score?: number | null
-  snippet?: string
+  snippet?: string // 引用片段（后端已去 md 标记并按句截断）
+  text?: string | null // 命中政策的完整条文（前端"查看完整条文"展开用）
 }
 
 /** 审批记录：edited 时 patches 是字段补丁（回后端 rules 重审用）。 */
@@ -73,7 +74,14 @@ export interface TaskSummary {
   status: TaskStatus
   grade?: Grade
   risk_count?: number | null // done=报告风险数；gate=待审 high 数；其余 null
+  template?: boolean // 报告含"疑似空白模板"结论（前端评级显示"待确认"）
   error?: string
+}
+
+/** 队列列表响应：任务数组 + 服务端并发上限。 */
+export interface TaskList {
+  tasks: TaskSummary[]
+  concurrency?: number
 }
 
 /** 任务详情：gate 时才有 gate_payload；done 时才有 report。 */

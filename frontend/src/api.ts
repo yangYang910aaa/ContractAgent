@@ -4,7 +4,7 @@
  * 约定：非 2xx 统一抛 Error(detail)，页面 catch 后展示即可。
  */
 
-import type { SourceDoc, TaskDetail, TaskSummary } from './types'
+import type { SourceDoc, TaskDetail, TaskList } from './types'
 
 /** 解包响应：失败时优先取后端的 detail 文案（FastAPI HTTPException）。 */
 async function j<T>(resp: Response): Promise<T> {
@@ -23,19 +23,8 @@ export async function uploadContract(file: File): Promise<{ thread_id: string; s
 }
 
 /** 任务队列列表（倒序；队列页轮询用）。 */
-export async function listTasks(): Promise<{ tasks: TaskSummary[] }> {
+export async function listTasks(): Promise<TaskList> {
   return j(await fetch('/api/tasks'))
-}
-
-/** 一键演示：服务端把内置合成样本直接入队。 */
-export async function demoRun(count: number): Promise<{ tasks: TaskSummary[] }> {
-  return j(
-    await fetch('/api/tasks/demo', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ count }),
-    }),
-  )
 }
 
 /** 任务详情（详情页轮询用；threadId 来自后端，仍需转义防路径注入）。 */

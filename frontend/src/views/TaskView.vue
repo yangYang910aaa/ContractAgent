@@ -7,7 +7,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { approve, editFields, getTask, reject } from '../api'
 import SourceDrawer from '../components/SourceDrawer.vue'
-import { prettyField, riskLabel } from '../labels'
+import { kindLabel, policyReflow, prettyField, riskLabel } from '../labels'
 import type { SourceAnchor, TaskDetail, TaskStatus } from '../types'
 
 const props = defineProps<{ threadId: string }>()
@@ -65,6 +65,13 @@ const gradeText: Record<string, string> = {
   fail: '不通过',
 }
 
+// 审查模式（review_mode 机器码 → 中文；导出 JSON 仍是机器码，属预期）
+const reviewModeText: Record<string, string> = {
+  single: '单审',
+  double: '主审 + 盲审复核',
+  parallel: '多智能体并行',
+}
+
 // 评级大圆章（.ring 系列，见全局 style.css）：双层朱文/石绿印
 const ringClass: Record<string, string> = {
   pass: 'ring-ok',
@@ -96,6 +103,28 @@ const fieldLabels: Record<string, string> = {
 // 审查中 = pending/processing：显示进行中动画，不渲染闸口/报告
 const extracting = computed(() => detail.value && ['pending', 'processing'].includes(detail.value.status))
 const ext = computed(() => detail.value?.report?.extracted ?? null)
+// 报告风险：疑似空白模板单拎为顶部"结论条"，不进风险清单卡片与计数
+const reportRisks = computed(() => detail.value?.report?.risks ?? [])
+const templateNotice = computed(
+  () => reportRisks.value.find((r) => r.risk_type === 'blank_template_suspected') ?? null,
+)
+const listRisks = computed(() => reportRisks.value.filter((r) => r.risk_type !== 'blank_template_suspected'))
+
+/** 政策行解析：已知标签行（文件编号/版本/生效日期/归口部门/适用范围/第X条）
+ * 拆出标签与内容，标签用强调色、内容保持正文色——关键信息一眼可分。 */
+function policyRowParts(line: string): { lbl: string | null; val: string } {
+  const m = line.match(/^(文件编号|版本|生效日期|归口部门|适用范围|第[一二三四五六七八九十百\d]+条)[：:](.*)$/)
+  return m ? { lbl: `${m[1]}：`, val: m[2] } : { lbl: null, val: line }
+}
+
+/** 政策行样式归类：首行=细则标题；元信息/归口适用范围/条文头各有色调。 */
+function policyRowClass(index: number, line: string): string {
+  if (index === 0) return 'pl-title'
+  if (/^(文件编号|版本|生效日期)[：:]/.test(line)) return 'pl-meta'
+  if (/^(归口部门|适用范围)[：:]/.test(line)) return 'pl-scope'
+  if (/^第[一二三四五六七八九十百\d]+条/.test(line)) return 'pl-article'
+  return 'pl-body'
+}
 
 /** 取抽取字段值（null-safe；模板里频繁判空，抽成函数避免内联表达式类型坑）。 */
 function extVal(key: string): unknown {
@@ -105,8 +134,16 @@ function extVal(key: string): unknown {
 /** 抽取字段展示文本：付款期次走 paymentText 拼接，其余直接转字符串。 */
 function extText(key: string): string {
   if (key === 'payment_schedule') return paymentText(extVal(key))
+  // 品类值是机器码（如 agri_goods），展示层永远给中文
+  if (key === 'contract_kind') return kindLabel(extVal(key) as string | null | undefined)
   const v = extVal(key)
   return v == null ? '' : String(v)
+}
+
+/** 报告/评级文案：疑似空白模板的 conditional_pass 展示为"待确认"。 */
+function gradeDisplay(grade: string | null | undefined): string {
+  if (templateNotice.value && grade === 'conditional_pass') return '待确认'
+  return gradeText[grade ?? ''] ?? grade ?? '—'
 }
 
 async function load() {
@@ -242,7 +279,6 @@ function openSource(clause?: string) {
   <section class="rise task">
     <div class="bar">
       <button class="btn btn-ghost" @click="emit('back')">← 返回</button>
-      <span v-if="detail" class="mono-num tid">{{ detail.thread_id }}</span>
       <!-- U2：gate/done/error 时点开抽屉核对原文；审查中也可开（自动等原文） -->
       <button
         v-if="detail && detail.status !== 'pending'"
@@ -319,7 +355,7 @@ function openSource(clause?: string) {
           <p class="muted">评级</p>
         </div>
         <span class="ring" :class="ringClass[detail.report.grade ?? ''] ?? 'ring-mute'">
-          {{ gradeText[detail.report.grade ?? ''] ?? detail.report.grade ?? '—' }}
+          {{ gradeDisplay(detail.report.grade) }}
         </span>
       </div>
 
@@ -327,7 +363,7 @@ function openSource(clause?: string) {
       <div class="sum card">
         <div class="sum-item">
           <span class="muted">风险</span>
-          <b class="mono-num">{{ detail.report.risks?.length ?? 0 }}</b>
+          <b class="mono-num">{{ listRisks.length }}</b>
         </div>
         <div class="sum-item">
           <span class="muted">政策引用</span>
@@ -335,7 +371,7 @@ function openSource(clause?: string) {
         </div>
         <div class="sum-item">
           <span class="muted">审查模式</span>
-          <b class="mono-num">{{ detail.report.review_mode ?? 'single' }}</b>
+          <b class="mono-num">{{ reviewModeText[detail.report.review_mode ?? ''] ?? '单审' }}</b>
         </div>
         <button class="btn btn-ghost" @click="downloadReport">导出 JSON</button>
       </div>
@@ -347,10 +383,17 @@ function openSource(clause?: string) {
         <span v-if="detail.report.approval.reviewer_note" class="note">「{{ detail.report.approval.reviewer_note }}」</span>
       </div>
 
+      <!-- 结论条：疑似空白模板单独成结论，不混进下方风险清单 -->
+      <div v-if="templateNotice" class="card pad tpl-notice">
+        <p class="tpl-title serif">结论：疑似空白模板，未填写内容较多</p>
+        <p v-if="templateNotice.evidence" class="tpl-ev">占位示例：「{{ templateNotice.evidence }}」</p>
+        <p class="tpl-sug">{{ prettyField(templateNotice.suggestion ?? '') }}</p>
+      </div>
+
       <!-- 风险清单：空=自动放行提示，非空逐条展示 -->
-      <template v-if="detail.report.risks?.length">
+      <template v-if="listRisks.length">
         <h4>风险清单</h4>
-        <div v-for="(r, i) in detail.report.risks" :key="i" class="risk card">
+        <div v-for="(r, i) in listRisks" :key="i" class="risk card">
           <div class="risk-top">
             <span class="stamp" :class="severityClass[r.severity]">{{ severityText[r.severity] }}</span>
             <span class="risk-type serif">{{ riskLabel(r) }}</span>
@@ -363,7 +406,7 @@ function openSource(clause?: string) {
           <p v-if="r.suggestion" class="suggest">{{ prettyField(r.suggestion) }}</p>
         </div>
       </template>
-      <template v-else>
+      <template v-else-if="!templateNotice">
         <p class="none ok-text serif">未发现风险 · 自动放行</p>
       </template>
 
@@ -371,9 +414,34 @@ function openSource(clause?: string) {
       <template v-if="detail.report.policy_hits?.length">
         <h4>政策引用</h4>
         <div v-for="(h, i) in detail.report.policy_hits" :key="i" class="card pad hit">
-          <span class="mono-num ref">{{ h.policy_ref }}</span>
-          <span v-if="h.score != null" class="muted mono-num">score {{ Number(h.score).toFixed(3) }}</span>
-          <p class="snip">{{ h.snippet }}</p>
+          <!-- 逐行排版：编号 / 相似度 / 标题 / 元信息 / 条文各占一行 -->
+          <p class="pl pl-ref"><span class="mono-num ref">{{ h.policy_ref }}</span></p>
+          <p v-if="h.score != null" class="pl pl-score muted">相似度 {{ Number(h.score).toFixed(3) }}</p>
+          <template v-if="policyReflow(h.snippet ?? '').length">
+            <p
+              v-for="(ln, li) in policyReflow(h.snippet ?? '')"
+              :key="li"
+              class="pl"
+              :class="policyRowClass(li, ln)"
+            >
+              <template v-if="policyRowParts(ln).lbl">
+                <span class="lbl">{{ policyRowParts(ln).lbl }}</span>{{ policyRowParts(ln).val }}
+              </template>
+              <template v-else>{{ ln }}</template>
+            </p>
+          </template>
+          <!-- 完整条文默认收起，需要核对政策依据时展开看全文（不再只看截断片段） -->
+          <details v-if="h.text" class="policy-more">
+            <summary class="muted">查看完整条文</summary>
+            <div class="policy-full">
+              <p v-for="(ln, li) in policyReflow(h.text)" :key="li" :class="policyRowClass(li, ln)">
+                <template v-if="policyRowParts(ln).lbl">
+                  <span class="lbl">{{ policyRowParts(ln).lbl }}</span>{{ policyRowParts(ln).val }}
+                </template>
+                <template v-else>{{ ln }}</template>
+              </p>
+            </div>
+          </details>
         </div>
       </template>
 
@@ -422,11 +490,6 @@ function openSource(clause?: string) {
   align-items: center;
   gap: 14px;
   margin-bottom: 16px;
-}
-
-.tid {
-  color: var(--muted);
-  font-size: 12.5px;
 }
 
 .btn-source {
@@ -573,6 +636,34 @@ function openSource(clause?: string) {
   color: var(--ink-2);
 }
 
+/* 结论条：疑似空白模板（琥珀强调，区别于风险清单卡片） */
+.tpl-notice {
+  margin-top: 12px;
+  border-left: 4px solid var(--warn);
+  background: linear-gradient(180deg, #fdf6e2, #f7eccb);
+}
+
+.tpl-title {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #7a5510;
+}
+
+.tpl-ev {
+  margin: 0 0 6px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.tpl-sug {
+  margin: 0;
+  font-size: 13.5px;
+  color: #6d5a2e;
+}
+
 .report h4 {
   margin: 22px 0 6px;
   letter-spacing: 0.1em;
@@ -592,8 +683,66 @@ function openSource(clause?: string) {
   margin: 8px 0;
 }
 
+/* 政策卡逐行排版：字号加大加粗，标题/元信息/适用范围用颜色分层 */
+.pl {
+  margin: 0;
+  font-size: 15px;
+  line-height: 2;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.pl-ref {
+  margin-bottom: 4px;
+}
+
 .hit .ref {
-  margin-right: 10px;
+  font-size: 14px;
+  padding: 2px 11px;
+}
+
+.pl-score {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--warn);
+}
+
+/* 细则标题：朱砂红、最大最粗 */
+.pl-title {
+  color: var(--seal);
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+/* 文件编号/版本/生效日期：小号元信息，标签用琥珀强调 */
+.pl-meta {
+  font-size: 13.8px;
+  color: var(--muted);
+}
+
+.pl-meta .lbl,
+.pl-scope .lbl {
+  color: var(--warn);
+  font-weight: 700;
+  margin-right: 0.2em;
+}
+
+/* 归口部门/适用范围：正文墨色，标签琥珀 */
+.pl-scope {
+  font-size: 15px;
+  color: var(--ink);
+}
+
+/* 条文头（第X条）：墨色加粗 */
+.pl-article {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.pl-article .lbl {
+  color: var(--seal);
 }
 
 .snip {
@@ -601,6 +750,36 @@ function openSource(clause?: string) {
   color: var(--ink-2);
   font-size: 13.5px;
   white-space: pre-line;
+}
+
+/* 政策完整条文：默认收起的展开块，浅底等宽便于核对原文 */
+.policy-more {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.policy-more summary {
+  cursor: pointer;
+  user-select: none;
+  letter-spacing: 0.04em;
+}
+
+.policy-full {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  background: var(--card-2);
+  border: 1px dashed var(--line);
+  border-radius: 3px;
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 2;
+  color: var(--ink-2);
+}
+
+/* 每条逻辑行按容器整宽自然换行，避免源文件手工折行造成右半空白 */
+.policy-full p {
+  margin: 0 0 0.35em;
+  overflow-wrap: break-word;
 }
 
 .grid {
