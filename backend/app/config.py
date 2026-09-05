@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     chat_model: str = "deepseek-ai/DeepSeek-V4-flash"
     chat_temperature: float = 0.1
     chat_enable_thinking: bool = False  # False=关闭 DeepSeek thinking，控制抽取时延与成本
+    # 服务端审核并发度（同时送审的合同份数）：有界并发避免打爆 LLM 配额/限流。
+    # 按实测限流调整：默认 2 起步，稳妥后可试 3~5（env: REVIEW_WORKERS）
+    review_workers: int = 2
 
     # ---- 向量模型：阿里 DashScope（OpenAI 兼容 embedding 端点）----
     dashscope_api_key: str = ""

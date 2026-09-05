@@ -17,7 +17,7 @@ from langgraph.types import Command, interrupt
 
 from backend.app.parser import extract_text
 from backend.app.pipeline import enrich_policy_hits
-from backend.app.rules import evaluate, grade_report
+from backend.app.rules import annotate_template_risks, evaluate, grade_report
 from backend.app.schemas import ContractModel, RiskItem
 from backend.app.store import ThreadStore
 
@@ -126,9 +126,13 @@ def build_review_graph(
         return {"extracted": model.model_dump(mode="json")}
 
     def rules_node(state: ReviewState) -> dict:
-        """确定性规则审查：抽取结果 → 风险清单；重审循环也回到这里。"""
+        """确定性规则审查：抽取结果 → 风险清单；重审循环也回到这里。
+
+        空白模板检测依赖原文（state.text）——模板占位多时缺必填降 medium，
+        不再整批误停闸口（见 rules.annotate_template_risks）。
+        """
         model = ContractModel.model_validate(state["extracted"])
-        risks = evaluate(model)
+        risks = annotate_template_risks(evaluate(model), state.get("text") or "")
         return {"risks": [r.model_dump(mode="json") for r in risks], "rerun": False}
 
     def policy_node(state: ReviewState) -> dict:

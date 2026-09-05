@@ -52,13 +52,20 @@ class EditIn(BaseModel):
 
 def _summary(record) -> dict:
     """TaskRecord → 列表/详情用的精简 dict(不外泄内部对象)"""
-    # 风险数：done 看报告 risks；gate 看待审 high；其余无
+    # 风险数：done 看报告 risks（疑似空白模板是"结论"不是风险，排除）；
+    # gate 看待审 high；其余无
     if record.report:
-        risk_count = len(record.report.get("risks") or [])
+        risk_count = len(
+            [r for r in (record.report.get("risks") or []) if r.get("risk_type") != "blank_template_suspected"]
+        )
     elif record.gate_payload:
         risk_count = len(record.gate_payload.get("high_risks") or [])
     else:
         risk_count = None
+    # 模板结论标记：报告含 blank_template_suspected → 前端评级文案用"待确认"
+    is_template = bool(record.report) and any(
+        r.get("risk_type") == "blank_template_suspected" for r in (record.report.get("risks") or [])
+    )
     return {
         "thread_id": record.thread_id,
         # 展示用原始文件名（name）；兼容旧记录回退到路径 basename
@@ -67,6 +74,7 @@ def _summary(record) -> dict:
         "grade": (record.report or {}).get("grade") if record.report else None,
         "gate_payload": record.gate_payload,
         "risk_count": risk_count,
+        "template": is_template,
         "error": record.error,
     }
 
@@ -115,10 +123,10 @@ async def upload_task(request: Request, file: UploadFile) -> dict:
 
 @router.get("/tasks")
 def list_tasks(request: Request) -> dict:
-    """任务队列列表（倒序，供队列页轮询）。"""
+    """任务队列列表（倒序，供队列页轮询）；附并发上限（前端展示"并发 n"）。"""
     manager = get_manager(request)
     records = manager.runner.store.list_records()
-    return {"tasks": [_summary(r) for r in records]}
+    return {"tasks": [_summary(r) for r in records], "concurrency": manager.worker_count}
 
 
 class DemoIn(BaseModel):

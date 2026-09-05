@@ -3,7 +3,7 @@
 from datetime import date
 from decimal import Decimal
 
-from backend.app.rules import evaluate, grade_report
+from backend.app.rules import annotate_template_risks, evaluate, grade_report
 from backend.app.schemas import ContractModel, Grade, PaymentTerm, Severity
 
 
@@ -61,6 +61,46 @@ def test_risks_carry_chinese_label_and_field_name() -> None:
     sug = next(r for r in missing if r.field == "effective_date").suggestion
     assert "生效日期" in sug
     assert "effective_date" not in sug
+
+
+def test_blank_template_text_downgrades_missing_and_adds_notice() -> None:
+    """空白模板（多类占位）→ 缺必填 high 降 medium + 追加"疑似空白模板"风险。"""
+    from backend.app.rules import is_blank_template_suspect
+
+    blank_text = (
+        "甲方（采购方）：＿＿＿＿＿＿\n"
+        "乙方（供应商）：＿＿＿＿＿＿\n"
+        "签订时间： 年 月 日\n"
+        "货款金额为： 元（大写：＿＿＿）"
+    )
+    assert is_blank_template_suspect(blank_text) is True
+    model = _with(effective_date=None, expiry_date=None, total_amount=None)
+    risks = annotate_template_risks(evaluate(model), blank_text)
+    missing = [r for r in risks if r.risk_type == "missing_required_field"]
+    # 三条缺必填全部降为 medium（不再触发闸口）
+    assert missing and all(r.severity == Severity.medium for r in missing)
+    # 追加模板提示：medium、无政策引用、建议说清"疑似模板"
+    notice = [r for r in risks if r.risk_type == "blank_template_suspected"]
+    assert len(notice) == 1
+    assert notice[0].severity == Severity.medium
+    assert notice[0].label == "疑似空白模板"
+    assert "空白模板" in notice[0].suggestion
+    assert grade_report(risks) == Grade.conditional_pass  # 无 high → 不再 fail/gate
+
+
+def test_filled_text_keeps_missing_as_high() -> None:
+    """填写完整的正文（即使字段仍缺）不该被当成模板降级——防止误放行。"""
+    filled_text = (
+        "甲方（采购方）：晨光实验中学\n"
+        "乙方（供应商）：星海校服服饰有限公司\n"
+        "签订时间：2026年3月10日\n"
+        "本合同总价为人民币（大写）壹拾玖万捌仟肆佰元整（小写：198,400 元）"
+    )
+    model = _with(effective_date=None, expiry_date=None, total_amount=None)
+    risks = annotate_template_risks(evaluate(model), filled_text)
+    missing = [r for r in risks if r.risk_type == "missing_required_field"]
+    assert missing and all(r.severity == Severity.high for r in missing)
+    assert not any(r.risk_type == "blank_template_suspected" for r in risks)
 
 
 def test_sample03_penalty_liability_and_amount_high() -> None:

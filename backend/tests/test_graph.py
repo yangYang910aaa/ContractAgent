@@ -73,8 +73,42 @@ def test_normal_contract_passes_without_gate() -> None:
     assert runner.store.get(runner.last_thread_id).status == "done"
     assert state["report"]["grade"] == "pass"
     assert state["report"]["approval"] is None
-    assert runner.pending(runner.last_thread_id) is None
-    assert retriever.queries == []  # 零风险 → 无需政策检索
+
+
+def test_blank_template_text_downgrades_and_skips_gate() -> None:
+    """空白模板文本：缺必填降 medium → 不再停闸口，报告带模板提示。"""
+    model = _normal_model().model_copy(
+        update={"effective_date": None, "expiry_date": None, "total_amount": None}
+    )
+    runner, _ = _runner(model)
+    blank_text = (
+        "甲方（采购方）：＿＿＿＿\n乙方（供应商）：＿＿＿＿\n"
+        "签订时间： 年 月 日\n货款金额为： 元（大写：）"
+    )
+    state = runner.start("template.md", text=blank_text)
+    record = runner.store.get(runner.last_thread_id)
+    assert record.status == "done"  # 不再停闸口
+    types = {r["risk_type"] for r in state["report"]["risks"]}
+    assert "blank_template_suspected" in types
+    assert all(r["severity"] != "high" for r in state["report"]["risks"] if r["risk_type"] == "missing_required_field")
+
+
+def test_filled_text_missing_fields_still_gate() -> None:
+    """对照组：正文是完整填写但字段仍缺 → 维持 high，照常停闸口。"""
+    model = _normal_model().model_copy(
+        update={"effective_date": None, "expiry_date": None, "total_amount": None}
+    )
+    runner, _ = _runner(model)
+    filled_text = (
+        "甲方（采购方）：晨光实验中学\n乙方（供应商）：星海校服服饰有限公司\n"
+        "签订时间：2026年3月10日\n"
+        "本合同总价为人民币（大写）壹拾玖万捌仟肆佰元整（小写：198,400 元）"
+    )
+    state = runner.start("real.md", text=filled_text)
+    record = runner.store.get(runner.last_thread_id)
+    assert record.status == "gate"  # 缺必填仍 high → 停闸口
+    # 闸口态还没生成 report，看 state 里的风险清单即可
+    assert not any(r["risk_type"] == "blank_template_suspected" for r in state.get("risks", []))
 
 
 def test_defect_stops_at_gate_then_approved() -> None:

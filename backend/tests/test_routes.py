@@ -133,6 +133,8 @@ def test_list_tasks_summary(client: TestClient) -> None:
     assert tasks[tid]["status"] == "gate"
     assert tasks[tid]["source"] == "c.md"
     assert tasks[tid]["risk_count"] == 2  # gate 时 = 待审 high 数
+    # 并发上限随列表返回（前端"并发 n"展示用）
+    assert body["concurrency"] >= 1
 
 
 def test_demo_enqueues_internal_samples(client: TestClient) -> None:

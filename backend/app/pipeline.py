@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from backend.app.config import BASE_DIR
 from backend.app.extractor import extract_contract
 from backend.app.parser import extract_text
 from backend.app.policy_rag import PolicyHit, retrieve_policies
-from backend.app.rules import evaluate, grade_report
+from backend.app.rules import annotate_template_risks, evaluate, grade_report
 from backend.app.schemas import ContractModel, RiskItem
 
 DEFAULT_SAMPLES = sorted((BASE_DIR / "data" / "contracts").glob("*.md"))
@@ -49,11 +50,59 @@ def enrich_policy_hits(
             top = None  # 检索服务不可用时不拖垮整份报告
         if top is not None:
             hits.append(
-                {"policy_ref": top.policy_ref, "score": round(top.score, 3), "snippet": top.text[:200]}
+                {
+                    "policy_ref": top.policy_ref,
+                    "score": round(top.score, 3),
+                    "snippet": _policy_snippet(top.text),
+                    # 完整条文一并带回，前端可"查看完整条文"展开（不再只能看截断）
+                    "text": top.text,
+                }
             )
         else:
             hits.append({"policy_ref": risk.policy_ref, "score": None, "snippet": ""})
     return hits
+
+
+def _policy_snippet(text: str, limit: int = 200) -> str:
+    """政策原文 → 报告里的引用片段（保留行结构，每条信息单独一行）。
+
+    之前是压平成一段再 text[:200]：标题/编号/适用范围全挤一行还切半句，
+    观感差（用户反馈，2026-09-05）。规则：去每行 md 标题符 → 把
+    "文件编号：X　　版本：Y"这类同行多信息按全角空格拆成独立行 → 逐行
+    累积到 limit，超长行在句末标点断并加省略号。
+    """
+    out: list[str] = []
+    total = 0
+    for raw in text.splitlines():
+        # 先去行首 Markdown 标记；注意不能在拆段前折叠空白（会把"　　"压成单空格，
+        # 导致 文件编号/版本/生效日期 同段信息拆不开）
+        line = re.sub(r"^(?:#{1,6}|>|-|\*)\s*", "", raw.strip())
+        # 同行多段信息按 2+ 空白拆成独立段，段内多余空白再折叠
+        pieces = [re.sub(r"\s+", " ", p).strip() for p in re.split(r"[\s\u3000]{2,}", line) if p.strip()]
+        for piece in pieces:
+            # 这种情况是：当前行放得下 → 直接收进片段
+            if total + len(piece) <= limit:
+                out.append(piece)
+                total += len(piece) + 1
+                continue
+            # 这种情况是：超出上限且前面已有内容 → 尽量在句末断后省略
+            room = max(limit - total, 0)
+            if room >= 12:
+                cut = piece[:room]
+                idx = max(cut.rfind("。"), cut.rfind("；"), cut.rfind("，"), cut.rfind("！"), cut.rfind("？"))
+                if idx >= room * 0.5:
+                    out.append(cut[: idx + 1] + "…")
+                else:
+                    out.append(cut.rstrip() + "…")
+            elif total == 0:
+                # 这种情况是：首行就超长（没有可省略的已收内容）→ 直接截首行
+                cut = piece[:limit]
+                idx = max(cut.rfind("。"), cut.rfind("；"), cut.rfind("，"))
+                out.append((cut[: idx + 1] if idx >= limit * 0.5 else cut) + "…")
+            return "\n".join(out)
+        if total >= limit:
+            break
+    return "\n".join(out)
 
 
 def build_report(
@@ -92,7 +141,8 @@ def run_review(path: str | Path) -> dict:
             "extracted": extracted.model_dump(),
             "error": f"抽取失败：{exc}",
         }
-    risks = evaluate(extracted)
+    # 模板检测：原文含多处空白占位时缺必填降 medium（否则空白模板会误停闸口）
+    risks = annotate_template_risks(evaluate(extracted), text)
     policy_hits = enrich_policy_hits(risks)
     return build_report(str(path), extracted, risks, policy_hits)
 

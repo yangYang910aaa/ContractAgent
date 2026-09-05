@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 
 from backend.app.schemas import ContractModel, Grade, PaymentTerm, RiskItem, Severity
@@ -38,6 +39,7 @@ RISK_LABELS: dict[str, str] = {
     "ip_ownership_missing": "未约定知识产权归属",
     "ip_ownership_unclear": "知识产权归属不清",
     "governing_law_missing": "缺少适用法律约定",
+    "blank_template_suspected": "疑似空白模板",
 }
 
 # ContractModel 字段 key → 中文名：用于建议文案/UI 展示（与前端 labels 对齐；
@@ -402,6 +404,87 @@ def _check_ip_and_law(model: ContractModel, required: set[str]) -> list[RiskItem
                     suggestion="缺少适用法律/争议解决约定，请补充。",
                 )
             )
+    return out
+
+
+# ---- 空白模板占位检测（2026-09-05，用户上传真实示范文本模板后加的体验层）----
+# 背景：空白模板（甲方/日期/金额都是占位）会如实触发三条 high"缺必填"停闸口，
+# 演示观感像"系统把好合同审坏了"。这里检测文本里的占位痕迹，命中则把缺必填
+# 降为 medium + 追加"疑似空白模板"提示——不误放行（仍是 conditional_pass），
+# 也不会让模板整批卡在闸口。只作用于"缺必填"类风险，真实缺陷不受影响。
+
+# 各类占位标记的正则（每类只要命中一次即计数）：
+# - date：年/月/日之间只有空格/下划线/全角空格（真实日期中间是数字或中文数字）
+# - amount：金额词与「元」之间只有冒号/空格等（填写后会有 数字/大写中文 等实义字符）
+# - amount_cap：金额大写栏空白（大写：＿＿＿）
+# - party：冒号后跟下划线（甲方（采购方）：＿＿＿）
+# - fill：成串下划线/全角下划线（模板填空位）
+_BLANK_PATTERN_RE: dict[str, re.Pattern] = {
+    "date": re.compile(r"年[ ＿_\u3000]*月[ ＿_\u3000]*日"),
+    "amount": re.compile(r"(?:货款|合同)?(?:金额|价款|总价)[为是：:（( ]{0,5}元"),
+    "amount_cap": re.compile(r"大写[：:]\s*[＿_ \u3000]*[）)]"),
+    "party": re.compile(r"[：:]\s*[＿_]{2,}"),
+    "fill": re.compile(r"[＿_]{3,}"),
+}
+
+# 判定为"疑似空白模板"所需的最少占位类别数（≥2 防单处误报，如正文里偶尔
+# 出现一处"年 月 日"或个别下划线不会触发降级）
+_BLANK_SUSPECT_MIN_CATEGORIES = 2
+
+
+def _blank_markers(text: str) -> tuple[set[str], str]:
+    """扫原文找占位痕迹，返回 (命中的类别集合, 首段占位原文摘录)。"""
+    found: set[str] = set()
+    snippet = ""
+    for category, pattern in _BLANK_PATTERN_RE.items():
+        match = pattern.search(text)
+        if match:
+            found.add(category)
+            if not snippet:
+                snippet = match.group(0).strip()[:80]
+    return found, snippet
+
+
+def is_blank_template_suspect(text: str) -> bool:
+    """原文是否像空白/未定稿模板：命中的占位类别 ≥ 2 视为疑似。"""
+    found, _ = _blank_markers(text or "")
+    return len(found) >= _BLANK_SUSPECT_MIN_CATEGORIES
+
+
+def annotate_template_risks(risks: list[RiskItem], text: str) -> list[RiskItem]:
+    """模板场景下的风险标注：缺必填 high → medium，并附一条"疑似空白模板"。
+
+    口径：仅当 ① 原文疑似空白模板 且 ② 风险里确有"缺必填"时生效；
+    其他缺陷（质保/违约金等）severity 原样保留，仍可能触发闸口。
+    返回新列表，不修改入参。
+    """
+    if not is_blank_template_suspect(text):
+        return risks
+    # 这种情况是：没有"缺必填"风险 → 模板检测不影响本份结果
+    if not any(r.risk_type == "missing_required_field" for r in risks):
+        return risks
+    _, snippet = _blank_markers(text)
+    out = [
+        # 缺必填因模板占位而降级（medium）；其余风险原样
+        r.model_copy(update={"severity": Severity.medium})
+        if r.risk_type == "missing_required_field" and r.severity == Severity.high
+        else r
+        for r in risks
+    ]
+    out.append(
+        RiskItem(
+            risk_type="blank_template_suspected",
+            label=RISK_LABELS["blank_template_suspected"],
+            severity=Severity.medium,
+            field="",
+            evidence=snippet,
+            suggestion=(
+                "原文含多处空白占位（甲方/签署日期/金额未填写），疑似空白模板或未定稿版本。"
+                "请确认是否上传了填写完整的最终签署版；若确为模板本身，无需逐条补全。"
+            ),
+            policy_ref=None,
+        )
+    )
     return out
 
 
