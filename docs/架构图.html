@@ -1,0 +1,163 @@
+<html style="margin:0;padding:0;">
+<div style="background-color:transparent;box-sizing:border-box;font-family:'PingFang SC','Microsoft YaHei',sans-serif;padding:16px 8px;">
+
+<!-- 标题 -->
+<div style="text-align:center;margin-bottom:14px;">
+  <div style="font-size:17px;font-weight:700;color:#1A1B1C;letter-spacing:0.05em;">ContractAgent 全栈架构与运转链路</div>
+  <div style="font-size:11.5px;color:#6B7280;margin-top:3px;">上传合同 → 结构化抽取 → 规则+政策审查 → 评级 → 人工审批 → 报告</div>
+</div>
+
+<!-- ===== 前端层 ===== -->
+<div style="background:rgba(155,187,244,0.10);border:1px solid rgba(155,187,244,0.35);border-radius:10px;padding:10px 12px;margin-bottom:6px;">
+  <div style="font-size:11px;font-weight:700;color:#5B7FC4;letter-spacing:0.1em;margin-bottom:7px;">前端 · Vue3 + TS + Vite（端口 5173）</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <div style="flex:1 1 140px;min-width:0;background:#fff;border:1px solid #E4E3DD;border-radius:7px;padding:7px 9px;">
+      <div style="font-size:12.5px;font-weight:600;color:#1A1B1C;">UploadView</div>
+      <div style="font-size:10.5px;color:#6B7280;margin-top:2px;">上传合同 / 一键演示 N 份</div>
+    </div>
+    <div style="flex:1 1 140px;min-width:0;background:#fff;border:1px solid #E4E3DD;border-radius:7px;padding:7px 9px;">
+      <div style="font-size:12.5px;font-weight:600;color:#1A1B1C;">QueueView</div>
+      <div style="font-size:10.5px;color:#6B7280;margin-top:2px;">任务队列 · 状态轮询(2.5s)</div>
+    </div>
+    <div style="flex:1 1 140px;min-width:0;background:#fff;border:1px solid #E4E3DD;border-radius:7px;padding:7px 9px;">
+      <div style="font-size:12.5px;font-weight:600;color:#1A1B1C;">TaskView</div>
+      <div style="font-size:10.5px;color:#6B7280;margin-top:2px;">详情·审批·报告·原文抽屉</div>
+    </div>
+    <div style="flex:1 1 120px;min-width:0;background:#fff;border:1px solid #E4E3DD;border-radius:7px;padding:7px 9px;">
+      <div style="font-size:12.5px;font-weight:600;color:#1A1B1C;">SourceDrawer</div>
+      <div style="font-size:10.5px;color:#6B7280;margin-top:2px;">原文查看·条款·PDF预览·风险高亮</div>
+    </div>
+  </div>
+  <div style="font-size:10px;color:#8B8B83;margin-top:6px;">api.ts（fetch 封装）· types.ts（与后端契约对齐）· labels.ts（风险/字段中文映射）· style.css（纸感文书风主题）</div>
+</div>
+
+<!-- 箭头 -->
+<div style="text-align:center;color:#9CA3AF;font-size:16px;line-height:1;">▼</div>
+
+<!-- ===== API 层 ===== -->
+<div style="background:rgba(162,221,170,0.10);border:1px solid rgba(162,221,170,0.35);border-radius:10px;padding:10px 12px;margin-bottom:6px;">
+  <div style="font-size:11px;font-weight:700;color:#4A8B57;letter-spacing:0.1em;margin-bottom:7px;">API 层 · FastAPI（端口 8000）</div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;font-size:10.5px;">
+    <span style="background:#fff;border:1px solid #E4E3DD;border-radius:5px;padding:3px 7px;color:#333;">POST /api/tasks 上传</span>
+    <span style="background:#fff;border:1px solid #E4E3DD;border-radius:5px;padding:3px 7px;color:#333;">POST /api/tasks/demo 演示</span>
+    <span style="background:#fff;border:1px solid #E4E3DD;border-radius:5px;padding:3px 7px;color:#333;">GET /api/tasks 队列</span>
+    <span style="background:#fff;border:1px solid #E4E3DD;border-radius:5px;padding:3px 7px;color:#333;">GET /api/tasks/{id} 详情</span>
+    <span style="background:#fff;border:1px solid #E4E3DD;border-radius:5px;padding:3px 7px;color:#333;">GET /{id}/source 原文</span>
+    <span style="background:#fff;border:1px solid #E4E3DD;border-radius:5px;padding:3px 7px;color:#333;">GET /{id}/file 下载</span>
+    <span style="background:#fff;border:1px solid #E4E3DD;border-radius:5px;padding:3px 7px;color:#C0392B;font-weight:600;">POST /{id}/approve</span>
+    <span style="background:#fff;border:1px solid #E4E3DD;border-radius:5px;padding:3px 7px;color:#C0392B;font-weight:600;">POST /{id}/reject</span>
+    <span style="background:#fff;border:1px solid #E4E3DD;border-radius:5px;padding:3px 7px;color:#C0392B;font-weight:600;">POST /{id}/edit</span>
+  </div>
+  <div style="font-size:10px;color:#8B8B83;margin-top:6px;">routes_tasks.py · main.py（create_app 工厂，TaskManager 挂 app.state）· 审批仅 gate 状态可操作，其余回 409</div>
+</div>
+
+<!-- 箭头 -->
+<div style="text-align:center;color:#9CA3AF;font-size:16px;line-height:1;">▼</div>
+
+<!-- ===== 任务队列层 ===== -->
+<div style="background:rgba(228,185,143,0.12);border:1px solid rgba(228,185,143,0.4);border-radius:10px;padding:10px 12px;margin-bottom:6px;">
+  <div style="font-size:11px;font-weight:700;color:#9B7B4E;letter-spacing:0.1em;margin-bottom:7px;">任务队列 · TaskManager（单 worker 线程，FIFO）</div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+    <div style="background:#fff;border:1px solid #E4E3DD;border-radius:7px;padding:6px 10px;font-size:11.5px;color:#333;">submit() → 登记 ThreadStore → 入队</div>
+    <div style="color:#9CA3AF;font-size:14px;">→</div>
+    <div style="background:#fff;border:1px solid #E4E3DD;border-radius:7px;padding:6px 10px;font-size:11.5px;color:#333;">worker 循环取 thread_id → status=processing</div>
+    <div style="color:#9CA3AF;font-size:14px;">→</div>
+    <div style="background:#fff;border:1px solid #E4E3DD;border-radius:7px;padding:6px 10px;font-size:11.5px;color:#333;">ReviewRunner.start() 跑 LangGraph 图</div>
+  </div>
+  <div style="font-size:10px;color:#8B8B83;margin-top:6px;">tasks.py · 单 worker 是刻意的：防并发打爆 LLM 配额 · worker=False 供离线测试</div>
+</div>
+
+<!-- 箭头 -->
+<div style="text-align:center;color:#9CA3AF;font-size:16px;line-height:1;">▼</div>
+
+<!-- ===== LangGraph 核心层 ===== -->
+<div style="background:rgba(201,167,232,0.10);border:1px solid rgba(201,167,232,0.4);border-radius:10px;padding:10px 12px;margin-bottom:6px;">
+  <div style="font-size:11px;font-weight:700;color:#7B5BA0;letter-spacing:0.1em;margin-bottom:8px;">LangGraph 审核图 · ReviewRunner（graph.py + MemorySaver checkpointer）</div>
+
+  <!-- 节点流 -->
+  <div style="display:flex;gap:4px;align-items:stretch;flex-wrap:wrap;">
+    <div style="flex:1 1 70px;min-width:60px;background:#fff;border:1px solid #D4C5E8;border-radius:6px;padding:6px 5px;text-align:center;">
+      <div style="font-size:11px;font-weight:600;color:#5B4B7A;">parse</div>
+      <div style="font-size:9.5px;color:#8B8B83;margin-top:2px;">PDF/Word→text<br>按条款切分</div>
+    </div>
+    <div style="display:flex;align-items:center;color:#B8A5D4;font-size:13px;">→</div>
+    <div style="flex:1 1 70px;min-width:60px;background:#fff;border:1px solid #D4C5E8;border-radius:6px;padding:6px 5px;text-align:center;">
+      <div style="font-size:11px;font-weight:600;color:#5B4B7A;">extract</div>
+      <div style="font-size:9.5px;color:#8B8B83;margin-top:2px;">LLM 结构化抽取<br>字段+证据+置信度</div>
+    </div>
+    <div style="display:flex;align-items:center;color:#B8A5D4;font-size:13px;">→</div>
+    <div style="flex:1 1 70px;min-width:60px;background:#fff;border:1px solid #D4C5E8;border-radius:6px;padding:6px 5px;text-align:center;">
+      <div style="font-size:11px;font-weight:600;color:#5B4B7A;">rules</div>
+      <div style="font-size:9.5px;color:#8B8B83;margin-top:2px;">确定性规则引擎<br>14类风险判定</div>
+    </div>
+    <div style="display:flex;align-items:center;color:#B8A5D4;font-size:13px;">→</div>
+    <div style="flex:1 1 70px;min-width:60px;background:#fff;border:1px solid #D4C5E8;border-radius:6px;padding:6px 5px;text-align:center;">
+      <div style="font-size:11px;font-weight:600;color:#5B4B7A;">policy</div>
+      <div style="font-size:9.5px;color:#8B8B83;margin-top:2px;">政策库检索<br>引用 P-01~P-05</div>
+    </div>
+    <div style="display:flex;align-items:center;color:#B8A5D4;font-size:13px;">→</div>
+    <div style="flex:1 1 70px;min-width:60px;background:#fff;border:1px solid #D4C5E8;border-radius:6px;padding:6px 5px;text-align:center;">
+      <div style="font-size:11px;font-weight:600;color:#5B4B7A;">grade</div>
+      <div style="font-size:9.5px;color:#8B8B83;margin-top:2px;">评级<br>pass/conditional/fail</div>
+    </div>
+  </div>
+
+  <!-- 条件分支 -->
+  <div style="display:flex;gap:8px;margin-top:8px;align-items:flex-start;flex-wrap:wrap;">
+    <div style="flex:1 1 200px;min-width:180px;">
+      <div style="font-size:10.5px;color:#6B7280;margin-bottom:4px;">无 high 风险 → 直达 report</div>
+      <div style="background:#E8F5E9;border:1px solid #A5D6A7;border-radius:6px;padding:6px 8px;font-size:11px;color:#2E7D32;">report 节点 → 汇总报告 JSON（抽取+风险+政策+评级+审批）</div>
+    </div>
+    <div style="flex:1 1 220px;min-width:200px;">
+      <div style="font-size:10.5px;color:#6B7280;margin-bottom:4px;">有 high 风险 → gate 闸口 interrupt() 暂停</div>
+      <div style="background:#FDECEA;border:1px solid #F5B7B1;border-radius:6px;padding:6px 8px;font-size:11px;color:#C0392B;">
+        gate 节点：等待人工审批<br>
+        · approved → 直达 report（风险留档）<br>
+        · rejected → 直达 report（原因写进报告）<br>
+        · edited（字段补丁）→ 回 rules 重审，仍 high 再停闸口
+      </div>
+    </div>
+  </div>
+  <div style="font-size:10px;color:#8B8B83;margin-top:7px;">抽取失败 → error 节点（报告带 error，不拖垮队列）· state 全 JSON dict（节点前 model_validate 还原）· review_mode 钩子预留 single/double/parallel</div>
+</div>
+
+<!-- 底部：模型层 + 数据层 + 存储层 -->
+<div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;">
+
+  <!-- 模型层 -->
+  <div style="flex:1 1 180px;min-width:160px;background:rgba(139,200,234,0.10);border:1px solid rgba(139,200,234,0.35);border-radius:10px;padding:9px 11px;">
+    <div style="font-size:11px;font-weight:700;color:#3D7A9E;letter-spacing:0.08em;margin-bottom:6px;">模型层 · llm.py</div>
+    <div style="font-size:11px;color:#333;line-height:1.6;">
+      <b>Chat</b>：硅基流动 DeepSeek（OpenAI 兼容，json_mode 结构化输出，抽取关 thinking 降本）<br>
+      <b>Embedding</b>：阿里 DashScope qwen3.7-text-embedding（1024 维，10 条/批自动分批）
+    </div>
+  </div>
+
+  <!-- 数据层 -->
+  <div style="flex:1 1 180px;min-width:160px;background:rgba(244,179,147,0.10);border:1px solid rgba(244,179,147,0.35);border-radius:10px;padding:9px 11px;">
+    <div style="font-size:11px;font-weight:700;color:#B5653A;letter-spacing:0.08em;margin-bottom:6px;">数据层 · data/（全合成，仅本地）</div>
+    <div style="font-size:11px;color:#333;line-height:1.6;">
+      <b>policies/</b>：P-01~P-05 采购审核制度（预付款/质保/责任上限/保密/IP与法律）<br>
+      <b>contracts/</b>：sample_01~09 合成合同（md+docx+pdf 三格式同源，4 品类）<br>
+      <b>uploads/</b>：用户上传文件落盘（thread_id 命名）
+    </div>
+  </div>
+
+  <!-- 存储层 -->
+  <div style="flex:1 1 180px;min-width:160px;background:rgba(228,212,143,0.12);border:1px solid rgba(228,212,143,0.4);border-radius:10px;padding:9px 11px;">
+    <div style="font-size:11px;font-weight:700;color:#8B7B3A;letter-spacing:0.08em;margin-bottom:6px;">存储层 · store.py + policy_rag.py</div>
+    <div style="font-size:11px;color:#333;line-height:1.6;">
+      <b>ThreadStore</b>：进程内任务登记簿（thread_id→状态/闸口载荷/报告/原文），线程安全<br>
+      <b>MemorySaver</b>：LangGraph checkpointer（进程内存，服务重启即失）<br>
+      <b>政策向量库</b>：Milvus（HNSW+COSINE，insert 后 flush）/ 内存检索兜底（auto 探测）
+    </div>
+  </div>
+</div>
+
+<!-- 底部说明 -->
+<div style="margin-top:10px;padding:8px 10px;background:rgba(0,0,0,0.025);border-radius:7px;font-size:10.5px;color:#6B7280;line-height:1.6;">
+  <b>关键设计决策</b>：① 抽取层"LLM 原样抄金额/日期 + 确定性归一化"，避免模型格式化漂移；② 规则引擎纯函数无 LLM，可离线单测，政策阈值集中定义；③ 高风险强制 HITL（interrupt + Command resume），审批三动作留痕；④ 单 worker 顺序处理防并发打爆 LLM；⑤ 全合成数据（合规），政策库检索回指 P-编号防"凭空判断"。
+</div>
+
+</div>
+</html>

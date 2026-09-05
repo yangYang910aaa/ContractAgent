@@ -184,6 +184,20 @@ onUnmounted(() => {
   font-size: 26px;
   letter-spacing: 0.12em;
   margin: 0 0 4px;
+  padding-left: 15px;
+  position: relative;
+}
+
+/* 页头左侧朱线：像文书篇题的小标记 */
+.head h2::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.2em;
+  bottom: 0.2em;
+  width: 4px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--seal), rgba(165, 49, 44, 0.3));
 }
 
 .head p {
@@ -218,6 +232,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 2px;
   padding: 14px 8px;
+  border-top: 2px solid transparent;
   transition: transform 0.12s ease;
 }
 
@@ -233,6 +248,40 @@ onUnmounted(() => {
 .stat span {
   color: var(--muted);
   font-size: 12.5px;
+  letter-spacing: 0.12em;
+}
+
+/* 统计条按语义着色（朱=待批/失败，琥珀=进行中，石绿=完成） */
+.stat:nth-child(1) b {
+  color: var(--seal);
+}
+
+.stat:nth-child(1) {
+  border-top-color: rgba(165, 49, 44, 0.5);
+}
+
+.stat:nth-child(2) b {
+  color: var(--warn);
+}
+
+.stat:nth-child(2) {
+  border-top-color: rgba(156, 107, 28, 0.5);
+}
+
+.stat:nth-child(3) b {
+  color: var(--ok);
+}
+
+.stat:nth-child(3) {
+  border-top-color: rgba(61, 106, 69, 0.5);
+}
+
+.stat:nth-child(4) b {
+  color: var(--seal);
+}
+
+.stat:nth-child(4) {
+  border-top-color: rgba(165, 49, 44, 0.35);
 }
 
 .stat.total b {
@@ -262,6 +311,7 @@ onUnmounted(() => {
   border-color: var(--seal);
   color: var(--seal);
   background: var(--seal-soft);
+  font-weight: 700;
 }
 
 .filters .mono-num {
@@ -290,8 +340,23 @@ onUnmounted(() => {
 }
 
 .row:hover {
-  background: #fff;
+  background: var(--paper);
+  box-shadow: inset 3px 0 0 var(--seal);
 }
+
+/* 列表行轻微错峰入场（最多 8 行封顶，避免延迟过长） */
+.list .row {
+  animation: rise 0.32s ease both;
+}
+
+.list .row:nth-of-type(1) { animation-delay: 0.02s; }
+.list .row:nth-of-type(2) { animation-delay: 0.06s; }
+.list .row:nth-of-type(3) { animation-delay: 0.1s; }
+.list .row:nth-of-type(4) { animation-delay: 0.14s; }
+.list .row:nth-of-type(5) { animation-delay: 0.18s; }
+.list .row:nth-of-type(6) { animation-delay: 0.22s; }
+.list .row:nth-of-type(7) { animation-delay: 0.26s; }
+.list .row:nth-of-type(8) { animation-delay: 0.3s; }
 
 .name {
   display: flex;

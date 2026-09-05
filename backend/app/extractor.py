@@ -284,7 +284,8 @@ _SYSTEM_PROMPT = """你是中文采购合同的结构化抽取器。请从合同
 
 输出要求：
 1. 金额、日期、比例一律【原样抄写正文】，不要换算、不要改格式（如 1,000,000、2026年3月10日、每日 1.5%）；
-2. 正文里找不到的字段填 null，且不要在 evidence 里编造；
+2. 字段值直接写内容本身（字符串或数字），不要把 {quote, clause_ref, confidence}
+   对象当字段值；正文里找不到的字段填 null，且不要在 evidence 里编造；
 3. payment_schedule 逐期输出：name（期次名）、amount（金额原文）、percent（占总额比例数值，如 20 表示 20%）；
 4. evidence 输出为一个 JSON 对象：key 是字段名，value 是 {quote, clause_ref, confidence}。
    quote 必须是正文原句；clause_ref 填所在条款/章节号（如"第四条"，章节式文本填
@@ -343,15 +344,23 @@ def _normalize_drifted(raw: dict) -> dict:
 def _recover_completion(exc: Exception) -> dict | None:
     """从 with_structured_output 的解析报错里还原模型原始 JSON。
 
-    langchain 报错形如 "Failed to parse X from completion {json} Got: …"；
-    提取花括号正文后 json 解析。解析失败返回 None（上层按原异常抛给 error 报告）。
+    langchain 报错形如 "Failed to parse X from completion {json} Got: …"，但不同
+    版本里 json 与 Got: 之间可能是空格、句点或换行（实测见 "}. Got:"，2026-09-05
+    农副 GF 示范文本上传踩坑）——固定正则去猜分隔符会漏匹配。改为：定位
+    'completion ' 之后的第一个 '{'，用 json.JSONDecoder.raw_decode 从该处解析，
+    天然处理嵌套花括号并忽略尾部杂讯。解析失败返回 None（上层按原异常抛给
+    error 报告，宁缺毋滥）。
     """
     text = str(exc)
-    match = re.search(r"completion (\{.*\}) Got:", text, re.S)
-    if not match:
+    # 分支 1：报错里没有 completion 字样（接口/超时类异常）→ 无法还原
+    marker = text.find("completion ")
+    if marker < 0:
+        return None
+    start = text.find("{", marker)
+    if start < 0:
         return None
     try:
-        raw = json.loads(match.group(1))
+        raw, _ = json.JSONDecoder().raw_decode(text, start)
     except Exception:
         return None
     return raw if isinstance(raw, dict) else None

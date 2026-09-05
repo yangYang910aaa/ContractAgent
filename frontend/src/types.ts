@@ -13,6 +13,7 @@ export type ApprovalAction = 'approved' | 'rejected' | 'edited' // 审批三动�
 /** 闸口待审的高风险摘要（后端 gate_payload.high_risks，供审批页展示）。 */
 export interface GateHighRisk {
   risk_type: string
+  label?: string | null // 中文展示名（后端 rules 填；旧任务缺失时前端映射兜底）
   clause_ref?: string
   evidence?: string
   policy_ref?: string | null
@@ -29,6 +30,7 @@ export interface GatePayload {
 /** 一条风险：字段与 rules 的 RiskItem 对齐，evidence 是原文摘录。 */
 export interface RiskItem {
   risk_type: string
+  label?: string | null // 中文展示名（同 GateHighRisk.label）
   severity: Severity
   clause_ref?: string
   evidence?: string
@@ -78,4 +80,28 @@ export interface TaskSummary {
 export interface TaskDetail extends TaskSummary {
   gate_payload?: GatePayload | null
   report?: Report | null
+}
+
+/** U2 原文抽屉：/source 返回的一个条款块（ref=第X条/章节整行标题，title=块头）。 */
+export interface SourceBlock {
+  ref: string
+  title: string
+  text: string
+}
+
+/** U2 任务原合同数据（GET /api/tasks/{id}/source）。 */
+export interface SourceDoc {
+  thread_id: string
+  name: string // 展示名（原始文件名）
+  suffix: string // 源文件后缀（如 .md/.docx/.pdf），前端据此选预览方式
+  kind: 'sample' | 'upload' // 内置演示样本 vs 用户上传
+  file_available: boolean // 源文件是否还在磁盘（可下载/预览）
+  text: string // 解析后的合同全文（pending 阶段为空）
+  blocks: SourceBlock[] // 按条款/章节切分的块（证据高亮锚点载体）
+}
+
+/** U2 原文定位指令：clause 对齐风险项 clause_ref；seq 递增保证重复点击仍触发。 */
+export interface SourceAnchor {
+  clause: string
+  seq: number
 }

@@ -4,13 +4,13 @@
  * 约定：非 2xx 统一抛 Error(detail)，页面 catch 后展示即可。
  */
 
-import type { TaskDetail, TaskSummary } from './types'
+import type { SourceDoc, TaskDetail, TaskSummary } from './types'
 
 /** 解包响应：失败时优先取后端的 detail 文案（FastAPI HTTPException）。 */
 async function j<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
     const body = await resp.json().catch(() => null)
-    throw new Error(body?.detail ?? `请求失败（HTTP ${resp.status}）`)
+    throw new Error(body?.detail ?? `请求失败 (HTTP ${resp.status})`)
   }
   return resp.json() as Promise<T>
 }
@@ -41,6 +41,16 @@ export async function demoRun(count: number): Promise<{ tasks: TaskSummary[] }> 
 /** 任务详情（详情页轮询用；threadId 来自后端，仍需转义防路径注入）。 */
 export async function getTask(threadId: string): Promise<TaskDetail> {
   return j(await fetch(`/api/tasks/${encodeURIComponent(threadId)}`))
+}
+
+/** 任务原合同（全文 + 条款块）：原文抽屉数据源（U2）。 */
+export async function getSource(threadId: string): Promise<SourceDoc> {
+  return j(await fetch(`/api/tasks/${encodeURIComponent(threadId)}/source`))
+}
+
+/** 原文件下载/预览 URL：pdf 内嵌 iframe 预览、docx/md 下载打开都用它（U2）。 */
+export function taskFileUrl(threadId: string): string {
+  return `/api/tasks/${encodeURIComponent(threadId)}/file`
 }
 
 /** 审批-放行：高风险留档但人工确认可接受。 */

@@ -214,6 +214,20 @@ class _DriftLLM:
         )
 
 
+class _DriftLLMDotSeparator(_DriftLLM):
+    """镜像真实 langchain 报错：completion JSON 与 Got: 之间带句点（". Got:"）。
+
+    早期正则 `completion (\{.*\}) Got:` 在此形态下漏匹配导致整份 error——
+    2026-09-05 用户上传农副 GF 示范文本（GF—2025—0151）实测复现。
+    """
+
+    def invoke(self, messages):
+        raise RuntimeError(
+            f"Failed to parse ExtractionSchema from completion {self._completion}."
+            " Got: 13 validation errors for ExtractionSchema"
+        )
+
+
 def test_extract_fallback_rescues_evidence_wrapped_drift() -> None:
     """parse 失败时能从报错还原 completion 并走漂移归一化，合同不再整体 error。"""
     from backend.app.extractor import extract_contract
@@ -232,6 +246,51 @@ def test_extract_fallback_rescues_evidence_wrapped_drift() -> None:
     assert cm.total_amount == Decimal("1000000")
     assert cm.expiry_date == date(2027, 5, 19)
     assert cm.warranty_months == 24
+
+
+def test_extract_fallback_rescues_dot_separator_drift() -> None:
+    """报错形如 '}. Got:'（带句点）也能还原 completion，合同不再整体 error。"""
+    from backend.app.extractor import extract_contract
+
+    completion = json.dumps(
+        {
+            "contract_kind": "agri_goods",  # 半漂移：这个字段是正常标量
+            "buyer": {"quote": "甲方（买受人）：", "clause_ref": "首部", "confidence": 0.9},
+            "supplier": {"quote": "乙方（出卖人）：", "clause_ref": "首部", "confidence": 0.9},
+            "signature_date": {"quote": "年 月 日", "clause_ref": "签署栏", "confidence": 0.6},
+            "effective_date": {"quote": "本合同自甲、乙双方签名（盖章）之日起成立并生效。", "clause_ref": "第十七条", "confidence": 0.9},
+            "total_amount": {"quote": "货款金额为： 元（大写: ）。", "clause_ref": "第四条", "confidence": 0.6},
+            "currency": {"quote": "元", "clause_ref": "第四条", "confidence": 0.9},
+            "governing_law": {"quote": "本合同之订立、生效、解释、变更、终止、执行与争议解决均适用中华人民共和国的法律法规。", "clause_ref": "第十六条", "confidence": 0.9},
+        },
+        ensure_ascii=False,
+    )
+    cm = extract_contract(llm=_DriftLLMDotSeparator(completion), text="正文")
+    # 品类与文本字段照常归一化；金额空白模板解析不到 → None（规则会判缺必填）
+    assert cm.contract_kind == "agri_goods"
+    assert cm.buyer == "甲方（买受人）："
+    assert cm.governing_law.startswith("本合同之订立")
+    assert cm.total_amount is None
+    assert cm.extraction_meta["buyer"].clause_ref == "首部"
+
+
+def test_extract_raises_when_completion_not_recoverable() -> None:
+    """报错里没有 completion JSON（如网络/接口异常）→ 原样抛出，走 error 报告。"""
+    from backend.app.extractor import extract_contract
+
+    class _PlainErrorLLM:
+        def with_structured_output(self, schema, method=None):
+            return self
+
+        def invoke(self, messages):
+            raise RuntimeError("connect timeout")
+
+    try:
+        extract_contract(llm=_PlainErrorLLM(), text="正文")
+    except RuntimeError as exc:
+        assert "connect timeout" in str(exc)
+    else:
+        raise AssertionError("预期抛 RuntimeError，实际未抛")
 
 
 def test_build_sample03_percent_values() -> None:

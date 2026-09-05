@@ -9,9 +9,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from backend.app.config import BASE_DIR
+from backend.app.parser import split_clauses
 from backend.app.tasks import TaskManager
 
 router = APIRouter(prefix="/api", tags=["tasks"])
@@ -19,6 +21,15 @@ router = APIRouter(prefix="/api", tags=["tasks"])
 # 上传白名单：文本型合同（扫描件无文字层，服务端 parser 会明确报错）
 ALLOWED_SUFFIXES = {".pdf", ".docx", ".md", ".txt"}
 UPLOAD_DIR = BASE_DIR / "data" / "uploads"
+CONTRACTS_DIR = BASE_DIR / "data" / "contracts"  # 内置演示样本所在目录（kind 判断用）
+
+# 原文件下载时的 Content-Type：docx/pdf 给浏览器可识别的类型（pdf 可内嵌预览）
+_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".md": "text/markdown; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+}
 
 
 def get_manager(request: Request) -> TaskManager:
@@ -58,6 +69,23 @@ def _summary(record) -> dict:
         "risk_count": risk_count,
         "error": record.error,
     }
+
+
+def _source_kind(source: str) -> str:
+    """来源类别：登记路径在 data/contracts 下的是内置演示样本，否则算用户上传。
+
+    用解析后的绝对路径前缀判断（demo 接口登记的是样本绝对路径）。
+    """
+    return "sample" if str(Path(source).resolve()).startswith(str(CONTRACTS_DIR.resolve())) else "upload"
+
+
+def _clause_blocks(text: str) -> list[dict]:
+    """全文 → 条款块列表（前端原文抽屉按块渲染，块标题留作证据回指锚点）。"""
+    clauses = split_clauses(text)
+    # 这种情况是：全文无「第X条/章节」结构 → 整篇当作一块，仍可展示与回指
+    if not clauses:
+        return [{"ref": "", "title": "全文", "text": text.strip()}] if text.strip() else []
+    return [{"ref": c.ref, "title": c.title, "text": c.text} for c in clauses]
 
 
 # ---- 上传与队列查询 ----
@@ -129,6 +157,52 @@ def get_task(thread_id: str, request: Request) -> dict:
     if record is None:
         raise HTTPException(status_code=404, detail=f"任务不存在: {thread_id}")
     return {**_summary(record), "report": record.report}
+
+
+@router.get("/tasks/{thread_id}/source")
+def get_task_source(thread_id: str, request: Request) -> dict:
+    """任务原合同：解析后的全文 + 条款块（U2 任务页「查看原合同」的数据源）。
+
+    text 在任务跑过 parse（status 离开 pending）后才有值；源文件本体由
+    GET /tasks/{id}/file 提供（docx/pdf 预览/下载）。blocks 用于前端按
+    条款块渲染并给证据高亮留锚点（块标题 ≈ 风险项 clause_ref）。
+    """
+    manager = get_manager(request)
+    record = manager.runner.store.get(thread_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {thread_id}")
+    text = record.source_text or ""
+    return {
+        "thread_id": thread_id,
+        "name": (record.name or Path(record.source).name) if (record.name or record.source) else "",
+        "suffix": Path(record.source).suffix.lower() if record.source else "",
+        "kind": _source_kind(record.source) if record.source else "upload",
+        "file_available": bool(record.source and Path(record.source).is_file()),
+        "text": text,
+        "blocks": _clause_blocks(text),
+    }
+
+
+@router.get("/tasks/{thread_id}/file")
+def get_task_file(thread_id: str, request: Request) -> FileResponse:
+    """原文件下载/预览：上传的 docx/pdf 或内置样本 md，按后缀定 Content-Type。
+
+    pdf 用 inline（浏览器内嵌预览）；其余默认 attachment（下载）——否则
+    前端 iframe 预览 pdf 会变成直接下载（2026-09-05 用户实测反馈）。
+    """
+    manager = get_manager(request)
+    record = manager.runner.store.get(thread_id)
+    # 这种情况是：任务不存在或登记路径没落盘文件 → 404（临时文件可能已被清理）
+    if record is None or not record.source or not Path(record.source).is_file():
+        raise HTTPException(status_code=404, detail=f"原文件不存在: {thread_id}")
+    path = Path(record.source)
+    media_type = _MEDIA_TYPES.get(path.suffix.lower())
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=record.name or path.name,
+        content_disposition_type="inline" if path.suffix.lower() == ".pdf" else "attachment",
+    )
 
 
 def _resume_or_409(request: Request, thread_id: str, answer: dict) -> dict:

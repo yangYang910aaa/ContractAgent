@@ -21,13 +21,26 @@ from backend.app import llm
 from backend.app.routes_tasks import router as tasks_router
 from backend.app.tasks import TaskManager
 
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
+@asynccontextmanager
+async def lifespan(app:FastAPI)->AsyncIterator[None]:
+    """应用生命周期：服务停止时干净关闭 TaskManager 的 worker 线程。
+    启动侧无需操作——manager 在 create_app() 中创建时已自动启动 worker
+    此处只负责 uvicorn 收到退出信号时
+    调用 shutdown()，避免 worker 守护线程残留。
+    """
+    yield
+    #停止worker
+    app.state.manager.shutdown()
 
 def create_app(manager: TaskManager | None = None) -> FastAPI:
-    """建 FastAPI 应用：任务管理器挂在 app.state，路由经 request 取用。"""
+    """建 FastAPI 应用：任务管理器挂在 app.state, 路由经 request 取用。"""
     app = FastAPI(
         title="供应商合同智能审核 Agent",
         description="上传采购合同 → Agent 结构化抽取 → 规则+政策库审查 → 风险报告(HITL)。",
         version="0.3.0",
+        lifespan=lifespan,
     )
     app.state.manager = manager or TaskManager()
     app.include_router(tasks_router)

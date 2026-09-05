@@ -57,6 +57,7 @@ def _build_gate_payload(state: ReviewState) -> dict:
         "high_risks": [
             {
                 "risk_type": r.get("risk_type"),
+                "label": r.get("label") or r.get("risk_type"),
                 "clause_ref": r.get("clause_ref", ""),
                 "evidence": (r.get("evidence") or "")[:120],
                 "policy_ref": r.get("policy_ref"),
@@ -103,7 +104,7 @@ def build_review_graph(
     checkpointer (LangGraph 硬约束，见 docs/问题与踩坑记录.md)。
     返回 compiled graph。
     """
-    from backend.app.extractor import extract_contract  # 延迟导入：防循环（extractor 不依赖 graph）
+    from backend.app.extractor import extract_contract  # 延迟导入：防循环
 
     extract = extractor or (lambda text: extract_contract(text=text))
 
@@ -268,6 +269,10 @@ class ReviewRunner:
             self.store.update(thread_id, status="error", error=state.get("error", ""))
         elif state.get("report"):
             self.store.update(thread_id, status="done", report=state["report"])
+        # 原文落库：parse 节点抽出的全文随 state 返回，登记簿存一份供
+        # GET /api/tasks/{id}/source 读（只在有 text 时写，不覆盖已有内容）
+        if state.get("text"):
+            self.store.update(thread_id, source_text=state["text"])
         return state
 
     def start(self, source: str, text: str | None = None, thread_id: str | None = None) -> dict:

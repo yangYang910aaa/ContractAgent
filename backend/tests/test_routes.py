@@ -54,6 +54,12 @@ def _sample_bytes() -> bytes:
     return sample.read_bytes()
 
 
+def _sample_docx_bytes() -> bytes:
+    """样本 docx 二进制：U2 上传 docx → 解析原文 → /source 返回全文。"""
+    sample = BASE_DIR / "data" / "contracts" / "docx" / "sample_07_学生校服采购合同_质保过短_违约金畸高.docx"
+    return sample.read_bytes()
+
+
 def test_upload_then_processing_then_gate_and_approve(client: TestClient) -> None:
     """上传 → 入队 pending → run_one 到 gate → approve → done 报告带审批记录。"""
     resp = client.post("/api/tasks", files={"file": ("contract.md", _sample_bytes(), "text/markdown")})
@@ -146,3 +152,73 @@ def test_demo_enqueues_internal_samples(client: TestClient) -> None:
 
 def test_demo_count_out_of_range_422(client: TestClient) -> None:
     assert client.post("/api/tasks/demo", json={"count": 99}).status_code == 422
+
+
+# ---- U2：查看原合同（/source 全文+条款块、/file 原文件）----
+
+
+def test_source_after_run_returns_text_and_blocks(client: TestClient) -> None:
+    """上传 md → 跑完到闸口 → /source 返回解析全文与章节块（原文查看数据源）。"""
+    tid = client.post("/api/tasks", files={"file": ("校服合同.md", _sample_bytes(), "text/markdown")}).json()[
+        "thread_id"
+    ]
+    # 跑完前（pending）source_text 还没落库 → 空文本
+    before = client.get(f"/api/tasks/{tid}/source").json()
+    assert before["text"] == ""
+    client.app.state.manager.run_one(tid)
+    body = client.get(f"/api/tasks/{tid}/source").json()
+    assert body["name"] == "校服合同.md"
+    assert body["suffix"] == ".md"
+    assert body["kind"] == "upload"
+    assert body["file_available"] is True
+    assert "学生校服" in body["text"]
+    # 章节式样本：块 0 是前言，后面按「一、二、…」切
+    assert body["blocks"][0]["title"] == "前言"
+    assert any(b["title"].startswith("一、") for b in body["blocks"])
+
+
+def test_source_demo_sample_kind_and_file_download(client: TestClient) -> None:
+    """demo 样本 → kind=sample；/file 能取回原 md 二进制（下载/对照用）。"""
+    resp = client.post("/api/tasks/demo", json={"count": 1})
+    tid = resp.json()["tasks"][0]["thread_id"]
+    client.app.state.manager.run_one(tid)
+    src = client.get(f"/api/tasks/{tid}/source").json()
+    assert src["kind"] == "sample"
+    assert src["suffix"] == ".md"
+    assert "电子元件" in src["text"] or "办公设备" in src["text"]
+    file_resp = client.get(f"/api/tasks/{tid}/file")
+    assert file_resp.status_code == 200
+    assert file_resp.headers["content-type"].startswith("text/markdown")
+
+
+def test_source_docx_upload_parses_full_text(client: TestClient) -> None:
+    """docx 上传 → 解析出的章节全文能从 /source 取到（pdf/docx 预览的基础）。"""
+    tid = client.post("/api/tasks", files={"file": ("校服合同.docx", _sample_docx_bytes(), "application/octet-stream")}).json()[
+        "thread_id"
+    ]
+    client.app.state.manager.run_one(tid)
+    body = client.get(f"/api/tasks/{tid}/source").json()
+    assert body["suffix"] == ".docx"
+    assert "校服" in body["text"]
+    file_resp = client.get(f"/api/tasks/{tid}/file")
+    assert file_resp.headers["content-type"].startswith("application/vnd.openxmlformats")
+
+
+def test_pdf_file_served_inline_for_preview(client: TestClient) -> None:
+    """pdf 原文件必须是 inline（浏览器内嵌预览），不能是 attachment（否则变下载）。"""
+    pdf = BASE_DIR / "data" / "contracts" / "pdf" / "sample_07_学生校服采购合同_质保过短_违约金畸高.pdf"
+    tid = client.post("/api/tasks", files={"file": ("校服合同.pdf", pdf.read_bytes(), "application/pdf")}).json()[
+        "thread_id"
+    ]
+    client.app.state.manager.run_one(tid)
+    resp = client.get(f"/api/tasks/{tid}/file")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/pdf"
+    # content-disposition 应为 inline；attachment 会让 iframe 预览变下载
+    assert resp.headers["content-disposition"].startswith("inline")
+
+
+def test_source_and_file_missing_task_404(client: TestClient) -> None:
+    """不存在的任务：/source 与 /file 都回 404。"""
+    assert client.get("/api/tasks/not-exist/source").status_code == 404
+    assert client.get("/api/tasks/not-exist/file").status_code == 404

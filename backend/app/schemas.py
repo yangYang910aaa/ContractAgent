@@ -83,7 +83,8 @@ class RiskItem(BaseModel):
     field 关联 ContractModel 字段名，供前端高亮与评测对齐。
     """
 
-    risk_type: str  # 风险类型（如 "高风险"）
+    risk_type: str  # 风险类型机器码（如 missing_required_field；评测 ground truth 按此对齐，勿改）
+    label: str = ""  # 风险中文展示名（rules 填，UI 直接展示；空时前端回退 risk_type）
     severity: Severity  # 风险等级（如 high）
     clause_ref: str = ""  # 条款引用
     evidence: str = ""  # 证据说明

@@ -21,6 +21,46 @@ CONFIDENTIALITY_MAX_MONTHS = 36  # P-04：保密期不超过 36 个月
 PENALTY_DAILY_MAX_PERCENT = 1.0  # 违约金日利率上限
 AMOUNT_TOLERANCE_RATIO = Decimal("0.01")  # 分项加总 vs 总额允许偏差 1%
 
+# 风险类型机器码 → 中文展示名（risk_type 是评测/接口对齐的编码，展示永远走
+# 中文 label；新增风险类型时必须在此登记，否则界面会裸显机器码）
+RISK_LABELS: dict[str, str] = {
+    "missing_required_field": "缺失必填字段",
+    "date_logic_effective_before_signature": "生效日早于签署日",
+    "date_logic_expiry_not_after_effective": "到期日不晚于生效日",
+    "amount_inconsistency": "付款金额不一致",
+    "prepayment_ratio_high": "预付款比例过高",
+    "warranty_too_short": "质保期不足",
+    "liability_cap_unclear": "责任上限未明确",
+    "liability_cap_too_low": "责任上限过低",
+    "confidentiality_missing": "缺少保密条款",
+    "confidentiality_too_long": "保密期过长",
+    "penalty_rate_too_high": "违约金比例畸高",
+    "ip_ownership_missing": "未约定知识产权归属",
+    "ip_ownership_unclear": "知识产权归属不清",
+    "governing_law_missing": "缺少适用法律约定",
+}
+
+# ContractModel 字段 key → 中文名：用于建议文案/UI 展示（与前端 labels 对齐；
+# 别让 effective_date 这类英文 key 出现在给人看的句子里）
+FIELD_LABELS: dict[str, str] = {
+    "contract_kind": "合同品类",
+    "buyer": "甲方（采购方）",
+    "supplier": "乙方（供应商）",
+    "signature_date": "签署日期",
+    "effective_date": "生效日期",
+    "expiry_date": "到期日",
+    "total_amount": "合同总额",
+    "currency": "币种",
+    "payment_schedule": "付款计划",
+    "penalty_rate": "违约金日利率",
+    "liability_cap": "责任上限",
+    "warranty_months": "质保期",
+    "termination_notice_days": "解约通知期",
+    "ip_ownership": "知识产权归属",
+    "confidentiality_months": "保密期",
+    "governing_law": "适用法律",
+}
+
 # 必填核心字段：缺失会削弱整份审查的可信度
 CORE_REQUIRED = ("buyer", "supplier", "effective_date", "expiry_date", "total_amount", "currency")
 # 金额/日期缺失视为 high（审查无法继续）；主体信息缺失降为 medium
@@ -73,6 +113,7 @@ def _mk(
     """
     return RiskItem(
         risk_type=risk_type,
+        label=RISK_LABELS.get(risk_type, risk_type),  # 中文展示名；未登记类型回退机器码
         severity=severity,
         field=field,
         evidence=_quote(model, field) if evidence is None else evidence,
@@ -101,7 +142,8 @@ def _check_required(model: ContractModel) -> list[RiskItem]:
                     risk_type="missing_required_field",
                     severity=severity,
                     field=field,
-                    suggestion=f"缺失必填字段「{field}」，请人工确认或补全后再审。",
+                    # 字段名用中文（FIELD_LABELS），避免界面出现 effective_date 这类英文 key
+                    suggestion=f"缺失必填字段「{FIELD_LABELS.get(field, field)}」，请人工确认或补全后再审。",
                 )
             )
     return out

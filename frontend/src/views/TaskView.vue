@@ -6,7 +6,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { approve, editFields, getTask, reject } from '../api'
-import type { TaskDetail, TaskStatus } from '../types'
+import SourceDrawer from '../components/SourceDrawer.vue'
+import { prettyField, riskLabel } from '../labels'
+import type { SourceAnchor, TaskDetail, TaskStatus } from '../types'
 
 const props = defineProps<{ threadId: string }>()
 const emit = defineEmits<{ back: [] }>()
@@ -19,7 +21,34 @@ const actionError = ref('') // 审批/编辑的表单级错误（如打回缺原
 const note = ref('') // 审批意见（打回必填）
 const showEdit = ref(false) // 是否展开「编辑字段重审」面板
 const patchText = ref('{\n  "warranty_months": 24\n}') // 字段补丁 JSON（编辑重审用）
+// U2 原文抽屉：showSource=开关；anchor=定位指令（风险项 clause_ref 点进来）
+const showSource = ref(false)
+const sourceAnchor = ref<SourceAnchor | null>(null)
 let timer: number | undefined
+
+// 演示/验收直达：?source=1 打开原文抽屉（配合 App 的 ?view=task&thread= 使用）
+if (new URLSearchParams(location.search).get('source') === '1') {
+  showSource.value = true
+}
+
+/** 给原文抽屉的风险高亮：闸口看待审 high，报告看最终 risks（无 severity 按 high）。 */
+const drawerRisks = computed(() => {
+  const d = detail.value
+  if (!d) return []
+  const src =
+    d.status === 'gate'
+      ? (d.gate_payload?.high_risks ?? [])
+      : d.status === 'done'
+        ? (d.report?.risks ?? [])
+        : []
+  return src.map((r) => ({
+    risk_type: r.risk_type,
+    label: r.label ?? null,
+    severity: (r as { severity?: string }).severity ?? 'high',
+    clause_ref: r.clause_ref ?? '',
+    evidence: r.evidence ?? '',
+  }))
+})
 
 // 状态/评级/等级 → 中文与印章样式（含义见 style.css 的 .stamp-* 族）
 const statusText: Record<TaskStatus, string> = {
@@ -36,10 +65,11 @@ const gradeText: Record<string, string> = {
   fail: '不通过',
 }
 
-const gradeClass: Record<string, string> = {
-  pass: 'stamp-ok',
-  conditional_pass: 'stamp-warn',
-  fail: 'stamp-seal',
+// 评级大圆章（.ring 系列，见全局 style.css）：双层朱文/石绿印
+const ringClass: Record<string, string> = {
+  pass: 'ring-ok',
+  conditional_pass: 'ring-warn',
+  fail: 'ring-seal',
 }
 
 const severityText: Record<string, string> = { high: '高风险', medium: '中风险', low: '低风险' }
@@ -195,6 +225,17 @@ function downloadReport() {
   a.click()
   URL.revokeObjectURL(url)
 }
+
+/** U2：打开原文抽屉；带 clause 时（风险项点「原文」）定位到对应条款块。 */
+function openSource(clause?: string) {
+  // seq 自增：同一 clause 反复点击也会触发抽屉内 watch 重新滚动
+  if (clause) {
+    sourceAnchor.value = { clause, seq: (sourceAnchor.value?.seq ?? 0) + 1 }
+  } else {
+    sourceAnchor.value = null
+  }
+  showSource.value = true
+}
 </script>
 
 <template>
@@ -202,6 +243,14 @@ function downloadReport() {
     <div class="bar">
       <button class="btn btn-ghost" @click="emit('back')">← 返回</button>
       <span v-if="detail" class="mono-num tid">{{ detail.thread_id }}</span>
+      <!-- U2：gate/done/error 时点开抽屉核对原文；审查中也可开（自动等原文） -->
+      <button
+        v-if="detail && detail.status !== 'pending'"
+        class="btn btn-ghost btn-source"
+        @click="openSource()"
+      >
+        查看原合同  
+      </button>
     </div>
 
     <!-- 阶段进度条：当前步高亮；已完成步打勾点；error 末段标红 -->
@@ -229,17 +278,19 @@ function downloadReport() {
       <div class="card pad">
         <div class="gate-head">
           <h3>高风险，需人工审批</h3>
-          <span class="stamp stamp-seal">{{ gradeText[detail.grade ?? 'fail'] ?? '不通过' }}</span>
+          <span class="ring ring-seal">{{ gradeText[detail.grade ?? 'fail'] ?? '不通过' }}</span>
         </div>
         <div v-for="(r, i) in detail.gate_payload.high_risks" :key="i" class="risk card">
           <div class="risk-top">
             <span class="stamp stamp-seal">{{ severityText.high }}</span>
-            <span class="risk-type serif">{{ r.risk_type }}</span>
+            <span class="risk-type serif">{{ riskLabel(r) }}</span>
             <span v-if="r.policy_ref" class="mono-num ref">{{ r.policy_ref }}</span>
           </div>
-          <p v-if="r.clause_ref" class="clause muted">条款：{{ r.clause_ref }}</p>
+          <button v-if="r.clause_ref" class="clause-link muted" @click="openSource(r.clause_ref)">
+            条款：{{ r.clause_ref }} · 原文定位
+          </button>
           <p v-if="r.evidence" class="quote">「{{ r.evidence }}」</p>
-          <p v-if="r.suggestion" class="suggest">{{ r.suggestion }}</p>
+          <p v-if="r.suggestion" class="suggest">{{ prettyField(r.suggestion) }}</p>
         </div>
 
         <div class="approval">
@@ -267,7 +318,7 @@ function downloadReport() {
           <p class="file serif">{{ detail.source }}</p>
           <p class="muted">评级</p>
         </div>
-        <span class="stamp" :class="gradeClass[detail.report.grade ?? ''] ?? 'stamp-mute'">
+        <span class="ring" :class="ringClass[detail.report.grade ?? ''] ?? 'ring-mute'">
           {{ gradeText[detail.report.grade ?? ''] ?? detail.report.grade ?? '—' }}
         </span>
       </div>
@@ -302,12 +353,14 @@ function downloadReport() {
         <div v-for="(r, i) in detail.report.risks" :key="i" class="risk card">
           <div class="risk-top">
             <span class="stamp" :class="severityClass[r.severity]">{{ severityText[r.severity] }}</span>
-            <span class="risk-type serif">{{ r.risk_type }}</span>
+            <span class="risk-type serif">{{ riskLabel(r) }}</span>
             <span v-if="r.policy_ref" class="mono-num ref">{{ r.policy_ref }}</span>
           </div>
-          <p v-if="r.clause_ref" class="clause muted">条款：{{ r.clause_ref }}</p>
+          <button v-if="r.clause_ref" class="clause-link muted" @click="openSource(r.clause_ref)">
+            条款：{{ r.clause_ref }} · 原文定位
+          </button>
           <p v-if="r.evidence" class="quote">「{{ r.evidence }}」</p>
-          <p v-if="r.suggestion" class="suggest">{{ r.suggestion }}</p>
+          <p v-if="r.suggestion" class="suggest">{{ prettyField(r.suggestion) }}</p>
         </div>
       </template>
       <template v-else>
@@ -347,6 +400,15 @@ function downloadReport() {
       <h3>审查失败</h3>
       <p>{{ detail.error || detail.report?.error || '未知错误' }}</p>
     </div>
+
+    <!-- U2 原文抽屉：锚点与当前任务号绑定 -->
+    <SourceDrawer
+      v-if="showSource"
+      :thread-id="props.threadId"
+      :anchor="sourceAnchor"
+      :risks="drawerRisks"
+      @close="showSource = false"
+    />
   </section>
 </template>
 
@@ -365,6 +427,10 @@ function downloadReport() {
 .tid {
   color: var(--muted);
   font-size: 12.5px;
+}
+
+.btn-source {
+  margin-left: auto;
 }
 
 .err {
@@ -405,6 +471,14 @@ function downloadReport() {
   margin-bottom: 14px;
 }
 
+/* 评级大圆章在卡片头里适当收敛尺寸（全局 .ring 默认 74px 偏大） */
+.gate-head .ring,
+.head .ring {
+  width: 62px;
+  height: 62px;
+  font-size: 15px;
+}
+
 .risk {
   padding: 12px 16px;
   margin: 10px 0;
@@ -424,15 +498,34 @@ function downloadReport() {
 }
 
 .quote {
-  border-left: 3px solid var(--line-strong);
-  padding-left: 10px;
+  /* 证据 = 纸面朱批：左侧朱线 + 极淡朱底，正文保持宋体原样 */
+  border-left: 3px solid var(--seal);
+  background: linear-gradient(90deg, rgba(165, 49, 44, 0.055), rgba(165, 49, 44, 0) 72%);
+  padding: 6px 12px 6px 12px;
   margin: 6px 0;
   color: var(--ink-2);
+  font-family: var(--serif);
+  font-size: 14px;
+  border-radius: 0 3px 3px 0;
 }
 
-.clause,
 .suggest {
   margin: 4px 0;
+}
+
+/* U2：条款引用行做成可点的原文定位入口（hover 下划线提示可点） */
+.clause-link {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.clause-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .approval {

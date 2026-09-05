@@ -50,6 +50,19 @@ def test_normal_contract_no_risk_and_pass() -> None:
     assert grade_report(risks) == Grade.pass_
 
 
+def test_risks_carry_chinese_label_and_field_name() -> None:
+    """展示层友好：风险带中文 label，缺必填建议文案里的字段名不再露英文 key。"""
+    model = _with(effective_date=None, expiry_date=None, total_amount=None)
+    missing = [r for r in evaluate(model) if r.risk_type == "missing_required_field"]
+    assert len(missing) == 3
+    # label 是中文展示名，不是机器码
+    assert all(r.label == "缺失必填字段" for r in missing)
+    # 建议文案字段名已本地化（这句是给人看的）
+    sug = next(r for r in missing if r.field == "effective_date").suggestion
+    assert "生效日期" in sug
+    assert "effective_date" not in sug
+
+
 def test_sample03_penalty_liability_and_amount_high() -> None:
     # 违约金日 1.5%、责任上限 5%、分项 20+50+40=110 万 ≠ 总额 100 万
     model = _with(

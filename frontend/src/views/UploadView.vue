@@ -14,7 +14,7 @@ const picked = ref<File[]>([])
 const busy = ref(false)
 const uploading = ref('') // 当前正在传的文件名（进度文案）
 const results = ref<{ name: string; ok: boolean; tid?: string; error?: string }[]>([])
-const hint = '支持 PDF / Word / 文本（md、txt），可多选批量上传；审核在后台顺序进行。'
+const hint = '支持 PDF / Word / 文本(md,txt)，可多选批量上传；审核在后台顺序进行。'
 
 const allDone = computed(() => !busy.value && results.value.length > 0)
 
@@ -114,6 +114,19 @@ async function uploadAll() {
   font-size: 26px;
   letter-spacing: 0.12em;
   margin: 0 0 4px;
+  padding-left: 15px;
+  position: relative;
+}
+
+.head h2::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.2em;
+  bottom: 0.2em;
+  width: 4px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--seal), rgba(165, 49, 44, 0.3));
 }
 
 .head p {
@@ -127,15 +140,43 @@ async function uploadAll() {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 44px 20px;
+  padding: 40px 20px 34px;
   border-style: dashed;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 
+.drop::before {
+  /* 上传入口 = 虚线朱环 + 「＋」：比纯文字更有"往这里放"的指向 */
+  content: "＋";
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  margin-bottom: 6px;
+  border-radius: 50%;
+  border: 1.5px dashed var(--seal);
+  color: var(--seal);
+  font-size: 26px;
+  line-height: 1;
+  font-weight: 300;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: inset 0 0 0 4px rgba(165, 49, 44, 0.06);
+}
+
 .drop:hover {
   border-color: var(--seal);
-  background: #fff;
+  background: linear-gradient(180deg, #fdf9ee, #f5ecda);
+  box-shadow:
+    0 2px 0 rgba(165, 49, 44, 0.25),
+    0 6px 18px rgba(90, 76, 45, 0.08);
+}
+
+.drop:hover::before {
+  transform: rotate(12deg) scale(1.05);
+  box-shadow:
+    inset 0 0 0 4px rgba(165, 49, 44, 0.06),
+    0 0 0 5px rgba(165, 49, 44, 0.08);
 }
 
 .drop input {
@@ -151,6 +192,8 @@ async function uploadAll() {
 .drop-sub {
   font-size: 12.5px;
   color: var(--muted);
+  font-family: var(--mono);
+  letter-spacing: 0.06em;
 }
 
 .files {

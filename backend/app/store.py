@@ -27,6 +27,7 @@ class TaskRecord:
     thread_id: str  # LangGraph checkpointer 线程键
     source: str  # 来源文件路径/标签
     name: str = ""  # 展示名（原始文件名；上传后与 source 落盘路径分离）
+    source_text: str = ""  # 解析出的合同全文（U2：任务页查看原合同用；图跑完 parse 后落库）
     status: str = "pending"  # pending=抽取中 / gate=待人工审批 / done=完成 / error=失败
     gate_payload: dict | None = None  # 闸口待审载荷（风险摘要），审批页展示用
     report: dict | None = None  # 最终报告（JSON 可序列化）
