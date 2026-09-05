@@ -19,7 +19,7 @@ def test_policy_docs_exist_and_readable() -> None:
 
 def test_sample_contracts_generated() -> None:
     files = sorted(OUTPUT_DIR.glob("sample_*.md"))
-    assert len(files) == 7, "应生成 7 份合成合同（企业 01~05 + 校服 06/07）"
+    assert len(files) == 9, "应生成 9 份合成合同（企业 01~05 + 校服 06/07 + 技术开发 08/09）"
     for f in files:
         text = f.read_text(encoding="utf-8")
         assert "甲方" in text and "乙方" in text

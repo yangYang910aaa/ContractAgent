@@ -7,9 +7,12 @@
 - sample_05:质保期 6 个月(不足 12)+ 保密期 60 个月(超 36)
 - sample_06:校服式 gov_goods 正常合同（章节式一、二、…+明细表，质保 2 年/违约金日 0.05%）
 - sample_07:校服式缺陷合同（质保 6 个月 < 12 + 违约金日 1.5% 畸高）
+- sample_08:技术开发式 tech_service 正常合同（第X条式，IP 归甲方/保密 24 个月/责任上限 100%）
+- sample_09:技术开发式缺陷合同（保密期 60 个月超 36 + 成果 IP 归乙方）
 
 写法:企业样本按「第X条」成块、校服样本按「一、二、…」章节成块
-(parser 双模式都支持)，内容由参数化 spec 渲染，同一种缺陷形态可复现。
+(parser 双模式都支持)、技术开发样本按科技部示范文本的第X条骨架成块，
+内容由参数化 spec 渲染，同一种缺陷形态可复现。
 md 正文与 docx/pdf 正文同源（都来自 render_contract）；docx/pdf 的排版
 外壳（宋体/首行缩进/双方信息表/签署区/页码）在 format_render.py 实现。
 全部为合成数据，不含任何真实公司/个人信息；docx/pdf 只是"格式真实"，
@@ -244,10 +247,233 @@ UNIFORM_SPECS: list[UniformSampleSpec] = [
 ]
 
 
+# ---- 技术开发式（tech_service）样本：科技部示范文本第X条骨架 + 缺陷载荷 ----
+
+
+@dataclass
+class TechServiceSampleSpec:
+    """技术开发（委托）合同合成规格，骨架仿科技部监制示范文本（22 条压缩为 14 条）。
+
+    与 SampleSpec/UniformSampleSpec 的关系：第三条样本形态——企业「第X条」字段
+    模板、校服章节式固定骨架、本类=科技部示范文本的第X条固定骨架。tech_service
+    的 KIND_BASELINE 要求全量应含条款（责任上限/保密/IP/适用法律），正常样本
+    必须写全才零风险；缺陷载荷只参数化保密期与 IP 权属方向。
+    """
+
+    sample_id: str  # 样本编号（sample_08/09，评测对齐用）
+    filename: str  # 输出文件名（含缺陷特征）
+    contract_no: str  # 合同编号（渲染进正文）
+    buyer: str  # 甲方（委托方）名称
+    supplier: str  # 乙方（受托方/开发方）名称
+    signature_date: str  # 签署/生效日期（中文文本，如 2026年4月15日）
+    expiry_date: str  # 合同到期日（中文文本）
+    title: str = "技术开发（委托）合同"  # 合同标题（科技部示范文本式）
+    warranty_months: int = 12  # 免费维护期（月）：验收合格后起算，12=政策下限边界合规
+    penalty_daily_percent: float = 0.05  # 逾期违约金每日比例（0.05=日 0.05%）
+    confidentiality_months: int = 24  # 保密期（月）：24=正常；60=缺陷（超 36 上限）
+    liability_cap_percent: float = 100.0  # 责任上限（占开发费总额 %）：100=合规
+    ip_to_supplier: bool = False  # True=成果 IP 归乙方（构造缺陷）；False=归甲方（正常）
+    note: str = ""  # 缺陷说明（写进生成清单）
+
+
+TECH_SPECS: list[TechServiceSampleSpec] = [
+    # sample_08：技术开发式正常合同（tech_service 基线要求的责任上限/保密/IP/法律写全）
+    TechServiceSampleSpec(
+        sample_id="sample_08",
+        filename="sample_08_技术开发委托合同_正常.md",
+        contract_no="HT-2026-TD-0118",
+        buyer="星辰智造科技有限公司",
+        supplier="云启信息技术有限公司",
+        signature_date="2026年4月15日",
+        expiry_date="2027年10月31日",
+        warranty_months=12,  # 免费维护 12 个月（恰为下限，边界合规）
+        penalty_daily_percent=0.05,
+        confidentiality_months=24,  # 保密期 24 个月，正常
+        liability_cap_percent=100.0,  # 责任上限 100%，正常
+        ip_to_supplier=False,  # 定制成果 IP 归甲方
+        note="技术开发式正常合同：IP 归甲方 / 保密 24 个月 / 责任上限 100%，应零风险 pass。",
+    ),
+    # sample_09：缺陷（保密期 60 个月超 36 + 成果 IP 归乙方），应 fail 命中 P-04/P-05
+    TechServiceSampleSpec(
+        sample_id="sample_09",
+        filename="sample_09_技术开发委托合同_保密期过长_IP归乙方.md",
+        contract_no="HT-2026-TD-0119",
+        buyer="星辰智造科技有限公司",
+        supplier="云启信息技术有限公司",
+        signature_date="2026年4月15日",
+        expiry_date="2027年10月31日",
+        warranty_months=12,
+        penalty_daily_percent=0.05,
+        confidentiality_months=60,  # 缺陷①：保密期 60 个月 > 政策上限 36（P-04）
+        liability_cap_percent=100.0,
+        ip_to_supplier=True,  # 缺陷②：成果 IP 归乙方，权属不在甲方（P-05 medium）
+        note="缺陷：保密期 60 个月超过 36 个月上限；定制成果知识产权归乙方，应 fail 命中 P-04/P-05。",
+    ),
+]
+
+
 def _warranty_text(months: int) -> str:
     """质保月数 → 正文写法：整年按「N 年」写（贴真实合同），其余按「N 个月」。"""
     # 分支：12 的整数倍（且非 0）→ 按年写；其余（含 6 个月缺陷）按月写
     return f"{months // 12} 年" if months and months % 12 == 0 else f"{months} 个月"
+
+
+def _cn_ordinal(i: int) -> str:
+    """1 起序号 → 中文第X条（tech 样本条款号，支持到二十）。"""
+    units = "一二三四五六七八九十"
+    return units[i - 1] if i <= 10 else "十" + units[i - 11]
+
+
+def render_tech_service_contract(spec: TechServiceSampleSpec) -> str:
+    """渲染技术开发（委托）式正文（第一条~第十四条），返回 md 全文。
+
+    骨架仿科技部示范文本（签约方/项目内容/计划/转委托/保密/风险/成果归属/验收/
+    维护/费用与支付/违约/变更解除/争议/生效），关键字段只以正文句出现；
+    defect 载荷 = 保密期月数 + 成果权属方向，其余字段两版一致便于对比。
+    """
+    # 权属表述：正常=定制成果归甲方；缺陷=归乙方（句中不含「甲方」，规则才能命中 unclear）
+    if spec.ip_to_supplier:
+        ip_lines = (
+            "本项目研究开发成果及其知识产权归乙方（受托方）所有，双方另有书面约定的除外。",
+        )
+    else:
+        ip_lines = (
+            "乙方根据甲方需求定制开发的软件、源代码及相关文档的知识产权归甲方所有。",
+            "乙方授权甲方使用的既有基础平台软件的知识产权归乙方，甲方享有在本项目范围内"
+            "永久、不可撤销的使用许可；乙方保证甲方使用时不受第三方权利主张影响。",
+        )
+    parts: list[str] = [
+        f"# {spec.title}",
+        "",
+        f"合同编号：{spec.contract_no}",
+        "",
+        f"甲方（委托方）：{spec.buyer}",
+        f"乙方（受托方）：{spec.supplier}",
+        "签约地点：深圳市南山区",
+        f"签约时间：{spec.signature_date}",
+        "",
+        "乙方具备相应的技术开发能力，甲方委托乙方研究开发「企业数据资产管理平台」"
+        "（以下简称本项目）。双方依据《中华人民共和国民法典》《中华人民共和国科学"
+        "技术进步法》及有关规定，本着平等自愿、诚实信用的原则，经协商一致订立本合同。",
+        "",
+    ]
+    # 条款 = (标题, 正文行列表)；子条用 1、2、3，与科技部示范文本写法一致
+    clauses: list[tuple[str, list[str]]] = [
+        (
+            "项目名称与技术内容",
+            [
+                "1、项目名称：企业数据资产管理平台技术开发（委托）项目。",
+                "2、开发范围：数据接入与清洗、主数据管理、报表分析与可视化、权限与审计"
+                "四大功能模块，具体以双方确认的《技术需求说明书》为准。",
+                "3、开发手段：采用 B/S 架构与主流开源技术栈实现，交付物包括可部署的软件"
+                "系统、源代码与设计文档。",
+            ],
+        ),
+        (
+            "研究开发计划",
+            [
+                "1、乙方应于2026年7月31日前完成需求评审与概要设计。",
+                "2、乙方应于2026年9月30日前完成开发与内部测试，并提交甲方试运行。",
+                "3、试运行1个月无重大缺陷后，甲方组织整体验收，验收应于2026年11月15日前完成。",
+            ],
+        ),
+        (
+            "转委托",
+            [
+                "乙方未经甲方书面同意，不得将本项目关键开发工作转委托给第三方；"
+                "经甲方同意的，乙方仍应对第三方的工作成果向甲方承担责任。",
+            ],
+        ),
+        (
+            "保密要求",
+            [
+                "1、双方对因履行本合同而知悉的对方技术资料、经营信息与本项目成果负有"
+                "保密义务，未经对方书面同意不得向第三方披露。",
+                f"2、保密期限自本合同终止之日起 {spec.confidentiality_months} 个月。",
+            ],
+        ),
+        (
+            "双方权利义务",
+            [
+                "1、甲方应及时提供开发所需的数据样本、业务口径与配合条件，并按期组织评审与验收。",
+                "2、乙方应投入足够的开发力量按期交付，并对交付成果的质量与安全负责。",
+            ],
+        ),
+        (
+            "风险承担",
+            [
+                "因现有技术水平与客观条件限制而在开发中难以克服的技术风险，由双方按本合同"
+                "约定分担；风险出现后，乙方应在10日内书面通知甲方并提交风险分析报告。",
+            ],
+        ),
+        ("技术成果权益的归属和分享", list(ip_lines)),
+        (
+            "成果验收",
+            [
+                "1、甲方按《技术需求说明书》及验收标准组织验收，验收合格的，双方签署《验收报告》。",
+                "2、验收发现缺陷的，乙方应在15日内修复并重新提请验收。",
+            ],
+        ),
+        (
+            "相关技术服务",
+            [
+                f"1、乙方自本项目验收合格之日起，免费提供 {_warranty_text(spec.warranty_months)}"
+                "的技术支持与维护服务。",
+                "2、免费维护期内，乙方对系统缺陷应在48小时内响应、7日内修复。",
+            ],
+        ),
+        (
+            "费用及支付方式",
+            [
+                "1、本项目技术开发费总额为人民币（大写）壹佰贰拾万元整（小写：1,200,000 元），"
+                "币种为人民币，实行费用包干。",
+                "2、分期支付：",
+                "（一）合同签订生效后10日内支付360,000元，占总额30%；",
+                "（二）中期评审通过后支付480,000元，占总额40%；",
+                "（三）项目验收合格后支付360,000元，占总额30%。",
+            ],
+        ),
+        (
+            "违约责任",
+            [
+                f"1、乙方逾期交付或逾期完成计划节点的，每逾期一日按技术开发费总额的 "
+                f"{spec.penalty_daily_percent:g}% 向甲方支付违约金。",
+                "2、交付成果存在重大缺陷经两次整改仍无法通过验收的，甲方有权解除合同并"
+                "要求乙方返还已收款项。",
+                f"3、除违约金外，乙方对甲方承担的赔偿责任总额以技术开发费总额的 "
+                f"{spec.liability_cap_percent:g}% 为上限。",
+            ],
+        ),
+        (
+            "合同的变更与解除",
+            [
+                "1、经双方协商一致，可以变更或解除本合同。",
+                "2、任何一方需提前解除合同的，应提前30日书面通知对方，并结清已发生的费用。",
+            ],
+        ),
+        (
+            "争议解决与适用法律",
+            [
+                "1、双方因本合同发生争议的，应友好协商解决；协商不成的，任何一方均可向"
+                "甲方所在地人民法院提起诉讼。",
+                "2、本合同的订立、效力、解释与履行适用中华人民共和国法律。",
+            ],
+        ),
+        (
+            "其他约定与合同生效",
+            [
+                "1、本合同一式六份，甲方执三份、乙方执三份，具有同等法律效力。",
+                f"2、本合同自{spec.signature_date}双方签字盖章之日起生效，有效期至"
+                f"{spec.expiry_date}。",
+                "3、本合同未尽事宜，由双方另行协商并签订补充协议。",
+            ],
+        ),
+    ]
+    for idx, (title, lines) in enumerate(clauses, start=1):
+        parts.append(f"第{_cn_ordinal(idx)}条 {title}")
+        parts.extend(lines)
+        parts.append("")
+    return "\n".join(parts).rstrip() + "\n"
 
 
 def _md_table(headers: tuple[str, ...], rows: tuple[tuple[str, ...], ...]) -> list[str]:
@@ -609,20 +835,23 @@ def render_contract(spec: SampleSpec) -> str:
 from backend.eval.format_render import _cjk_font_path, render_docx, render_pdf  # noqa: F401
 
 
-ALL_SPECS: list = [*SPECS, *UNIFORM_SPECS]  # 企业基线(01~05) + 校服式 v3 试点(06/07)
+ALL_SPECS: list = [*SPECS, *UNIFORM_SPECS, *TECH_SPECS]  # 企业(01~05) + 校服(06/07) + 技术开发(08/09)
 
 
 def _body_for(spec) -> str:
-    """按 spec 类型返回正文 md：企业「第X条」式 vs 校服章节式（docx/pdf 同源共用）。"""
-    # 分支 1：校服式 spec → 章节式正文（一、二、… 章节头）
+    """按 spec 类型返回正文 md：企业/技术开发「第X条」式 vs 校服章节式（docx/pdf 同源共用）。"""
+    # 分支 1：技术开发式 spec → 科技部示范文本骨架（第X条式正文）
+    if isinstance(spec, TechServiceSampleSpec):
+        return render_tech_service_contract(spec)
+    # 分支 2：校服式 spec → 章节式正文（一、二、… 章节头）
     if isinstance(spec, UniformSampleSpec):
         return render_uniform_contract(spec)
-    # 分支 2：企业式 spec → 原有「第X条」正文
+    # 分支 3：企业式 spec → 原有「第X条」正文
     return render_contract(spec)
 
 
 def main() -> None:
-    """把全部 spec（企业 01~05 + 校服 06/07）渲染成 md/docx/pdf 落盘并打印清单。"""
+    """把全部 spec（企业 01~05 + 校服 06/07 + 技术开发 08/09）渲染成 md/docx/pdf 落盘。"""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     manifest: list[str] = []
     for spec in ALL_SPECS:

@@ -357,13 +357,21 @@ def render_docx(spec, path: str | Path, body: str | None = None) -> None:
 
     # ---- 正文条款：与 md 同源；支持第X条/章节式头 + markdown 明细表 ----
     if body is None:
-        from backend.eval.generate_samples import UniformSampleSpec, render_contract, render_uniform_contract
-
-        body = (
-            render_uniform_contract(spec)
-            if isinstance(spec, UniformSampleSpec)
-            else render_contract(spec)
+        from backend.eval.generate_samples import (
+            TechServiceSampleSpec,
+            UniformSampleSpec,
+            render_contract,
+            render_tech_service_contract,
+            render_uniform_contract,
         )
+
+        # 分支：技术开发式/校服式/企业式正文各走各自渲染器（docx/pdf 与 md 同源）
+        if isinstance(spec, TechServiceSampleSpec):
+            body = render_tech_service_contract(spec)
+        elif isinstance(spec, UniformSampleSpec):
+            body = render_uniform_contract(spec)
+        else:
+            body = render_contract(spec)
     for kind, payload in parse_md_blocks(body.splitlines()):
         # 分支 1：条款/章节头 → 黑体加粗、段前留白、顶格（与正文缩进区分层级）
         if kind == "heading":
@@ -561,13 +569,21 @@ def render_pdf(spec, path: str | Path, body: str | None = None) -> None:
     ]
     # 正文条款：与 docx 同源（支持章节式头与 markdown 明细表，与 docx 渲染规则一致）
     if body is None:
-        from backend.eval.generate_samples import UniformSampleSpec, render_contract, render_uniform_contract
-
-        body = (
-            render_uniform_contract(spec)
-            if isinstance(spec, UniformSampleSpec)
-            else render_contract(spec)
+        from backend.eval.generate_samples import (
+            TechServiceSampleSpec,
+            UniformSampleSpec,
+            render_contract,
+            render_tech_service_contract,
+            render_uniform_contract,
         )
+
+        # 分支：技术开发式/校服式/企业式正文各走各自渲染器（与 render_docx 同规则）
+        if isinstance(spec, TechServiceSampleSpec):
+            body = render_tech_service_contract(spec)
+        elif isinstance(spec, UniformSampleSpec):
+            body = render_uniform_contract(spec)
+        else:
+            body = render_contract(spec)
     for kind, payload in parse_md_blocks(body.splitlines()):
         # 分支 1：条款/章节头 → 黑体、段前留白、不换页断开（keepWithNext）
         if kind == "heading":
