@@ -30,7 +30,7 @@ const statusText: Record<TaskStatus, string> = {
 
 const statusClass: Record<TaskStatus, string> = {
   pending: 'stamp-mute',
-  processing: 'stamp-warn',
+  processing: 'stamp-info', // 审查中=信息蓝（过程态，区别于风险语义）
   gate: 'stamp-seal',
   done: 'stamp-ok',
   error: 'stamp-seal',
@@ -42,10 +42,32 @@ const gradeText: Record<string, string> = {
   fail: '不通过',
 }
 
+/** 行内评级配色：疑似空白模板的"待确认"与 fail 走琥珀/红，pass 走绿。 */
+function gradeClass(t: TaskSummary): string {
+  if (t.template && t.grade === 'conditional_pass') return 'g-uncertain'
+  if (t.grade === 'pass') return 'g-ok'
+  if (t.grade === 'fail') return 'g-bad'
+  if (t.grade === 'conditional_pass') return 'g-warn'
+  return ''
+}
+
 /** 行内评级文案：疑似空白模板的 conditional_pass 显示"待确认"更直白。 */
 function gradeShow(t: TaskSummary): string {
   if (t.template && t.grade === 'conditional_pass') return '待确认'
   return gradeText[t.grade ?? ''] ?? t.grade ?? ''
+}
+
+/** 行内状态展示：疑似空白模板任务显示"待确认"（琥珀），不写"已完成"，避免
+ *  "已完成 + 待确认"的矛盾观感（后端仍是 done，仅展示层区分）。 */
+function dispStatus(t: TaskSummary): { text: string; cls: string } {
+  if (t.template && t.status === 'done') return { text: '待确认', cls: 'stamp-warn' }
+  return { text: statusText[t.status], cls: statusClass[t.status] }
+}
+
+/** 行内评级展示：疑似空白模板给"疑似空白模板"，比泛泛的"待确认"更直白。 */
+function dispGrade(t: TaskSummary): string {
+  if (t.template && t.grade === 'conditional_pass') return '疑似空白模板'
+  return gradeShow(t)
 }
 
 /** 各状态数量：统计条与空态文案都用它。 */
@@ -64,6 +86,16 @@ const nameCounts = computed(() => {
   }
   return m
 })
+
+/** 行内文件类型小标：按后缀给短标签与色类（docx/pdf/md/txt/其他）。 */
+function fileChip(t: TaskSummary): { label: string; cls: string } {
+  const s = t.source.toLowerCase()
+  if (s.endsWith('.docx')) return { label: 'DOC', cls: 'docx' }
+  if (s.endsWith('.pdf')) return { label: 'PDF', cls: 'pdf' }
+  if (s.endsWith('.md')) return { label: 'MD', cls: 'md' }
+  if (s.endsWith('.txt')) return { label: 'TXT', cls: 'txt' }
+  return { label: 'FILE', cls: 'file' }
+}
 
 /** 可见任务 = 状态筛选 ∩ 名称/任务号搜索（忽略大小写）。 */
 const visible = computed(() => {
@@ -130,30 +162,56 @@ onUnmounted(() => {
 
     <!-- 按文件名/任务号搜索：重复上传多份时快速定位 -->
     <div class="searchbar">
-      <input
-        v-model="query"
-        type="text"
-        placeholder="按文件名 / 任务号搜索（同名重复也能筛出来）"
-      />
+      <span class="search-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="11" cy="11" r="7"></circle>
+          <path d="M20 20l-3.5-3.5"></path>
+        </svg>
+        <input
+          v-model="query"
+          type="text"
+          placeholder="按文件名 / 任务号搜索（同名重复也能筛出来）"
+        />
+      </span>
       <button v-if="query" class="btn btn-plain sm" @click="query = ''">清空</button>
     </div>
 
     <!-- 统计条：一眼看到待审批/审查中/完成分布 -->
     <div class="stats">
       <div class="stat card">
-        <b class="mono-num">{{ counts.gate }}</b><span>待审批</span>
+        <span class="lab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"></path><path d="M12 8v4M12 15.5v.5"></path></svg>
+          待审批
+        </span>
+        <b class="mono-num">{{ counts.gate }}</b>
       </div>
       <div class="stat card">
-        <b class="mono-num">{{ counts.processing + counts.pending }}</b><span>进行中</span>
+        <span class="lab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+          进行中
+        </span>
+        <b class="mono-num">{{ counts.processing + counts.pending }}</b>
       </div>
       <div class="stat card">
-        <b class="mono-num">{{ counts.done }}</b><span>已完成</span>
+        <span class="lab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8 12.5l2.5 2.5L16 9.5"></path></svg>
+          已完成
+        </span>
+        <b class="mono-num">{{ counts.done }}</b>
       </div>
       <div class="stat card">
-        <b class="mono-num">{{ counts.error }}</b><span>失败</span>
+        <span class="lab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4M12 15.5v.5"></path></svg>
+          失败
+        </span>
+        <b class="mono-num">{{ counts.error }}</b>
       </div>
       <div class="stat card total">
-        <b class="mono-num">{{ tasks.length }}</b><span>全部</span>
+        <span class="lab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
+          全部
+        </span>
+        <b class="mono-num">{{ tasks.length }}</b>
       </div>
     </div>
 
@@ -166,18 +224,27 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <p v-if="!tasks.length" class="empty muted">
-      还没有任务——上传几份合同后就会出现在这里
-    </p>
-    <p v-else-if="!visible.length" class="empty muted">
-      {{ query.trim() ? `没有匹配「${query.trim()}」的任务，试试改一下名字或清空筛选` : '该筛选下暂无任务' }}
-    </p>
+    <div v-if="!tasks.length" class="empty-card">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7l2-3h12l2 3v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"></path><path d="M4 7h16M9 12h6"></path></svg>
+      <p>还没有任务——上传几份合同后就会出现在这里</p>
+    </div>
+    <div v-else-if="!visible.length" class="empty-card">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+      <p>{{ query.trim() ? `没有匹配「${query.trim()}」的任务，试试改一下名字或清空筛选` : '该筛选下暂无任务' }}</p>
+    </div>
 
     <!-- 任务列表 -->
     <div v-else class="card list">
+      <div class="th">
+        <span>任务（文件 / 任务号）</span>
+        <span>状态</span>
+        <span>风险 / 评级</span>
+        <span class="op-hd">操作</span>
+      </div>
       <div v-for="t in visible" :key="t.thread_id" class="row">
         <div class="name">
           <span class="file-line">
+            <span class="ficon" :class="fileChip(t).cls">{{ fileChip(t).label }}</span>
             <span class="file">{{ t.source }}</span>
             <span v-if="nameCounts.get(t.source.trim().toLowerCase())! > 1" class="dup-badge mono-num">
               同名 ×{{ nameCounts.get(t.source.trim().toLowerCase()) }}
@@ -185,15 +252,15 @@ onUnmounted(() => {
           </span>
           <span class="mono-num tid">{{ t.thread_id }}</span>
         </div>
-        <div class="meta">
+        <span class="stamp" :class="dispStatus(t).cls">{{ dispStatus(t).text }}</span>
+        <span class="rk">
           <span v-if="t.risk_count != null" class="risk-badge mono-num"
-                :class="t.status === 'done' ? 'ok' : 'seal'">
+                :class="t.template ? 'warn' : t.status === 'done' ? 'ok' : 'seal'">
             {{ t.status === 'gate' ? `待审 ${t.risk_count}` : `${t.risk_count} 项` }}
           </span>
-          <span class="stamp" :class="statusClass[t.status]">{{ statusText[t.status] }}</span>
-          <span v-if="t.grade" class="grade serif">{{ gradeShow(t) }}</span>
-        </div>
-        <button class="btn btn-ghost" @click="emit('open', t.thread_id)">查看</button>
+          <span v-if="t.grade" class="grade" :class="gradeClass(t)">{{ dispGrade(t) }}</span>
+        </span>
+        <button class="op" @click="emit('open', t.thread_id)">查看 →</button>
       </div>
     </div>
   </section>
@@ -210,29 +277,15 @@ onUnmounted(() => {
 }
 
 .head h2 {
-  font-family: var(--serif);
-  font-size: 26px;
-  letter-spacing: 0.12em;
+  font-size: 21px;
+  letter-spacing: 0.02em;
   margin: 0 0 4px;
-  padding-left: 15px;
-  position: relative;
-}
-
-/* 页头左侧朱线：像文书篇题的小标记 */
-.head h2::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0.2em;
-  bottom: 0.2em;
-  width: 4px;
-  border-radius: 2px;
-  background: linear-gradient(180deg, var(--seal), rgba(165, 49, 44, 0.3));
+  font-weight: 700;
 }
 
 .head p {
   margin: 0;
-  font-size: 13.5px;
+  font-size: 13px;
 }
 
 .head-actions {
@@ -243,9 +296,9 @@ onUnmounted(() => {
 .sysline {
   margin: 10px 0 0;
   font-size: 13px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.02em;
   font-family: var(--mono);
-  color: var(--ink-2); /* 比 muted 更深：状态行要一眼能读 */
+  color: var(--ink-2);
 }
 
 .searchbar {
@@ -255,8 +308,25 @@ onUnmounted(() => {
   margin: 14px 0 2px;
 }
 
+.search-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: min(380px, 100%);
+}
+
+.search-wrap svg {
+  position: absolute;
+  left: 11px;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
 .searchbar input {
-  max-width: 420px;
+  max-width: none;
+  padding-left: 34px;
 }
 
 .btn.sm {
@@ -278,43 +348,51 @@ onUnmounted(() => {
 .stat {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 14px 8px;
-  border-top: 2px solid transparent;
+  gap: 4px;
+  padding: 12px 16px;
+  overflow: hidden;
   transition: transform 0.12s ease;
 }
 
 .stat:hover {
-  transform: translateY(-2px);
+  transform: translateY(-1px);
 }
 
 .stat b {
-  font-size: 26px;
-  line-height: 1.1;
+  font-size: 22px;
+  line-height: 1.2;
 }
 
-.stat span {
+.stat .lab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--muted);
-  font-size: 12.5px;
-  letter-spacing: 0.12em;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
-/* 统计条按语义着色（朱=待批/失败，琥珀=进行中，石绿=完成） */
+.stat .lab svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* KPI 带按语义着色（红=待批/失败，蓝=进行中，绿=完成；全部=靛蓝） */
 .stat:nth-child(1) b {
   color: var(--seal);
 }
 
 .stat:nth-child(1) {
-  border-top-color: rgba(165, 49, 44, 0.5);
+  border-top: 2px solid rgba(224, 69, 79, 0.55);
 }
 
 .stat:nth-child(2) b {
-  color: var(--warn);
+  color: var(--info);
 }
 
 .stat:nth-child(2) {
-  border-top-color: rgba(156, 107, 28, 0.5);
+  border-top: 2px solid rgba(47, 128, 216, 0.55);
 }
 
 .stat:nth-child(3) b {
@@ -322,7 +400,7 @@ onUnmounted(() => {
 }
 
 .stat:nth-child(3) {
-  border-top-color: rgba(61, 106, 69, 0.5);
+  border-top: 2px solid rgba(47, 158, 99, 0.55);
 }
 
 .stat:nth-child(4) b {
@@ -330,11 +408,15 @@ onUnmounted(() => {
 }
 
 .stat:nth-child(4) {
-  border-top-color: rgba(165, 49, 44, 0.35);
+  border-top: 2px solid rgba(224, 69, 79, 0.35);
 }
 
 .stat.total b {
-  color: var(--ink);
+  color: var(--pri);
+}
+
+.stat.total {
+  border-top: 2px solid rgba(52, 86, 209, 0.5);
 }
 
 .filters {
@@ -347,7 +429,7 @@ onUnmounted(() => {
 .filters button {
   border: 1px solid var(--line);
   background: transparent;
-  border-radius: 999px;
+  border-radius: 8px;
   padding: 4px 12px;
   font-size: 13px;
   color: var(--ink-2);
@@ -357,9 +439,9 @@ onUnmounted(() => {
 }
 
 .filters button.on {
-  border-color: var(--seal);
-  color: var(--seal);
-  background: var(--seal-soft);
+  border-color: var(--pri);
+  color: var(--pri);
+  background: var(--pri-soft);
   font-weight: 700;
 }
 
@@ -367,20 +449,61 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
-.empty {
-  padding: 36px 0;
+.empty-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 26px 16px;
+  margin-top: 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.empty-card svg {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  color: var(--line2);
+}
+
+.empty-card p {
+  margin: 0;
 }
 
 .list {
   overflow: hidden;
 }
 
-.row {
+.th {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  /* 四列表格：任务弹性占主，状态/风险按比例铺满整行，操作固定右对齐，
+     避免"1fr auto auto"把所有内容推到最右挤成一簇 */
+  grid-template-columns: minmax(240px, 1.3fr) minmax(108px, 0.55fr) minmax(220px, 1fr) 84px;
   align-items: center;
   gap: 16px;
-  padding: 13px 18px;
+  padding: 8px 18px;
+  background: var(--card-2);
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.th .op-hd {
+  justify-self: end;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.3fr) minmax(108px, 0.55fr) minmax(220px, 1fr) 84px;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 18px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -389,23 +512,14 @@ onUnmounted(() => {
 }
 
 .row:hover {
-  background: var(--paper);
-  box-shadow: inset 3px 0 0 var(--seal);
+  background: #f8faff;
+  box-shadow: inset 3px 0 0 var(--pri);
 }
 
-/* 列表行轻微错峰入场（最多 8 行封顶，避免延迟过长） */
+/* 列表行轻量入场（一次性淡入上移，不逐行错峰，避免"弹跳"感） */
 .list .row {
-  animation: rise 0.32s ease both;
+  animation: rise 0.2s ease both;
 }
-
-.list .row:nth-of-type(1) { animation-delay: 0.02s; }
-.list .row:nth-of-type(2) { animation-delay: 0.06s; }
-.list .row:nth-of-type(3) { animation-delay: 0.1s; }
-.list .row:nth-of-type(4) { animation-delay: 0.14s; }
-.list .row:nth-of-type(5) { animation-delay: 0.18s; }
-.list .row:nth-of-type(6) { animation-delay: 0.22s; }
-.list .row:nth-of-type(7) { animation-delay: 0.26s; }
-.list .row:nth-of-type(8) { animation-delay: 0.3s; }
 
 .name {
   display: flex;
@@ -431,14 +545,66 @@ onUnmounted(() => {
   min-width: 0;
 }
 
+/* 文件类型小图标：按后缀着色（DOC/PDF/MD/TXT） */
+.ficon {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 8.5px;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: 0.02em;
+}
+
+.ficon.docx {
+  background: #2b579a;
+}
+
+.ficon.pdf {
+  background: #c4302b;
+}
+
+.ficon.md {
+  background: #4b5a77;
+}
+
+.ficon.txt {
+  background: #6b7f9e;
+}
+
+.ficon.file {
+  background: var(--muted);
+}
+
+/* 行内"查看"：靛蓝文字操作（对齐表头操作列右侧） */
+.op {
+  border: 0;
+  background: none;
+  color: var(--pri);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  justify-self: end;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.op:hover {
+  background: var(--pri-soft);
+}
+
 /* 同名徽标：同一份文档被反复上传时提示重复 */
 .dup-badge {
   flex: none;
   font-size: 11px;
   color: var(--warn);
   background: var(--warn-soft);
-  border: 1px solid rgba(156, 107, 28, 0.3);
-  border-radius: 999px;
+  border: 1px solid rgba(192, 127, 18, 0.3);
+  border-radius: 6px;
   padding: 0 8px;
 }
 
@@ -447,10 +613,12 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
-.meta {
-  display: flex;
+.rk {
+  display: inline-flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .risk-badge {
@@ -460,17 +628,43 @@ onUnmounted(() => {
 }
 
 .risk-badge.seal {
-  color: var(--seal);
+  color: var(--seal-deep);
   background: var(--seal-soft);
+  border: 1px solid rgba(224, 69, 79, 0.2);
 }
 
 .risk-badge.ok {
   color: var(--ok);
   background: var(--ok-soft);
+  border: 1px solid rgba(47, 158, 99, 0.2);
+}
+
+/* 疑似空白模板的"待确认"风险数用琥珀，和状态语义一致 */
+.risk-badge.warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid rgba(192, 127, 18, 0.25);
 }
 
 .grade {
-  font-size: 15px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* 行内评级按语义分色：pass 绿 / 待确认·有条件琥珀 / fail 红 */
+.grade.g-ok {
+  color: var(--ok);
+}
+
+.grade.g-warn,
+.grade.g-uncertain {
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.grade.g-bad {
+  color: var(--seal-deep);
 }
 
 @media (max-width: 720px) {
@@ -478,8 +672,23 @@ onUnmounted(() => {
     grid-template-columns: repeat(3, 1fr);
   }
 
+  .th {
+    display: none;
+  }
+
   .row {
-    grid-template-columns: 1fr auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    align-items: center;
+  }
+
+  .row .name {
+    flex: 1 1 100%;
+  }
+
+  .row .op {
+    margin-left: auto;
   }
 }
 </style>

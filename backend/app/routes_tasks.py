@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api", tags=["tasks"])
 # 上传白名单：文本型合同（扫描件无文字层，服务端 parser 会明确报错）
 ALLOWED_SUFFIXES = {".pdf", ".docx", ".md", ".txt"}
 UPLOAD_DIR = BASE_DIR / "data" / "uploads"
-CONTRACTS_DIR = BASE_DIR / "data" / "contracts"  # 内置演示样本所在目录（kind 判断用）
+CONTRACTS_DIR = BASE_DIR / "data" / "contracts"  
 
 # 原文件下载时的 Content-Type：docx/pdf 给浏览器可识别的类型（pdf 可内嵌预览）
 _MEDIA_TYPES = {
@@ -33,7 +33,7 @@ _MEDIA_TYPES = {
 
 
 def get_manager(request: Request) -> TaskManager:
-    """取 app.state 上的任务管理器（测试可替换成 worker=False 的假 runner 实例）。"""
+    """取 app.state 上的任务管理器"""
     return request.app.state.manager
 
 

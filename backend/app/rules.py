@@ -407,7 +407,7 @@ def _check_ip_and_law(model: ContractModel, required: set[str]) -> list[RiskItem
     return out
 
 
-# ---- 空白模板占位检测（2026-09-05，用户上传真实示范文本模板后加的体验层）----
+# ---- 空白模板占位检测（2026-09-05 起，2026-09-07 扩展官方示范文本写法）----
 # 背景：空白模板（甲方/日期/金额都是占位）会如实触发三条 high"缺必填"停闸口，
 # 演示观感像"系统把好合同审坏了"。这里检测文本里的占位痕迹，命中则把缺必填
 # 降为 medium + 追加"疑似空白模板"提示——不误放行（仍是 conditional_pass），
@@ -419,17 +419,33 @@ def _check_ip_and_law(model: ContractModel, required: set[str]) -> list[RiskItem
 # - amount_cap：金额大写栏空白（大写：＿＿＿）
 # - party：冒号后跟下划线（甲方（采购方）：＿＿＿）
 # - fill：成串下划线/全角下划线（模板填空位）
+# - blank：冒号后整段空白（官方示范文本常用纯空格填空栏，不一定画下划线）
+# - dot：点线/省略号填充栏（GF 示范文本用 "……………" 引出待填内容）
+# - box：□ 勾选/未选框（示范文本"选项处打 √/×"结构）
+# - void_punct：填空式条款的"空标点"（"标准是 ；""要求： 。"）——占位无实义
+#   内容，汉字/冒号后直接空格跟句号/分号（正常书写中标点紧贴前文无空格）
+# - void_unit：填空式条款的"空单位"（"第 项办理""%向甲方""定金 元""日内结清"）
+#   ——占位前是空格 + 量词/单位/勾选项（正常填写时数字与单位间无空格或已填实义）
 _BLANK_PATTERN_RE: dict[str, re.Pattern] = {
     "date": re.compile(r"年[ ＿_\u3000]*月[ ＿_\u3000]*日"),
     "amount": re.compile(r"(?:货款|合同)?(?:金额|价款|总价)[为是：:（( ]{0,5}元"),
     "amount_cap": re.compile(r"大写[：:]\s*[＿_ \u3000]*[）)]"),
     "party": re.compile(r"[：:]\s*[＿_]{2,}"),
     "fill": re.compile(r"[＿_]{3,}"),
+    "blank": re.compile(r"[：:][\s\u3000]{4,}"),
+    "dot": re.compile(r"[.．…]{3,}"),
+    "box": re.compile(r"□"),
+    "void_punct": re.compile(r"[\u4e00-\u9fff%][：:]?[\s\u3000]{1,3}[。；,，．]"),
+    "void_unit": re.compile(r"[ \u3000](?:%|元|日内|天内|项|种方式|方)"),
 }
 
-# 判定为"疑似空白模板"所需的最少占位类别数（≥2 防单处误报，如正文里偶尔
-# 出现一处"年 月 日"或个别下划线不会触发降级）
+# 判定为"疑似空白模板"所需的最少占位类别数（≥2 防单处误报：正文里偶尔出现
+# 一处"年 月 日"、单个省略号或个别 □ 不会触发降级；填写完整的合同日期中间
+# 有数字、冒号后是实义内容、正文句号前无空格，上述类别很难凑到两类同时命中）
 _BLANK_SUSPECT_MIN_CATEGORIES = 2
+# 出 evidence 摘录时优先"看得出是哪个栏位"的类别；纯空白/点线/选框摘出来
+# 不像话，只参与计数、不抢摘录位
+_SNIPPET_CATEGORIES = ("date", "amount", "amount_cap", "party", "fill")
 
 
 def _blank_markers(text: str) -> tuple[set[str], str]:
@@ -440,7 +456,7 @@ def _blank_markers(text: str) -> tuple[set[str], str]:
         match = pattern.search(text)
         if match:
             found.add(category)
-            if not snippet:
+            if not snippet and category in _SNIPPET_CATEGORIES:
                 snippet = match.group(0).strip()[:80]
     return found, snippet
 

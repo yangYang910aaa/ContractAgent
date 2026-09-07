@@ -5,6 +5,7 @@ embedding (DashScope Qwen3.7-text-embedding)、Milvus、检索后端 ;`env_ready
 
 from pathlib import Path
 from dotenv import load_dotenv
+from typing import Literal
 
 # 仓库根目录 = backend/app/config.py 向上 2 级（app -> backend -> 仓库根）
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -27,8 +28,8 @@ class Settings(BaseSettings):
     chat_model: str = "deepseek-ai/DeepSeek-V4-flash"
     chat_temperature: float = 0.1
     chat_enable_thinking: bool = False  # False=关闭 DeepSeek thinking，控制抽取时延与成本
-    # 服务端审核并发度（同时送审的合同份数）：有界并发避免打爆 LLM 配额/限流。
-    # 按实测限流调整：默认 2 起步，稳妥后可试 3~5（env: REVIEW_WORKERS）
+    # 服务端审核并发度（同时送审的合同份数）
+    # 默认 2 起步，稳妥后可试 3~5（env: REVIEW_WORKERS）
     review_workers: int = 2
 
     # ---- 向量模型：阿里 DashScope（OpenAI 兼容 embedding 端点）----
@@ -45,7 +46,7 @@ class Settings(BaseSettings):
     database_url: str = ""  # Postgres
 
     # ---- 检索后端：milvus 不可用时自动退回内存----
-    retrieval_backend: str = "auto"  # auto | milvus | memory
+    retrieval_backend: Literal["auto", "milvus", "memory"] = "auto"  
 
     @property
     def embedding_api_key(self) -> str:

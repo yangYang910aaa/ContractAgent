@@ -1,31 +1,43 @@
-/* 合同审核工作台 · 全局样式：深化纸感文书风（方向 A，2026-09-05 落地）
+/* 合同审核工作台 · 全局样式：白底高密度仪表盘（方向 C，2026-09-07 落地）
 
-   设计语言：宣纸 + 墨 + 朱砂印 + 楷体批注。全局只放设计令牌与基础件
-   （按钮/卡片/印章/表单），页面细节各视图 scoped 内补充。页面不再"平"：
-   底色带纸纹颗粒与双色晕染，右侧有极淡的巨幅印鉴水印，页头走"红头"双线，
-   主按钮用楷体印钮，评级用双层朱文圆章。 */
+   设计语言：亮底 + 靛蓝主色 + 卡片化 + 语义风险色 + 发丝线。页面不再"纸感"：
+   冷灰亮底、白卡片、靛蓝作为唯一主强调（主按钮/导航/链接/进行中），红/琥珀/绿
+   只表达语义（高风险与闸口/失败=红，中风险/待确认=琥珀，通过/完成=绿），
+   弱化与边框用藏青灰阶。A 期令牌名（--paper/--seal/--ok/--warn 等）全部保留，
+   只换语义与色值，视图 scoped 内继续沿用。 */
 
 :root {
-  --paper: #f1ead9;          /* 页面底色：暖宣纸 */
-  --paper-2: #e9dfc8;        /* 深一度纸色：卡片底/悬停 */
-  --card: #fcf8ec;           /* 卡片纸面（偏亮） */
-  --card-2: #f6efdd;         /* 卡片次级底：输入框/引用块 */
-  --ink: #27241c;            /* 正文墨色 */
-  --ink-2: #4d4636;          /* 次级文字 */
-  --muted: #6d6350;          /* 弱化文字（土褐，非灰）——比初版加深一档，保证可读 */
-  --line: #d9cbab;           /* 常规分隔线（仿旧纸折痕） */
-  --line-strong: #b6a37c;    /* 强调线 */
-  --seal: #a5312c;           /* 朱砂红：主强调 */
-  --seal-deep: #7f211c;      /* 印泥深红：边框/阴影 */
-  --seal-soft: #f3dfd7;      /* 朱红浅底 */
-  --ok: #3d6a45;             /* 通过绿（沉稳石绿） */
-  --ok-soft: #e1ebdc;
-  --warn: #9c6b1c;           /* 待审琥珀 */
-  --warn-soft: #f2e5c4;
+  --bg: #f4f6fa;            /* 页面底色：冷灰亮底（仪表盘画布） */
+  --paper: #f4f6fa;         /* 兼容旧令牌：页面底色 */
+  --paper-2: #e9edf3;       /* 兼容旧令牌：次级底/悬停底 */
+  --card: #ffffff;          /* 卡片：纯白 */
+  --card-2: #f6f8fb;        /* 卡片次级底：输入框/引用块 */
+  --ink: #1c2433;           /* 正文：近黑藏青 */
+  --ink-2: #45516a;         /* 次级文字 */
+  --muted: #8493ab;         /* 弱化文字（灰蓝，保证可读） */
+  --line: #e3e8f0;          /* 发丝分隔线 */
+  --line-strong: #cdd6e4;   /* 强调线 */
+  --pri: #3456d1;           /* 靛蓝主色：主按钮/导航/链接/信息强调 */
+  --pri-deep: #2743ad;      /* 靛蓝深一档：hover/阴影 */
+  --pri-soft: #e9edfc;      /* 靛蓝浅底 */
+  --seal: #e0454f;          /* 语义红：高风险/待审批/失败 */
+  --seal-deep: #b03038;     /* 语义红深一档：边框/阴影 */
+  --seal-soft: #fdebee;     /* 语义红浅底 */
+  --ok: #2f9e63;            /* 通过绿 */
+  --ok-soft: #e6f4ec;
+  --warn: #c07f12;          /* 待审/中风险琥珀 */
+  --warn-soft: #fdf3df;
+  --info: #2f80d8;          /* 信息蓝：审查中/等待类过程态 */
+  --info-soft: #e8f2fc;
   --mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --serif: "Songti SC", "STSong", "SimSun", "Noto Serif CJK SC", serif;
-  --kai: "KaiTi", "STKaiti", "Kaiti SC", "楷体", serif;
-  --sans: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  --serif: "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
+  --kai: "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  --sans: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.07);
+  --r-sm: 8px;              /* 圆角刻度：按钮/胶囊/小件 */
+  --r-md: 10px;             /* 圆角刻度：卡片 */
+  --r-lg: 12px;             /* 圆角刻度：大卡/弹层 */
+  --r-xl: 14px;             /* 圆角刻度：抽屉 dock 内侧 */
 }
 
 * {
@@ -40,49 +52,12 @@ body {
   color: var(--ink);
   font-family: var(--sans);
   font-size: 15px;
-  line-height: 1.65;
+  line-height: 1.6;
 }
 
 body {
-  /* 纸感四层：暖底 + 双色晕染（右朱左金）+ 纸纤维颗粒（细斜纹+点状噪点） */
-  background-color: var(--paper);
-  background-image:
-    radial-gradient(1300px 560px at 108% -180px, rgba(165, 49, 44, 0.075), transparent 62%),
-    radial-gradient(1100px 520px at -120px 115%, rgba(156, 107, 28, 0.08), transparent 58%),
-    repeating-linear-gradient(-45deg, rgba(110, 92, 52, 0.012) 0 1px, transparent 1px 7px),
-    radial-gradient(1.4px 1.4px at 22% 34%, rgba(120, 96, 54, 0.13), transparent 62%),
-    radial-gradient(1.1px 1.1px at 71% 18%, rgba(120, 96, 54, 0.11), transparent 62%),
-    radial-gradient(1.6px 1.6px at 54% 82%, rgba(120, 96, 54, 0.10), transparent 62%);
-  background-attachment: fixed;
-}
-
-/* 巨幅印鉴水印（右下，极淡双圆环）：打破纯色底，但绝不抢内容 */
-body::before,
-body::after {
-  content: "";
-  position: fixed;
-  z-index: 0;
-  pointer-events: none;
-  border-radius: 50%;
-}
-
-body::before {
-  right: -170px;
-  bottom: -190px;
-  width: 560px;
-  height: 560px;
-  border: 1px solid rgba(165, 49, 44, 0.075);
-  box-shadow:
-    inset 0 0 0 46px rgba(165, 49, 44, 0.025),
-    inset 0 0 0 49px rgba(165, 49, 44, 0.055);
-}
-
-body::after {
-  right: -80px;
-  bottom: -100px;
-  width: 360px;
-  height: 360px;
-  border: 1px solid rgba(156, 107, 28, 0.06);
+  /* C 方向：干净亮底，去掉纸纹/双色晕染/水印，只留极淡的顶部冷光 */
+  background: var(--bg);
 }
 
 button,
@@ -104,90 +79,86 @@ button {
   font-family: var(--serif);
 }
 
-/* ---- 按钮：印钮（朱文主钮 / 描边墨钮 / 细线下划）---- */
+/* ---- 按钮：靛蓝实心主钮 / 白底描边钮 / 靛蓝文字链 ---- */
 .btn {
   border: 1px solid transparent;
-  border-radius: 3px;
-  padding: 8px 18px;
+  border-radius: var(--r-sm);
+  padding: 7px 15px;
+  font-size: 13.5px;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+  letter-spacing: 0.02em;
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease,
+    box-shadow 0.14s ease, transform 0.1s ease;
 }
 
 .btn:hover:not(:disabled) {
   transform: translateY(-1px);
 }
 
+.btn:active:not(:disabled) {
+  transform: none;
+}
+
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.55;
   cursor: not-allowed;
 }
 
 .btn-primary {
-  /* 主钮 = 压下去的朱文印：上浅下深，配印泥深边 */
-  font-family: var(--kai);
-  font-size: 15px;
-  letter-spacing: 0.24em;
-  padding: 8px 20px 8px 24px;
-  background: linear-gradient(#b5403a, #a5312c);
-  color: #fdf3e3;
-  border-color: var(--seal-deep);
-  box-shadow:
-    0 2px 0 var(--seal-deep),
-    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  background: var(--pri);
+  color: #fff;
+  border-color: var(--pri);
+  box-shadow: 0 1px 2px rgba(39, 67, 173, 0.28);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(#bd443d, #ae342e);
-  box-shadow:
-    0 3px 0 var(--seal-deep),
-    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  background: var(--pri-deep);
+  border-color: var(--pri-deep);
+  box-shadow: 0 2px 6px rgba(39, 67, 173, 0.3);
 }
 
 .btn-ghost {
-  background: transparent;
+  background: #fff;
   border-color: var(--line-strong);
   color: var(--ink-2);
-  box-shadow: inset 0 -1px 0 rgba(110, 92, 52, 0.06);
 }
 
 .btn-ghost:hover:not(:disabled) {
-  background: var(--paper-2);
-  color: var(--ink);
+  border-color: var(--pri);
+  color: var(--pri);
+  background: #f8faff;
 }
 
 .btn-plain {
   background: transparent;
-  color: var(--seal);
-  font-family: var(--kai);
-  font-size: 14px;
-  letter-spacing: 0.08em;
-  text-decoration: underline;
-  text-decoration-color: rgba(165, 49, 44, 0.4);
-  text-underline-offset: 4px;
+  color: var(--pri);
+  padding: 4px 8px;
+  border-radius: 6px;
+  letter-spacing: normal;
 }
 
-/* ---- 卡片：带"上沿受光"的纸页 ---- */
+.btn-plain:hover:not(:disabled) {
+  background: var(--pri-soft);
+  color: var(--pri-deep);
+}
+
+/* ---- 卡片：白底圆角 + 发丝线 + 轻投影 ---- */
 .card {
-  position: relative;
-  background: linear-gradient(180deg, #fdf9ee, #f7f0dd);
+  background: #fff;
   border: 1px solid var(--line);
-  border-radius: 4px;
-  box-shadow:
-    0 1px 0 rgba(90, 76, 45, 0.1),
-    0 1px 4px rgba(90, 76, 45, 0.05);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-card);
 }
 
-.card::before {
-  /* 纸面上沿一道受光白线，避免卡片贴底显得平 */
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 10px;
-  right: 10px;
-  height: 1px;
-  background: rgba(255, 255, 255, 0.7);
-  border-radius: 2px;
+/* 键盘可达：按钮统一靛蓝 focus 环（表单控件已有聚焦光圈，不重复描边） */
+button:focus-visible {
+  outline: 2px solid rgba(52, 86, 209, 0.55);
+  outline-offset: 2px;
+}
+
+textarea:focus-visible,
+input[type='text']:focus-visible {
+  outline: none;
 }
 
 /* ---- 弱化文本与等宽数字 ---- */
@@ -200,110 +171,102 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- 状态章（小圆点胶囊）：沿用旧语义色，深浅更雅 ---- */
+/* ---- 状态胶囊（小圆点 + 语义浅底）：沿用旧语义色，换 C 色值 ---- */
 .stamp {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 2px 11px;
-  border-radius: 999px;
-  font-size: 13px;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 6px;
+  font-size: 12.5px;
   font-weight: 600;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
 }
 
 .stamp::before {
   content: "";
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: currentColor;
-  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.04);
 }
 
 .stamp-seal {
-  color: var(--seal);
+  color: var(--seal-deep);
   background: var(--seal-soft);
-  border: 1px solid rgba(165, 49, 44, 0.22);
+  border-color: rgba(224, 69, 79, 0.22);
 }
 
 .stamp-ok {
   color: var(--ok);
   background: var(--ok-soft);
-  border: 1px solid rgba(61, 106, 69, 0.22);
+  border-color: rgba(47, 158, 99, 0.22);
 }
 
 .stamp-warn {
   color: var(--warn);
   background: var(--warn-soft);
-  border: 1px solid rgba(156, 107, 28, 0.22);
+  border-color: rgba(192, 127, 18, 0.22);
+}
+
+.stamp-info {
+  color: var(--info);
+  background: var(--info-soft);
+  border-color: rgba(47, 128, 216, 0.22);
 }
 
 .stamp-mute {
   color: var(--muted);
-  background: var(--paper-2);
-  border: 1px solid var(--line);
+  background: var(--card-2);
+  border-color: var(--line);
 }
 
-/* ---- 评级大圆章：双圈朱文/石绿印（任务详情页评级与闸口）---- */
+/* ---- 评级徽章（原"大圆章"换皮）：圆角方块色块，去旋转/双圈/楷体 ---- */
 .ring {
-  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 108px;
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 10px;
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   flex: none;
-  display: grid;
-  place-items: center;
-  width: 74px;
-  height: 74px;
-  border-radius: 50%;
-  font-family: var(--kai);
-  font-size: 18px;
-  letter-spacing: 0.12em;
-  transform: rotate(6deg);
-}
-
-.ring::after {
-  /* 内圈细虚线描边，营造盖印的"双圈"残缺感 */
-  content: "";
-  position: absolute;
-  inset: 6px;
-  border-radius: 50%;
-  border: 1px solid currentColor;
-  opacity: 0.55;
 }
 
 .ring-seal {
-  color: var(--seal);
-  border: 2px solid var(--seal);
-  box-shadow:
-    inset 0 0 0 3px var(--card),
-    inset 0 0 0 6px rgba(165, 49, 44, 0.55);
+  color: var(--seal-deep);
+  background: var(--seal-soft);
+  border: 1px solid rgba(224, 69, 79, 0.28);
 }
 
 .ring-ok {
   color: var(--ok);
-  border: 2px solid var(--ok);
-  box-shadow:
-    inset 0 0 0 3px var(--card),
-    inset 0 0 0 6px rgba(61, 106, 69, 0.55);
+  background: var(--ok-soft);
+  border: 1px solid rgba(47, 158, 99, 0.28);
 }
 
 .ring-warn {
   color: var(--warn);
-  border: 2px solid var(--warn);
-  box-shadow:
-    inset 0 0 0 3px var(--card),
-    inset 0 0 0 6px rgba(156, 107, 28, 0.5);
+  background: var(--warn-soft);
+  border: 1px solid rgba(192, 127, 18, 0.28);
 }
 
 .ring-mute {
   color: var(--muted);
-  border: 2px solid var(--line-strong);
+  background: var(--card-2);
+  border: 1px solid var(--line-strong);
 }
 
 /* ---- 进场动画与呼吸点 ---- */
 @keyframes rise {
   from {
     opacity: 0;
-    transform: translateY(9px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -312,7 +275,7 @@ button {
 }
 
 .rise {
-  animation: rise 0.32s ease both;
+  animation: rise 0.26s ease both;
 }
 
 @keyframes pulse {
@@ -329,23 +292,20 @@ button {
   animation: pulse 1.4s ease-in-out infinite;
 }
 
-/* ---- 表单控件：纸面凹槽 + 聚焦描红边 ---- */
+/* ---- 表单控件：白底细边 + 聚焦靛蓝光圈 ---- */
 textarea,
 input[type='text'] {
   border: 1px solid var(--line-strong);
-  background:
-    linear-gradient(180deg, #fbf5e6, #f7efda);
-  border-radius: 3px;
-  padding: 8px 10px;
+  background: #fff;
+  border-radius: var(--r-sm);
+  padding: 8px 11px;
   width: 100%;
-  box-shadow: inset 0 1px 2px rgba(90, 76, 45, 0.08);
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
 }
 
 textarea:focus,
 input[type='text']:focus {
   outline: none;
-  border-color: var(--seal);
-  box-shadow:
-    inset 0 1px 2px rgba(90, 76, 45, 0.06),
-    0 0 0 2px rgba(165, 49, 44, 0.14);
+  border-color: var(--pri);
+  box-shadow: 0 0 0 3px rgba(52, 86, 209, 0.15);
 }

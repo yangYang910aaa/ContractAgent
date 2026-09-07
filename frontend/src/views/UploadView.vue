@@ -110,28 +110,15 @@ async function uploadAll() {
 }
 
 .head h2 {
-  font-family: var(--serif);
-  font-size: 26px;
-  letter-spacing: 0.12em;
+  font-size: 21px;
+  letter-spacing: 0.02em;
   margin: 0 0 4px;
-  padding-left: 15px;
-  position: relative;
-}
-
-.head h2::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0.2em;
-  bottom: 0.2em;
-  width: 4px;
-  border-radius: 2px;
-  background: linear-gradient(180deg, var(--seal), rgba(165, 49, 44, 0.3));
+  font-weight: 700;
 }
 
 .head p {
-  margin: 0 0 20px;
-  font-size: 13.5px;
+  margin: 0 0 18px;
+  font-size: 13px;
 }
 
 .drop {
@@ -140,43 +127,41 @@ async function uploadAll() {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 40px 20px 34px;
-  border-style: dashed;
+  padding: 46px 20px 38px;
+  border: 1.5px dashed var(--line-strong);
+  border-radius: 14px;
+  background: #fff;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
 
 .drop::before {
-  /* 上传入口 = 虚线朱环 + 「＋」：比纯文字更有"往这里放"的指向 */
+  /* 上传入口 = 靛蓝浅底圆角块 + 「＋」：比纯文字更有"往这里放"的指向 */
   content: "＋";
   display: grid;
   place-items: center;
-  width: 54px;
-  height: 54px;
-  margin-bottom: 6px;
-  border-radius: 50%;
-  border: 1.5px dashed var(--seal);
-  color: var(--seal);
-  font-size: 26px;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 8px;
+  border-radius: 12px;
+  background: var(--pri-soft);
+  color: var(--pri);
+  font-size: 22px;
+  font-weight: 400;
   line-height: 1;
-  font-weight: 300;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-  box-shadow: inset 0 0 0 4px rgba(165, 49, 44, 0.06);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
 
 .drop:hover {
-  border-color: var(--seal);
-  background: linear-gradient(180deg, #fdf9ee, #f5ecda);
-  box-shadow:
-    0 2px 0 rgba(165, 49, 44, 0.25),
-    0 6px 18px rgba(90, 76, 45, 0.08);
+  border-color: var(--pri);
+  background: #f8faff;
+  box-shadow: 0 4px 16px rgba(52, 86, 209, 0.1);
 }
 
 .drop:hover::before {
-  transform: rotate(12deg) scale(1.05);
-  box-shadow:
-    inset 0 0 0 4px rgba(165, 49, 44, 0.06),
-    0 0 0 5px rgba(165, 49, 44, 0.08);
+  transform: scale(1.07);
+  background: var(--pri);
+  color: #fff;
 }
 
 .drop input {
@@ -184,16 +169,16 @@ async function uploadAll() {
 }
 
 .drop-main {
-  font-family: var(--serif);
-  font-size: 17px;
-  letter-spacing: 0.08em;
+  font-size: 15.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .drop-sub {
   font-size: 12.5px;
   color: var(--muted);
   font-family: var(--mono);
-  letter-spacing: 0.06em;
+  letter-spacing: 0.03em;
 }
 
 .files {
@@ -212,7 +197,7 @@ async function uploadAll() {
 
 .files li + li,
 .results li + li {
-  border-top: 1px dashed var(--line);
+  border-top: 1px solid var(--line);
 }
 
 .fname {
@@ -221,6 +206,7 @@ async function uploadAll() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 500;
 }
 
 .fsize {
@@ -241,13 +227,13 @@ async function uploadAll() {
 }
 
 .actions {
-  margin: 18px 0;
+  margin: 16px 0;
   display: flex;
   gap: 10px;
 }
 
 .results {
-  padding: 14px 16px;
+  padding: 12px 16px;
 }
 
 .results ul {
@@ -257,9 +243,10 @@ async function uploadAll() {
 }
 
 .r-title {
-  margin: 0 0 6px;
-  font-size: 17px;
-  letter-spacing: 0.1em;
+  margin: 2px 0 8px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .r-actions {

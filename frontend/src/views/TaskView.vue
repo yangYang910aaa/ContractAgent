@@ -50,6 +50,24 @@ const drawerRisks = computed(() => {
   }))
 })
 
+/** 右栏"原文核对"清单：把风险项的 clause_ref 去重聚合，取最高 severity 并计数。 */
+const hitClauses = computed(() => {
+  const seen = new Map<string, { clause: string; sev: string; count: number }>()
+  for (const r of drawerRisks.value) {
+    const clause = (r.clause_ref ?? '').trim()
+    if (!clause) continue
+    const sev = r.severity === 'medium' ? 'medium' : 'high'
+    const cur = seen.get(clause)
+    if (cur) {
+      cur.count += 1
+      if (cur.sev === 'medium' && sev === 'high') cur.sev = sev
+    } else {
+      seen.set(clause, { clause, sev, count: 1 })
+    }
+  }
+  return [...seen.values()]
+})
+
 // 状态/评级/等级 → 中文与印章样式（含义见 style.css 的 .stamp-* 族）
 const statusText: Record<TaskStatus, string> = {
   pending: '排队中',
@@ -263,11 +281,17 @@ function downloadReport() {
   URL.revokeObjectURL(url)
 }
 
-/** U2：打开原文抽屉；带 clause 时（风险项点「原文」）定位到对应条款块。 */
-function openSource(clause?: string) {
-  // seq 自增：同一 clause 反复点击也会触发抽屉内 watch 重新滚动
-  if (clause) {
-    sourceAnchor.value = { clause, seq: (sourceAnchor.value?.seq ?? 0) + 1 }
+/** U2：打开原文抽屉。有 clause 时定位到对应条款块；无条款号但有 evidence 的
+ *  中风险项（如"保密条款缺失"）按摘录定位到所在条款块——报告里所有风险都能
+ *  "原文定位"，而不是只有带条款号的高风险。 */
+function openSource(clause?: string, evidence?: string) {
+  // seq 自增：同一目标反复点击也会触发抽屉内 watch 重新滚动
+  if (clause || evidence) {
+    sourceAnchor.value = {
+      clause: clause ?? '',
+      evidence: evidence ?? '',
+      seq: (sourceAnchor.value?.seq ?? 0) + 1,
+    }
   } else {
     sourceAnchor.value = null
   }
@@ -309,158 +333,247 @@ function openSource(clause?: string) {
       <p class="muted">正在抽取字段 → 规则审查 → 政策比对，约需 30~60 秒</p>
     </div>
 
-    <!-- 待审批闸口 -->
+    <!-- 待审批闸口（与报告页同款两栏：左=待审风险与审批，右=结论预览/原文核对） -->
     <div v-else-if="detail.status === 'gate' && detail.gate_payload" class="gate">
-      <div class="card pad">
-        <div class="gate-head">
-          <h3>高风险，需人工审批</h3>
-          <span class="ring ring-seal">{{ gradeText[detail.grade ?? 'fail'] ?? '不通过' }}</span>
-        </div>
-        <div v-for="(r, i) in detail.gate_payload.high_risks" :key="i" class="risk card">
-          <div class="risk-top">
-            <span class="stamp stamp-seal">{{ severityText.high }}</span>
-            <span class="risk-type serif">{{ riskLabel(r) }}</span>
-            <span v-if="r.policy_ref" class="mono-num ref">{{ r.policy_ref }}</span>
+      <div class="rep-grid">
+        <div class="rep-main">
+          <!-- 文件头：文件名 + 任务号 + 当前状态 -->
+          <div class="card pad head">
+            <div class="h-main">
+              <p class="file serif">{{ detail.source }}</p>
+              <p class="meta muted mono-num">{{ detail.thread_id }}</p>
+            </div>
+            <span class="stamp stamp-seal">待人工审批</span>
           </div>
-          <button v-if="r.clause_ref" class="clause-link muted" @click="openSource(r.clause_ref)">
-            条款：{{ r.clause_ref }} · 原文定位
-          </button>
-          <p v-if="r.evidence" class="quote">「{{ r.evidence }}」</p>
-          <p v-if="r.suggestion" class="suggest">{{ prettyField(r.suggestion) }}</p>
+
+          <!-- 警报条：解释为什么停在这里 -->
+          <div class="card pad gate-alert">
+            <div class="alert-top">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"></path><path d="M12 8v4M12 15.5v.5"></path></svg>
+              <h3>高风险，需人工审批</h3>
+            </div>
+            <p class="muted">检测到 {{ detail.gate_payload.high_risks.length }} 项高风险：请核对原文条款与政策依据后选择放行或打回；审批意见与动作会写入最终报告留痕。</p>
+          </div>
+
+          <!-- 待审风险清单：高风险逐条展示（可点原文定位） -->
+          <h4>待审风险</h4>
+          <div v-for="(r, i) in detail.gate_payload.high_risks" :key="i" class="risk card">
+            <div class="risk-top">
+              <span class="stamp stamp-seal">{{ severityText.high }}</span>
+              <span class="risk-type serif">{{ riskLabel(r) }}</span>
+              <span v-if="r.policy_ref" class="mono-num ref">{{ r.policy_ref }}</span>
+            </div>
+            <button v-if="r.clause_ref || r.evidence" class="clause-link"
+                    @click="openSource(r.clause_ref ?? '', r.evidence ?? '')">
+              {{ r.clause_ref ? `条款：${r.clause_ref} · 原文定位` : '原文定位' }}
+            </button>
+            <p v-if="r.evidence" class="quote">「{{ r.evidence }}」</p>
+            <p v-if="r.suggestion" class="suggest">{{ prettyField(r.suggestion) }}</p>
+          </div>
+
+          <!-- 人工审批：意见 + 放行/打回/编辑重审 -->
+          <div class="card pad approval-card">
+            <h3>人工审批</h3>
+            <div class="approval">
+              <textarea v-model="note" rows="2" placeholder="审批意见（打回必填原因，留痕可追溯）"></textarea>
+              <p v-if="actionError" class="err">{{ actionError }}</p>
+              <div class="btns">
+                <button class="btn btn-primary" :disabled="acting" @click="doApprove">放行</button>
+                <button class="btn btn-ghost reject" :disabled="acting" @click="doReject">打回</button>
+                <button class="btn btn-plain" @click="showEdit = !showEdit">{{ showEdit ? '收起' : '编辑字段重审' }}</button>
+              </div>
+              <div v-if="showEdit" class="edit-panel">
+                <label class="muted">字段补丁（JSON，键=ContractModel 字段名）</label>
+                <textarea v-model="patchText" rows="4" class="mono-num"></textarea>
+                <button class="btn btn-ghost" :disabled="acting" @click="doEdit">提交并重审</button>
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div class="approval">
-          <textarea v-model="note" rows="2" placeholder="审批意见（打回必填原因，留痕可追溯）"></textarea>
-          <p v-if="actionError" class="err">{{ actionError }}</p>
-          <div class="btns">
-            <button class="btn btn-primary" :disabled="acting" @click="doApprove">放行</button>
-            <button class="btn btn-ghost" :disabled="acting" @click="doReject">打回</button>
-            <button class="btn btn-plain" @click="showEdit = !showEdit">{{ showEdit ? '收起' : '编辑字段重审' }}</button>
+        <!-- 右栏：结论预览 + 原文核对（闸口阶段还没有最终报告/抽取字段落库） -->
+        <aside class="rep-side">
+          <div class="card s-card">
+            <h3>审批结论预览</h3>
+            <div class="s-verdict">
+              <span class="ring ring-seal">{{ gradeText[detail.grade ?? 'fail'] ?? '不通过' }}</span>
+              <div class="s-verdict-meta">
+                <span class="stamp stamp-seal">待审批</span>
+                <span class="s-mode muted">高风险 {{ detail.gate_payload.high_risks.length }} 项</span>
+              </div>
+            </div>
           </div>
-          <div v-if="showEdit" class="edit-panel">
-            <label class="muted">字段补丁（JSON，键=ContractModel 字段名）</label>
-            <textarea v-model="patchText" rows="4" class="mono-num"></textarea>
-            <button class="btn btn-ghost" :disabled="acting" @click="doEdit">提交并重审</button>
+
+          <div class="card s-card">
+            <h3>原文核对</h3>
+            <template v-if="hitClauses.length">
+              <button
+                v-for="h in hitClauses"
+                :key="h.clause"
+                class="s-clause"
+                @click="openSource(h.clause)"
+              >
+                <span class="dot-sev" :class="h.sev"></span>
+                <span class="c-txt">{{ h.clause }}</span>
+                <span class="mono-num c-cnt">命中 {{ h.count }}</span>
+              </button>
+            </template>
+            <p v-else class="s-empty muted">本任务暂无命中条款，可打开原文人工核对</p>
+            <button class="btn btn-ghost s-more" @click="openSource()">打开原文全文</button>
           </div>
-        </div>
+        </aside>
       </div>
     </div>
 
-    <!-- 完成：报告 -->
+    <!-- 完成：报告（宽屏两栏：左=主流程，右=结论速览/关键字段/原文核对） -->
     <div v-else-if="detail.status === 'done' && detail.report" class="report">
-      <!-- 报告头：文件名 + 评级章 -->
-      <div class="card pad head">
-        <div>
-          <p class="file serif">{{ detail.source }}</p>
-          <p class="muted">评级</p>
-        </div>
-        <span class="ring" :class="ringClass[detail.report.grade ?? ''] ?? 'ring-mute'">
-          {{ gradeDisplay(detail.report.grade) }}
-        </span>
-      </div>
-
-      <!-- 报告速览：评级/风险数/政策数/模式 + 导出 -->
-      <div class="sum card">
-        <div class="sum-item">
-          <span class="muted">风险</span>
-          <b class="mono-num">{{ listRisks.length }}</b>
-        </div>
-        <div class="sum-item">
-          <span class="muted">政策引用</span>
-          <b class="mono-num">{{ detail.report.policy_hits?.length ?? 0 }}</b>
-        </div>
-        <div class="sum-item">
-          <span class="muted">审查模式</span>
-          <b class="mono-num">{{ reviewModeText[detail.report.review_mode ?? ''] ?? '单审' }}</b>
-        </div>
-        <button class="btn btn-ghost" @click="downloadReport">导出 JSON</button>
-      </div>
-
-      <!-- 审批留痕：done 报告里回显最近一次审批动作与意见 -->
-      <div v-if="detail.report.approval" class="card pad appr">
-        <span class="muted">审批记录：</span>
-        <b>{{ detail.report.approval.action === 'approved' ? '放行' : detail.report.approval.action === 'rejected' ? '打回' : '编辑重审' }}</b>
-        <span v-if="detail.report.approval.reviewer_note" class="note">「{{ detail.report.approval.reviewer_note }}」</span>
-      </div>
-
-      <!-- 结论条：疑似空白模板单独成结论，不混进下方风险清单 -->
-      <div v-if="templateNotice" class="card pad tpl-notice">
-        <p class="tpl-title serif">结论：疑似空白模板，未填写内容较多</p>
-        <p v-if="templateNotice.evidence" class="tpl-ev">占位示例：「{{ templateNotice.evidence }}」</p>
-        <p class="tpl-sug">{{ prettyField(templateNotice.suggestion ?? '') }}</p>
-      </div>
-
-      <!-- 风险清单：空=自动放行提示，非空逐条展示 -->
-      <template v-if="listRisks.length">
-        <h4>风险清单</h4>
-        <div v-for="(r, i) in listRisks" :key="i" class="risk card">
-          <div class="risk-top">
-            <span class="stamp" :class="severityClass[r.severity]">{{ severityText[r.severity] }}</span>
-            <span class="risk-type serif">{{ riskLabel(r) }}</span>
-            <span v-if="r.policy_ref" class="mono-num ref">{{ r.policy_ref }}</span>
+      <div class="rep-grid">
+        <div class="rep-main">
+          <!-- 报告头：文件名 + 元信息 + 导出 -->
+          <div class="card pad head">
+            <div class="h-main">
+              <p class="file serif">{{ detail.source }}</p>
+              <p class="meta muted mono-num">{{ detail.thread_id }}</p>
+            </div>
+            <button class="btn btn-ghost" @click="downloadReport">导出 JSON</button>
           </div>
-          <button v-if="r.clause_ref" class="clause-link muted" @click="openSource(r.clause_ref)">
-            条款：{{ r.clause_ref }} · 原文定位
-          </button>
-          <p v-if="r.evidence" class="quote">「{{ r.evidence }}」</p>
-          <p v-if="r.suggestion" class="suggest">{{ prettyField(r.suggestion) }}</p>
-        </div>
-      </template>
-      <template v-else-if="!templateNotice">
-        <p class="none ok-text serif">未发现风险 · 自动放行</p>
-      </template>
 
-      <!-- 政策引用：policy_ref + 相似度 + 制度原文片段 -->
-      <template v-if="detail.report.policy_hits?.length">
-        <h4>政策引用</h4>
-        <div v-for="(h, i) in detail.report.policy_hits" :key="i" class="card pad hit">
-          <!-- 逐行排版：编号 / 相似度 / 标题 / 元信息 / 条文各占一行 -->
-          <p class="pl pl-ref"><span class="mono-num ref">{{ h.policy_ref }}</span></p>
-          <p v-if="h.score != null" class="pl pl-score muted">相似度 {{ Number(h.score).toFixed(3) }}</p>
-          <template v-if="policyReflow(h.snippet ?? '').length">
-            <p
-              v-for="(ln, li) in policyReflow(h.snippet ?? '')"
-              :key="li"
-              class="pl"
-              :class="policyRowClass(li, ln)"
-            >
-              <template v-if="policyRowParts(ln).lbl">
-                <span class="lbl">{{ policyRowParts(ln).lbl }}</span>{{ policyRowParts(ln).val }}
+          <!-- 审批留痕：done 报告里回显最近一次审批动作与意见 -->
+          <div v-if="detail.report.approval" class="card pad appr">
+            <span class="muted">审批记录：</span>
+            <b>{{ detail.report.approval.action === 'approved' ? '放行' : detail.report.approval.action === 'rejected' ? '打回' : '编辑重审' }}</b>
+            <span v-if="detail.report.approval.reviewer_note" class="note">「{{ detail.report.approval.reviewer_note }}」</span>
+          </div>
+
+          <!-- 结论条：疑似空白模板单独成结论，不混进下方风险清单 -->
+          <div v-if="templateNotice" class="card pad tpl-notice">
+            <p class="tpl-title serif">结论：疑似空白模板，未填写内容较多</p>
+            <p v-if="templateNotice.evidence" class="tpl-ev">占位示例：「{{ templateNotice.evidence }}」</p>
+            <p class="tpl-sug">{{ prettyField(templateNotice.suggestion ?? '') }}</p>
+          </div>
+
+          <!-- 风险清单：空=自动放行提示，非空逐条展示 -->
+          <template v-if="listRisks.length">
+            <h4>风险清单</h4>
+            <div v-for="(r, i) in listRisks" :key="i" class="risk card">
+              <div class="risk-top">
+                <span class="stamp" :class="severityClass[r.severity]">{{ severityText[r.severity] }}</span>
+                <span class="risk-type serif">{{ riskLabel(r) }}</span>
+                <span v-if="r.policy_ref" class="mono-num ref">{{ r.policy_ref }}</span>
+              </div>
+              <button v-if="r.clause_ref || r.evidence" class="clause-link"
+                      @click="openSource(r.clause_ref ?? '', r.evidence ?? '')">
+                {{ r.clause_ref ? `条款：${r.clause_ref} · 原文定位` : '原文定位' }}
+              </button>
+              <p v-if="r.evidence" class="quote">「{{ r.evidence }}」</p>
+              <p v-if="r.suggestion" class="suggest">{{ prettyField(r.suggestion) }}</p>
+            </div>
+          </template>
+          <template v-else-if="!templateNotice">
+            <p class="none ok-text serif">未发现风险 · 自动放行</p>
+          </template>
+
+          <!-- 政策引用：policy_ref + 相似度 + 制度原文片段 -->
+          <template v-if="detail.report.policy_hits?.length">
+            <h4>政策引用</h4>
+            <div v-for="(h, i) in detail.report.policy_hits" :key="i" class="card pad hit">
+              <!-- 逐行排版：编号 / 相似度 / 标题 / 元信息 / 条文各占一行 -->
+              <p class="pl pl-ref"><span class="mono-num ref">{{ h.policy_ref }}</span></p>
+              <p v-if="h.score != null" class="pl pl-score muted">相似度 {{ Number(h.score).toFixed(3) }}</p>
+              <template v-if="policyReflow(h.snippet ?? '').length">
+                <p
+                  v-for="(ln, li) in policyReflow(h.snippet ?? '')"
+                  :key="li"
+                  class="pl"
+                  :class="policyRowClass(li, ln)"
+                >
+                  <template v-if="policyRowParts(ln).lbl">
+                    <span class="lbl">{{ policyRowParts(ln).lbl }}</span>{{ policyRowParts(ln).val }}
+                  </template>
+                  <template v-else>{{ ln }}</template>
+                </p>
               </template>
-              <template v-else>{{ ln }}</template>
-            </p>
-          </template>
-          <!-- 完整条文默认收起，需要核对政策依据时展开看全文（不再只看截断片段） -->
-          <details v-if="h.text" class="policy-more">
-            <summary class="muted">查看完整条文</summary>
-            <div class="policy-full">
-              <p v-for="(ln, li) in policyReflow(h.text)" :key="li" :class="policyRowClass(li, ln)">
-                <template v-if="policyRowParts(ln).lbl">
-                  <span class="lbl">{{ policyRowParts(ln).lbl }}</span>{{ policyRowParts(ln).val }}
-                </template>
-                <template v-else>{{ ln }}</template>
-              </p>
+              <!-- 完整条文默认收起，需要核对政策依据时展开看全文（不再只看截断片段） -->
+              <details v-if="h.text" class="policy-more">
+                <summary class="muted">查看完整条文</summary>
+                <div class="policy-full">
+                  <p v-for="(ln, li) in policyReflow(h.text)" :key="li" :class="policyRowClass(li, ln)">
+                    <template v-if="policyRowParts(ln).lbl">
+                      <span class="lbl">{{ policyRowParts(ln).lbl }}</span>{{ policyRowParts(ln).val }}
+                    </template>
+                    <template v-else>{{ ln }}</template>
+                  </p>
+                </div>
+              </details>
             </div>
-          </details>
+          </template>
         </div>
-      </template>
 
-      <!-- 抽取字段：仅展示有值的字段（null 不占行），避免长列表空行噪音 -->
-      <template v-if="detail.report.extracted">
-        <h4>抽取字段</h4>
-        <div class="card grid">
-          <template v-for="(label, key) in fieldLabels" :key="key">
-            <div v-if="extVal(key) != null" class="kv">
-              <dt>{{ label }}</dt>
-              <dd class="mono-num">{{ extText(key) }}</dd>
+        <!-- 右栏：sticky 速览（窄屏自动落到主流程下方） -->
+        <aside class="rep-side">
+          <div class="card s-card">
+            <h3>报告结论</h3>
+            <div class="s-verdict">
+              <span class="ring" :class="ringClass[detail.report.grade ?? ''] ?? 'ring-mute'">
+                {{ gradeDisplay(detail.report.grade) }}
+              </span>
+              <div class="s-verdict-meta">
+                <!-- 疑似空白模板在展示层标"待确认"（琥珀），避免"已完成"的误导 -->
+                <span class="stamp" :class="detail.template ? 'stamp-warn' : 'stamp-ok'">
+                  {{ detail.template ? '待确认' : '已完成' }}
+                </span>
+                <span class="s-mode muted">审查模式：{{ reviewModeText[detail.report.review_mode ?? ''] ?? '单审' }}</span>
+              </div>
             </div>
-          </template>
-          <div v-if="paymentText(extVal('payment_schedule'))" class="kv">
-            <dt>付款期次</dt>
-            <dd class="mono-num">{{ paymentText(extVal('payment_schedule')) }}</dd>
+            <div class="s-stats">
+              <div class="s-stat">
+                <span>风险</span>
+                <b class="mono-num" :class="{ bad: listRisks.length > 0 }">{{ listRisks.length }}</b>
+              </div>
+              <div class="s-stat">
+                <span>政策引用</span>
+                <b class="mono-num">{{ detail.report.policy_hits?.length ?? 0 }}</b>
+              </div>
+            </div>
           </div>
-        </div>
-      </template>
+
+          <!-- 关键抽取字段：只展示有值字段（null 不占行），右栏速览用 -->
+          <div v-if="detail.report.extracted" class="card s-card">
+            <h3>关键字段</h3>
+            <div class="s-kvs">
+              <template v-for="(label, key) in fieldLabels" :key="key">
+                <div v-if="extVal(key) != null" class="s-kv">
+                  <dt>{{ label }}</dt>
+                  <dd class="mono-num">{{ extText(key) }}</dd>
+                </div>
+              </template>
+              <div v-if="paymentText(extVal('payment_schedule'))" class="s-kv">
+                <dt>付款期次</dt>
+                <dd class="mono-num">{{ paymentText(extVal('payment_schedule')) }}</dd>
+              </div>
+            </div>
+          </div>
+
+          <!-- 原文核对：聚合命中条款，点任意一条即滑出抽屉定位 -->
+          <div class="card s-card">
+            <h3>原文核对</h3>
+            <template v-if="hitClauses.length">
+              <button
+                v-for="h in hitClauses"
+                :key="h.clause"
+                class="s-clause"
+                @click="openSource(h.clause)"
+              >
+                <span class="dot-sev" :class="h.sev"></span>
+                <span class="c-txt">{{ h.clause }}</span>
+                <span class="mono-num c-cnt">命中 {{ h.count }}</span>
+              </button>
+            </template>
+            <p v-else class="s-empty muted">本任务暂无命中条款，可打开原文通读核对</p>
+            <button class="btn btn-ghost s-more" @click="openSource()">打开原文全文</button>
+          </div>
+        </aside>
+      </div>
     </div>
 
     <!-- 失败 -->
@@ -482,7 +595,7 @@ function openSource(clause?: string) {
 
 <style scoped>
 .task {
-  max-width: 860px;
+  max-width: 1240px;
 }
 
 .bar {
@@ -510,12 +623,11 @@ function openSource(clause?: string) {
 }
 
 .big {
-  font-size: 22px;
-  letter-spacing: 0.2em;
-  color: var(--seal);
+  font-size: 20px;
+  letter-spacing: 0.04em;
+  color: var(--info);
 }
 
-.gate-head,
 .risk-top {
   display: flex;
   align-items: center;
@@ -523,28 +635,87 @@ function openSource(clause?: string) {
   flex-wrap: wrap;
 }
 
-.gate-head h3,
 .report h4 {
-  font-family: var(--serif);
   margin: 0;
+  font-weight: 700;
 }
 
-.gate-head {
-  justify-content: space-between;
-  margin-bottom: 14px;
+/* 评级徽章在卡片头/右栏里适当收敛（全局 .ring 是 108px 宽的色块） */
+.s-verdict .ring {
+  min-width: 92px;
+  height: 38px;
+  font-size: 13.5px;
 }
 
-/* 评级大圆章在卡片头里适当收敛尺寸（全局 .ring 默认 74px 偏大） */
-.gate-head .ring,
-.head .ring {
-  width: 62px;
-  height: 62px;
+/* ---- 闸口页（与报告页同款两栏）---- */
+.gate h4 {
+  margin: 8px 0 10px;
+  padding-left: 10px;
+  border-left: 3px solid var(--seal);
   font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
+}
+
+.gate-alert {
+  border: 1px solid rgba(224, 69, 79, 0.2);
+  border-left: 3px solid var(--seal);
+  background: var(--seal-soft);
+}
+
+.alert-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--seal-deep);
+}
+
+.alert-top svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.alert-top h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.gate-alert p {
+  margin: 6px 0 0;
+  font-size: 13px;
+}
+
+.approval-card h3 {
+  margin: 0 0 6px;
+  font-size: 14.5px;
+  font-weight: 700;
+}
+
+.approval-card .approval {
+  margin-top: 0;
+}
+
+/* 打回 = 拦截动作，用红描边表达否定语义（区别于主操作的靛蓝） */
+.btn-ghost.reject {
+  color: var(--seal-deep);
+  border-color: rgba(224, 69, 79, 0.45);
+}
+
+.btn-ghost.reject:hover:not(:disabled) {
+  color: var(--seal-deep);
+  border-color: var(--seal);
+  background: var(--seal-soft);
 }
 
 .risk {
   padding: 12px 16px;
   margin: 10px 0;
+  border-left: 3px solid var(--line);
+  border-radius: 8px;
 }
 
 .risk-type {
@@ -552,24 +723,23 @@ function openSource(clause?: string) {
 }
 
 .ref {
-  font-size: 12.5px;
-  color: var(--seal);
-  border: 1px solid var(--seal-soft);
-  background: var(--seal-soft);
-  border-radius: 4px;
-  padding: 1px 7px;
+  font-size: 12px;
+  color: var(--pri);
+  border: 1px solid rgba(52, 86, 209, 0.22);
+  background: var(--pri-soft);
+  border-radius: 6px;
+  padding: 1px 8px;
 }
 
 .quote {
-  /* 证据 = 纸面朱批：左侧朱线 + 极淡朱底，正文保持宋体原样 */
-  border-left: 3px solid var(--seal);
-  background: linear-gradient(90deg, rgba(165, 49, 44, 0.055), rgba(165, 49, 44, 0) 72%);
-  padding: 6px 12px 6px 12px;
+  /* 证据 = 原文章节摘录：靛蓝细边 + 浅灰蓝底，保持等宽数字与正文区分 */
+  border-left: 3px solid var(--pri);
+  background: var(--card-2);
+  padding: 8px 12px;
   margin: 6px 0;
   color: var(--ink-2);
-  font-family: var(--serif);
   font-size: 14px;
-  border-radius: 0 3px 3px 0;
+  border-radius: 0 8px 8px 0;
 }
 
 .suggest {
@@ -581,9 +751,11 @@ function openSource(clause?: string) {
   border: 0;
   background: transparent;
   padding: 0;
-  font-size: 13.5px;
+  font-size: 13px;
   text-align: left;
   cursor: pointer;
+  color: var(--pri);
+  font-weight: 600;
 }
 
 .clause-link:hover {
@@ -614,15 +786,27 @@ function openSource(clause?: string) {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 14px;
 }
 
 .head .file {
-  font-size: 18px;
+  font-size: 16px;
+  font-weight: 700;
   margin: 0 0 2px;
+  word-break: break-all;
+}
+
+.h-main {
+  min-width: 0;
 }
 
 .head p {
   margin: 0;
+}
+
+.head .meta {
+  font-size: 12px;
+  margin-top: 2px;
 }
 
 .appr {
@@ -630,25 +814,30 @@ function openSource(clause?: string) {
   display: flex;
   gap: 8px;
   align-items: baseline;
+  background: var(--card-2);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13.5px;
 }
 
 .appr .note {
   color: var(--ink-2);
 }
 
-/* 结论条：疑似空白模板（琥珀强调，区别于风险清单卡片） */
+/* 结论条：疑似空白模板 = 待确认（琥珀语义色面板，区别于风险清单卡片） */
 .tpl-notice {
   margin-top: 12px;
   border-left: 4px solid var(--warn);
-  background: linear-gradient(180deg, #fdf6e2, #f7eccb);
+  background: var(--warn-soft);
+  border-radius: 8px;
 }
 
 .tpl-title {
   margin: 0 0 6px;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
-  letter-spacing: 0.1em;
-  color: #7a5510;
+  letter-spacing: 0.03em;
+  color: var(--warn);
 }
 
 .tpl-ev {
@@ -661,12 +850,16 @@ function openSource(clause?: string) {
 .tpl-sug {
   margin: 0;
   font-size: 13.5px;
-  color: #6d5a2e;
+  color: var(--ink-2);
 }
 
 .report h4 {
-  margin: 22px 0 6px;
-  letter-spacing: 0.1em;
+  margin: 22px 0 8px;
+  padding-left: 10px;
+  border-left: 3px solid var(--pri);
+  font-size: 15.5px;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
 }
 
 .none {
@@ -683,55 +876,61 @@ function openSource(clause?: string) {
   margin: 8px 0;
 }
 
-/* 政策卡逐行排版：字号加大加粗，标题/元信息/适用范围用颜色分层 */
+/* 政策卡逐行排版（C 语义色分层）：标题=靛蓝、相似度=琥珀、元信息=灰蓝、
+   适用范围标签=靛蓝、条文头=墨色加粗 */
 .pl {
   margin: 0;
-  font-size: 15px;
-  line-height: 2;
+  font-size: 14.5px;
+  line-height: 1.9;
   font-weight: 500;
   color: var(--ink-2);
 }
 
 .pl-ref {
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .hit .ref {
-  font-size: 14px;
+  font-size: 13px;
   padding: 2px 11px;
 }
 
 .pl-score {
-  margin: 0 0 8px;
-  font-size: 14px;
+  margin: 0 0 6px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--warn);
 }
 
-/* 细则标题：朱砂红、最大最粗 */
+/* 细则标题：靛蓝、最大最粗 */
 .pl-title {
-  color: var(--seal);
-  font-size: 17px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
+  color: var(--pri);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
-/* 文件编号/版本/生效日期：小号元信息，标签用琥珀强调 */
+/* 文件编号/版本/生效日期：小号元信息，标签琥珀强调 */
 .pl-meta {
-  font-size: 13.8px;
+  font-size: 13px;
   color: var(--muted);
 }
 
-.pl-meta .lbl,
-.pl-scope .lbl {
+.pl-meta .lbl {
   color: var(--warn);
   font-weight: 700;
   margin-right: 0.2em;
 }
 
-/* 归口部门/适用范围：正文墨色，标签琥珀 */
+/* 归口部门/适用范围：正文墨色，标签靛蓝 */
+.pl-scope .lbl {
+  color: var(--pri);
+  font-weight: 700;
+  margin-right: 0.2em;
+}
+
 .pl-scope {
-  font-size: 15px;
+  font-size: 14.5px;
   color: var(--ink);
 }
 
@@ -742,7 +941,7 @@ function openSource(clause?: string) {
 }
 
 .pl-article .lbl {
-  color: var(--seal);
+  color: var(--pri);
 }
 
 .snip {
@@ -768,11 +967,10 @@ function openSource(clause?: string) {
   margin: 8px 0 0;
   padding: 10px 12px;
   background: var(--card-2);
-  border: 1px dashed var(--line);
-  border-radius: 3px;
-  font-family: var(--sans);
+  border: 1px solid var(--line);
+  border-radius: 8px;
   font-size: 14px;
-  line-height: 2;
+  line-height: 1.9;
   color: var(--ink-2);
 }
 
@@ -782,29 +980,184 @@ function openSource(clause?: string) {
   overflow-wrap: break-word;
 }
 
-.grid {
+/* ---- 报告两栏：左主流程 + 右侧 sticky 速览（窄屏自动回落单栏） ---- */
+.rep-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 304px;
+  gap: 18px;
+  align-items: start;
+}
+
+.rep-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.rep-side {
+  position: sticky;
+  top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+@media (max-width: 1080px) {
+  .rep-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .rep-side {
+    position: static;
+  }
+}
+
+/* 右栏卡片 */
+.s-card {
+  padding: 14px 16px;
+}
+
+.s-card h3 {
+  font-size: 13.5px;
+  font-weight: 700;
+  margin: 0 0 12px;
+}
+
+.s-verdict {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
+.s-verdict-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.s-mode {
+  font-size: 12px;
+}
+
+.s-stats {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
 }
 
-.kv {
-  padding: 9px 16px;
-  border-bottom: 1px dashed var(--line);
+.s-stat {
+  display: flex;
+  flex-direction: column;
 }
 
-.kv:nth-last-child(-n + 2) {
+.s-stat span {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.s-stat b {
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+.s-stat b.bad {
+  color: var(--seal-deep);
+}
+
+.s-kvs {
+  display: flex;
+  flex-direction: column;
+}
+
+.s-kv {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.s-kv:last-child {
   border-bottom: 0;
 }
 
-.kv dt {
+.s-kv dt {
+  font-size: 11.5px;
   color: var(--muted);
-  font-size: 12.5px;
 }
 
-.kv dd {
-  margin: 2px 0 0;
+.s-kv dd {
+  margin: 1px 0 0;
+  font-size: 13px;
+  color: var(--ink);
   word-break: break-all;
+}
+
+/* 原文核对条目：可点滑出抽屉并定位条款 */
+.s-clause {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.s-clause:hover {
+  border-color: var(--pri);
+  background: #f8faff;
+}
+
+.dot-sev {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--muted);
+}
+
+.dot-sev.high {
+  background: var(--seal);
+}
+
+.dot-sev.medium {
+  background: var(--warn);
+}
+
+.c-txt {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c-cnt {
+  font-size: 11px;
+  color: var(--muted);
+  flex: none;
+}
+
+.s-empty {
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.s-more {
+  width: 100%;
+  justify-content: center;
 }
 
 .err-box h3 {
@@ -825,35 +1178,36 @@ function openSource(clause?: string) {
   align-items: center;
   gap: 7px;
   color: var(--muted);
-  font-size: 13px;
-  letter-spacing: 0.04em;
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+  font-weight: 500;
 }
 
 .step + .step::before {
   content: '';
   width: 26px;
   height: 1px;
-  background: var(--line-strong);
+  background: var(--line);
   margin-right: 4px;
 }
 
 .dot {
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   border: 2px solid var(--line-strong);
-  background: var(--card);
+  background: #fff;
 }
 
 .step.on {
-  color: var(--seal);
+  color: var(--pri);
   font-weight: 700;
 }
 
 .step.on .dot {
-  border-color: var(--seal);
-  background: var(--seal);
-  box-shadow: 0 0 0 3px var(--seal-soft);
+  border-color: var(--pri);
+  background: var(--pri);
+  box-shadow: 0 0 0 3px var(--pri-soft);
   animation: pulse 1.6s ease-in-out infinite;
 }
 
@@ -868,33 +1222,8 @@ function openSource(clause?: string) {
 
 .step.fail .dot {
   border-color: var(--seal);
-  background: var(--seal-soft);
+  background: var(--seal);
+  box-shadow: 0 0 0 3px var(--seal-soft);
 }
 
-/* 报告速览条 */
-.sum {
-  display: flex;
-  align-items: center;
-  gap: 26px;
-  margin-top: 12px;
-  padding: 12px 22px;
-}
-
-.sum-item {
-  display: flex;
-  flex-direction: column;
-}
-
-.sum-item span {
-  font-size: 12px;
-}
-
-.sum-item b {
-  font-size: 20px;
-  line-height: 1.2;
-}
-
-.sum .btn {
-  margin-left: auto;
-}
 </style>

@@ -144,17 +144,156 @@ function escHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** 某块的正文 HTML：换行转 <br>，命中证据句包 <mark>（长句先替换防拆碎）。 */
-function blockHtml(index: number): string {
-  const b = doc.value?.blocks[index]
-  if (!b) return ''
-  let html = escHtml(blockText(b)).replace(/\r?\n/g, '<br>')
+/** 给已转义的 HTML 片段包证据 <mark>（norm=true 时证据与正文都去空白再比，
+ *  用于 PDF——pypdf 提取常把同一句拆断/加空格，命中率会更高）。 */
+function applyMarks(html: string, index: number, norm: boolean): string {
   const markers = blockHits.value[index]?.markers ?? []
   for (const m of [...markers].sort((x, y) => y.text.length - x.text.length)) {
-    const esc = escHtml(m.text)
+    const raw = norm ? m.text.replace(/\s+/g, '') : m.text
+    const esc = escHtml(raw)
     html = html.split(esc).join(`<mark class="mk-${m.sev === 'medium' ? 'med' : 'high'}">${esc}</mark>`)
   }
   return html
+}
+
+/** docx 表格行（"a | b | c"）→ 单元格数组；非表格行返回 null。 */
+function tableCells(line: string): string[] | null {
+  if (!isDocx.value || !line.includes('|')) return null
+  const cells = line.split('|').map((c) => c.trim())
+  return cells.length >= 3 ? cells : null
+}
+
+/** PDF 行清理：去页码行、去掉行内多余空格（pypdf 常在汉字/数字间留空格）。 */
+function pdfCleanLine(line: string): string {
+  const t = line.trim()
+  if (/^第\s*[0-9]+\s*页$/.test(t)) return ''
+  return t.replace(/[\u3000 ]/g, '')
+}
+
+/** PDF 短碎片行：表格被 pypdf 逐格抽成"每格一行"时，每行都短且无句末标点。 */
+function isPdfShard(line: string): boolean {
+  const t = pdfCleanLine(line)
+  if (!t || t.length > 14) return false
+  return !/[。！？；]$/.test(t)
+}
+
+const _PDF_SEG_START = /^[0-9]+、|^（[一二三四五六七八九十0-9]+）|^第[0-9一二三四五六七八九十百千]+条/
+// PDF 前言里的"标签：值"行（合同编号/甲方/乙方等），应独立成行而非并进段落
+const _PDF_HEADER = /^[^，。！？；：\n]{1,14}[：:]/
+
+/** docx/pdf 条文块的结构化排版 HTML：
+ *  docx：表格行（| 分隔）重组为真表格，其余按行成段；
+ *  pdf：页码行剔除、折行按句拼接、表格碎片收敛成带分隔的近似行。
+ *  目标是把 pypdf/python-docx 的"机器文本"恢复成可读的条款排版。 */
+function layoutHtml(index: number, b: SourceBlock): string {
+  let body = b.text
+  // 剥掉块正文首行与标题的重复（docx/pdf 首行常带前导空格）
+  const head = b.title.trim()
+  if (head && body.trimStart().startsWith(head)) {
+    body = body.trimStart().slice(head.length)
+  }
+  const lines = body.split(/\r?\n/)
+  const out: string[] = []
+
+  // 分支 1：docx —— 段落行 + | 表格行重组
+  if (isDocx.value) {
+    let i = 0
+    while (i < lines.length) {
+      const line = lines[i].trim()
+      if (!line) { i++; continue }
+      const cells = tableCells(line)
+      // 这种情况是：连续表格行 → 收集成一个 <table>（首行当表头）
+      if (cells) {
+        const rows: string[][] = [cells]
+        i++
+        while (i < lines.length) {
+          const c = tableCells(lines[i].trim())
+          if (!c) break
+          rows.push(c)
+          i++
+        }
+        const headHtml = rows[0].map((c) => `<th>${applyMarks(escHtml(c), index, false)}</th>`).join('')
+        const bodyHtml = rows
+          .slice(1)
+          .map((r) => `<tr>${r.map((c) => `<td>${applyMarks(escHtml(c), index, false)}</td>`).join('')}</tr>`)
+          .join('')
+        out.push(`<div class="mini-tbl"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`)
+        continue
+      }
+      out.push(`<p class="pl">${applyMarks(escHtml(line), index, false)}</p>`)
+      i++
+    }
+    return out.join('')
+  }
+
+  // 分支 2：pdf —— 折行拼接 + 表格碎片收敛
+  let i = 0
+  let buf = ''
+  const flush = () => {
+    if (buf) {
+      out.push(`<p class="pl">${applyMarks(escHtml(buf), index, true)}</p>`)
+      buf = ''
+    }
+  }
+  const pushNew = (s: string) => {
+    flush()
+    buf = s
+  }
+  while (i < lines.length) {
+    const raw = lines[i]
+    const clean = pdfCleanLine(raw)
+    // 表格碎片簇：连续 ≥3 个短行且都不是段落/编号头 → 合并成一行近似文本
+    if (clean && isPdfShard(raw)) {
+      let run = 1
+      while (i + run < lines.length && isPdfShard(lines[i + run])) run++
+      if (run >= 3) {
+        const joined: string[] = []
+        for (let k = 0; k < run; k++) {
+          const c = pdfCleanLine(lines[i + k])
+          if (c) joined.push(c)
+        }
+        flush()
+        out.push(
+          `<p class="tbl-flat">${applyMarks(escHtml(joined.join(' · ')), index, true)}</p>`,
+        )
+        i += run
+        continue
+      }
+    }
+    if (!clean) { i++; continue }
+    // 段落/编号头与"标签：值"行：另起一段
+    if (_PDF_SEG_START.test(clean) || _PDF_HEADER.test(clean)) {
+      pushNew(clean)
+      i++
+      continue
+    }
+    if (!buf) {
+      buf = clean
+    } else {
+      // 跨行拼接：中文字符间不加空格（pypdf 折行打断的句子直接接回）
+      const prev = buf[buf.length - 1]
+      const next = clean[0]
+      const bothWord = /[\u4e00-\u9fff0-9A-Za-z]/.test(prev) && /[\u4e00-\u9fff0-9A-Za-z]/.test(next)
+      buf += bothWord ? clean : ` ${clean}`
+    }
+    // 一句话结束（且下一行不是"，…"续句）→ 落一段
+    const nx = i + 1 < lines.length ? pdfCleanLine(lines[i + 1]) : ''
+    if (/[。！？；]$/.test(buf) && !/^[，；、]/.test(nx)) flush()
+    i++
+  }
+  flush()
+  return out.join('')
+}
+
+/** 某块的正文 HTML：md/txt 走原 mdClean 路径；docx/pdf 走结构化排版。 */
+function blockHtml(index: number): string {
+  const b = doc.value?.blocks[index]
+  if (!b) return ''
+  if (isMd.value) {
+    const html = escHtml(blockText(b)).replace(/\r?\n/g, '<br>')
+    return applyMarks(html, index, false)
+  }
+  return layoutHtml(index, b)
 }
 
 /** 任一条款块命中风险的标记（空态不显示提示条）。 */
@@ -166,6 +305,17 @@ function findBlock(clause: string, blocks: SourceBlock[]): number {
   if (exact >= 0) return exact
   const c = clause.trim()
   return blocks.findIndex((b) => b.title.includes(c) || c.includes(b.title))
+}
+
+/** 按证据原文找所在条款块：中风险项无 clause_ref 时用摘录回指（先精确比，
+ *  再忽略空白比一次，容忍 pdf 提取的空格/换行差异）。 */
+function findBlockByEvidence(evidence: string, blocks: SourceBlock[]): number {
+  const ev = evidence.trim()
+  if (!ev) return -1
+  const exact = blocks.findIndex((b) => b.text.includes(ev))
+  if (exact >= 0) return exact
+  const flat = ev.replace(/\s+/g, '')
+  return blocks.findIndex((b) => b.text.replace(/\s+/g, '').includes(flat))
 }
 
 /** 滚动到目标块并闪一下背景（证据定位的轻量反馈，不打断阅读）。 */
@@ -190,18 +340,35 @@ async function scrollTextTo(clause: string) {
   el.scrollTop = ratio * (el.scrollHeight - el.clientHeight)
 }
 
-/** 定位指令（anchor.seq 变化）→ 有条文结构就切条文视图滚动，否则纯文本估位。 */
+/** 定位指令（anchor.seq 变化）→ 有条文结构就切条文视图滚动，否则纯文本估位。
+ *  支持两类目标：clause（条款号）与 evidence（无条款号的中风险摘录）。 */
 async function locate() {
   if (!props.anchor) return
   const blocks = doc.value?.blocks ?? []
-  const i = blocks.length ? findBlock(props.anchor.clause, blocks) : -1
-  if (i >= 0) {
-    tab.value = 'blocks'
-    await nextTick()
-    flashTo(i)
+  const clause = (props.anchor.clause ?? '').trim()
+  const evidence = (props.anchor.evidence ?? '').trim()
+  if (clause && blocks.length) {
+    const i = findBlock(clause, blocks)
+    if (i >= 0) {
+      tab.value = 'blocks'
+      await nextTick()
+      flashTo(i)
+      return
+    }
+  }
+  if (evidence) {
+    // 这种情况是：风险项没有条款号 → 按证据摘录定位到命中条款块
+    const j = blocks.length ? findBlockByEvidence(evidence, blocks) : -1
+    if (j >= 0) {
+      tab.value = 'blocks'
+      await nextTick()
+      flashTo(j)
+      return
+    }
+    await scrollTextTo(evidence)
     return
   }
-  await scrollTextTo(props.anchor.clause)
+  await scrollTextTo(clause || evidence)
 }
 
 async function load() {
@@ -329,6 +496,9 @@ onUnmounted(() => {
       <p v-if="tab === 'text' && hasText" class="pane-note">
         模型读取的原始全文快照（md 含 Markdown 标记；如需按条款阅读请切「条文视图」）
       </p>
+      <p v-if="tab === 'blocks' && hasText && !isMd" class="pane-note">
+        docx 表格已按行列重排；PDF 由逐格提取，折行已拼接、表格以分隔行近似（原版版式见「原文件」页签）
+      </p>
 
       <p v-if="error" class="err pad">{{ error }}</p>
 
@@ -408,31 +578,62 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* 遮罩 + 近全屏居中弹窗：点弹层空白关闭；弹窗占几乎整个可视区 */
+/* 原文抽屉：宽屏 = 右侧滑出 dock（overlay 不拦截左半，页面仍可读），
+   窄屏 = 居中近全屏浮层（下面 media 回退）。功能与定位逻辑不变。 */
 .src-overlay {
   position: fixed;
   inset: 0;
   z-index: 40;
-  background: rgba(64, 52, 30, 0.42);
-  backdrop-filter: blur(3px);
   display: flex;
-  padding: 24px;
+  justify-content: flex-end;
+  pointer-events: none;
 }
 
 .src-panel {
-  /* 确定尺寸 + margin:auto 居中：不依赖网格轨道百分比，也不会随内容塌缩 */
-  width: min(calc(100vw - 48px), 1680px);
-  height: calc(100vh - 48px);
-  margin: auto;
+  width: min(860px, 60vw);
+  height: 100%;
+  margin: 0;
   display: flex;
   flex-direction: column;
-  background:
-    repeating-linear-gradient(-45deg, rgba(110, 92, 52, 0.012) 0 1px, transparent 1px 7px),
-    linear-gradient(180deg, #fdf9ee, #f6efdc);
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  box-shadow: 0 24px 70px rgba(44, 35, 20, 0.35);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-right: 0;
+  border-radius: 14px 0 0 14px;
+  box-shadow: -22px 0 60px rgba(16, 24, 40, 0.24);
   overflow: hidden;
+  pointer-events: auto;
+  animation: src-in 0.22s ease both;
+}
+
+@keyframes src-in {
+  from {
+    transform: translateX(46px);
+    opacity: 0.4;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* 中窄屏：回到居中近全屏浮层（点遮罩空白关闭） */
+@media (max-width: 1100px) {
+  .src-overlay {
+    justify-content: center;
+    align-items: center;
+    padding: 24px;
+    background: rgba(28, 36, 51, 0.45);
+    backdrop-filter: blur(3px);
+    pointer-events: auto;
+  }
+
+  .src-panel {
+    width: min(calc(100vw - 48px), 1680px);
+    height: calc(100vh - 48px);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 24px 60px rgba(16, 24, 40, 0.3);
+  }
 }
 
 /* 窄窗口/手机直接铺满，不留白边 */
@@ -458,7 +659,7 @@ onUnmounted(() => {
   flex-wrap: wrap;
   padding: 14px 18px 12px;
   border-bottom: 1px solid var(--line);
-  background: rgba(249, 244, 232, 0.6);
+  background: #fff;
 }
 
 .title-wrap {
@@ -467,10 +668,10 @@ onUnmounted(() => {
 
 .file {
   display: block;
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 700;
   word-break: break-all;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.01em;
 }
 
 .small {
@@ -521,14 +722,13 @@ onUnmounted(() => {
   border-bottom: 2px solid transparent;
   color: var(--muted);
   font-weight: 600;
-  font-family: var(--kai);
-  font-size: 14.5px;
-  letter-spacing: 0.1em;
+  font-size: 13.5px;
+  letter-spacing: 0.02em;
 }
 
 .tabs button.on {
-  color: var(--seal);
-  border-bottom-color: var(--seal);
+  color: var(--pri);
+  border-bottom-color: var(--pri);
 }
 
 .pane-note {
@@ -547,7 +747,7 @@ onUnmounted(() => {
 
 /* 条文视图 = 合同排版：条头醒目，正文疏朗仿纸面 */
 .block {
-  border-bottom: 1px dashed var(--line);
+  border-bottom: 1px solid var(--line);
   padding: 10px 0 18px;
 }
 
@@ -560,24 +760,23 @@ onUnmounted(() => {
 .block-title {
   display: inline-block;
   margin: 0;
-  padding: 2px 12px 2px 10px;
-  border-left: 4px solid var(--seal);
-  background: linear-gradient(90deg, var(--seal-soft), rgba(243, 223, 215, 0));
-  font-size: 16px;
-  letter-spacing: 0.08em;
+  padding: 0 0 2px 10px;
+  border-left: 3px solid var(--pri);
+  background: transparent;
+  font-size: 15px;
+  letter-spacing: 0.02em;
   color: var(--ink);
 }
 
 .hit-badge {
   margin-left: auto;
   flex: none;
-  font-family: var(--kai);
   font-size: 12.5px;
   color: #fff;
-  background: linear-gradient(#c94a41, #b23a32);
-  border-radius: 999px;
-  padding: 1px 11px;
-  box-shadow: 0 1px 2px rgba(127, 33, 28, 0.35);
+  background: var(--pri);
+  border-radius: 6px;
+  padding: 2px 10px;
+  font-weight: 600;
 }
 
 .hit-tags {
@@ -590,27 +789,27 @@ onUnmounted(() => {
 .hit-tag {
   font-size: 12px;
   font-weight: 600;
-  padding: 1px 9px;
-  border-radius: 999px;
-  letter-spacing: 0.05em;
+  padding: 2px 10px;
+  border-radius: 6px;
+  letter-spacing: 0.02em;
 }
 
 .tag-high {
   color: #fff;
-  background: #c94a41;
+  background: var(--seal);
 }
 
 .tag-med {
   color: #fff;
-  background: #c78f24;
+  background: var(--warn);
 }
 
-/* 命中条款整块标色：红=高风险 / 琥珀=中风险 */
+/* 命中条款整块标色：红=高风险 / 琥珀=中风险（换 C 语义色） */
 .block.hit {
-  background: rgba(165, 49, 44, 0.06);
-  border: 1px solid rgba(165, 49, 44, 0.18);
+  background: rgba(224, 69, 79, 0.05);
+  border: 1px solid rgba(224, 69, 79, 0.18);
   border-left: 3px solid var(--seal);
-  border-radius: 4px;
+  border-radius: 8px;
   padding: 12px 14px 16px;
   margin: 4px 0 8px;
 }
@@ -626,9 +825,8 @@ onUnmounted(() => {
   margin: 0;
   white-space: pre-line;
   color: var(--ink-2);
-  font-family: var(--serif);
-  font-size: 15.5px;
-  line-height: 2;
+  font-size: 15px;
+  line-height: 1.9;
   text-align: justify;
 }
 
@@ -639,43 +837,99 @@ onUnmounted(() => {
 }
 
 .block-text :deep(mark.mk-high) {
-  background: #ffd7cc;
-  color: #8c221a;
-  box-shadow: inset 0 -2px 0 rgba(165, 49, 44, 0.35);
+  background: #ffd9d4;
+  color: #a02c33;
+  box-shadow: inset 0 -2px 0 rgba(224, 69, 79, 0.3);
 }
 
 .block-text :deep(mark.mk-med) {
-  background: #f6e3ac;
-  color: #6d4b0c;
+  background: #f7e7bd;
+  color: #7a5510;
+}
+
+/* docx/pdf 条文块的结构化排版：段落、近似表格行、真表格 */
+.block-text p.pl {
+  margin: 0 0 0.6em;
+  white-space: normal;
+  text-align: justify;
+}
+
+.block-text p.pl:last-child {
+  margin-bottom: 0;
+}
+
+.block-text .tbl-flat {
+  margin: 4px 0 12px;
+  padding: 8px 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  background: var(--card2);
+  font-size: 12.5px;
+  line-height: 1.8;
+  color: var(--ink-2);
+}
+
+.mini-tbl {
+  margin: 6px 0 12px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.mini-tbl table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.mini-tbl th,
+.mini-tbl td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.mini-tbl th {
+  background: var(--card2);
+  font-weight: 600;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.mini-tbl tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 .block.flash {
-  background: rgba(165, 49, 44, 0.09);
+  background: rgba(52, 86, 209, 0.08);
   border-radius: 3px;
   padding-left: 8px;
-  border-left: 3px solid var(--seal);
+  border-left: 3px solid var(--pri);
   transition: background 0.5s ease;
 }
 
 /* 纯文本 = 机器快照：等宽、浅底虚线框，与条文视图一眼可分 */
 .raw {
   margin: 14px clamp(18px, 4vw, 90px) 24px;
-  border: 1px dashed var(--line-strong);
-  border-radius: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
   background: var(--card-2);
   font-family: var(--mono);
   font-size: 13px;
   line-height: 1.9;
   white-space: pre-wrap;
   color: var(--ink-2);
-  box-shadow: inset 0 1px 3px rgba(90, 76, 45, 0.06);
+  box-shadow: inset 0 1px 3px rgba(16, 24, 40, 0.05);
 }
 
 .pdf-frame {
   flex: 1;
   border: 0;
   width: 100%;
-  background: #4c4436;
+  background: #4b5563;
   min-height: 0;
 }
 
@@ -685,18 +939,18 @@ onUnmounted(() => {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: #4c4436;
+  background: #4b5563;
 }
 
 .docx-state {
-  color: #efe6d2;
+  color: #dbe2ee;
   font-size: 13.5px;
   padding: 10px 18px;
   margin: 0;
 }
 
 .docx-err {
-  color: #ffd9cc;
+  color: #ffc9c9;
 }
 
 .docx-frame {
@@ -704,7 +958,7 @@ onUnmounted(() => {
   min-height: 0;
   overflow: auto;
   padding: 18px 24px 32px;
-  background: #525659;
+  background: #4b5563;
 }
 
 /* docx-preview 生成的页面在浅色容器上保持白纸外观 */
@@ -731,7 +985,7 @@ onUnmounted(() => {
   position: fixed;
   inset: 0;
   z-index: 60;
-  background: rgba(64, 52, 30, 0.34);
+  background: rgba(28, 36, 51, 0.42);
   backdrop-filter: blur(2px);
   display: grid;
   place-items: center;
@@ -739,16 +993,16 @@ onUnmounted(() => {
 
 .dl-card {
   width: min(400px, 90vw);
-  background: linear-gradient(180deg, #fdf9ee, #f5edda);
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
-  box-shadow: 0 12px 40px rgba(64, 52, 30, 0.28);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(16, 24, 40, 0.22);
   padding: 20px 22px 16px;
 }
 
 .dl-card h4 {
   margin: 0 0 10px;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.02em;
 }
 
 .dl-name {

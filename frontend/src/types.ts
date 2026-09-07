@@ -108,8 +108,10 @@ export interface SourceDoc {
   blocks: SourceBlock[] // 按条款/章节切分的块（证据高亮锚点载体）
 }
 
-/** U2 原文定位指令：clause 对齐风险项 clause_ref；seq 递增保证重复点击仍触发。 */
+/** U2 原文定位指令：clause 对齐风险项 clause_ref；无条款号的风险（如中风险
+ *  建议项）可用 evidence 原文摘录定位到所在条款块；seq 递增保证重复点击仍触发。 */
 export interface SourceAnchor {
-  clause: string
+  clause?: string
+  evidence?: string
   seq: number
 }

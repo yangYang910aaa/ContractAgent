@@ -86,6 +86,42 @@ def test_blank_template_text_downgrades_missing_and_adds_notice() -> None:
     assert notice[0].label == "疑似空白模板"
     assert "空白模板" in notice[0].suggestion
     assert grade_report(risks) == Grade.conditional_pass  # 无 high → 不再 fail/gate
+    # 官方示范文本的另两类占位写法也要命中：GF 式"点线 + □ 选框"、
+    # 科技部/校服式"冒号后纯空格填空栏"（不一定画下划线，2026-09-07 修复）
+    gf_style = (
+        "甲方（出卖人）:………… … …\n"
+        "联系电话 :……………………………… … …\n"
+        "证件类型 : 身份证□\u3000居住证□\u3000护照□\n"
+        "出生年月日（注册登记日期）:\n"
+    )
+    assert is_blank_template_suspect(gf_style) is True
+    space_fill_style = (
+        "甲方（采购方）：              \n"
+        "项目名称：                            \n"
+        "有效期限：    年  月  日至    年  月   日\n"
+    )
+    assert is_blank_template_suspect(space_fill_style) is True
+    gf_risks = annotate_template_risks(evaluate(model), gf_style)
+    gf_missing = [r for r in gf_risks if r.risk_type == "missing_required_field"]
+    assert gf_missing and all(r.severity == Severity.medium for r in gf_missing)
+    assert any(r.risk_type == "blank_template_suspected" for r in gf_risks)
+    # 填空式条款模板（霸王花式）：占位是"空标点/空单位"而非下划线/长空白
+    fill_blank_style = (
+        "2、农药残留不超标，标准是 ；\n"
+        "3、不含沙石、草根、杂草等杂质；\n"
+        "4、其它要求 。\n"
+        "（二）验收标准、方法 。\n"
+        "（一）包装方式和要求： 。\n"
+        "（二）包装物由 方提供，费用由 方承担。\n"
+        "（一）交付方式按下列第 项办理：\n"
+        "甲方应于每批交付之日起 日内结清该批货款。\n"
+        "甲方支付乙方定金 元；交付后按约定价格的 % 计算违约金。\n"
+    )
+    assert is_blank_template_suspect(fill_blank_style) is True
+    fill_risks = annotate_template_risks(evaluate(model), fill_blank_style)
+    fill_missing = [r for r in fill_risks if r.risk_type == "missing_required_field"]
+    assert fill_missing and all(r.severity == Severity.medium for r in fill_missing)
+    assert any(r.risk_type == "blank_template_suspected" for r in fill_risks)
 
 
 def test_filled_text_keeps_missing_as_high() -> None:
