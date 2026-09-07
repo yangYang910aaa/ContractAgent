@@ -138,8 +138,8 @@ def test_list_tasks_summary(client: TestClient) -> None:
 
 
 def test_demo_enqueues_internal_samples(client: TestClient) -> None:
-    """demo 接口直接入队内置合成样本（免上传），worker=False 时停在 pending。"""
-    resp = client.post("/api/tasks/demo", json={"count": 2})
+    """samples 接口直接入队内置合成样本（免上传，worker=False 时停在 pending）。"""
+    resp = client.post("/api/tasks/samples", json={"count": 2})
     assert resp.status_code == 200
     tasks = resp.json()["tasks"]
     assert len(tasks) == 2
@@ -153,7 +153,7 @@ def test_demo_enqueues_internal_samples(client: TestClient) -> None:
 
 
 def test_demo_count_out_of_range_422(client: TestClient) -> None:
-    assert client.post("/api/tasks/demo", json={"count": 99}).status_code == 422
+    assert client.post("/api/tasks/samples", json={"count": 99}).status_code == 422
 
 
 # ---- U2：查看原合同（/source 全文+条款块、/file 原文件）----
@@ -180,8 +180,8 @@ def test_source_after_run_returns_text_and_blocks(client: TestClient) -> None:
 
 
 def test_source_demo_sample_kind_and_file_download(client: TestClient) -> None:
-    """demo 样本 → kind=sample；/file 能取回原 md 二进制（下载/对照用）。"""
-    resp = client.post("/api/tasks/demo", json={"count": 1})
+    """samples 样本 → kind=sample；/file 能取回原 md 二进制（下载/对照用）。"""
+    resp = client.post("/api/tasks/samples", json={"count": 1})
     tid = resp.json()["tasks"][0]["thread_id"]
     client.app.state.manager.run_one(tid)
     src = client.get(f"/api/tasks/{tid}/source").json()

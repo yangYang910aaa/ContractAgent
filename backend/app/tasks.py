@@ -1,4 +1,4 @@
-"""任务队列管理器（2026-09-05 起支持有界并发）。
+"""任务队列管理器
 
 职责：上传的合同进入 FIFO 队列，由 N 路 worker 线程（默认 settings.review_workers
 =2）同时送进 ReviewRunner（LangGraph 图 + MemorySaver）。N 是"有界"的——
