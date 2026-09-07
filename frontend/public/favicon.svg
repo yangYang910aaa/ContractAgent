@@ -1,7 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <!-- 品牌印章 favicon：印鉴红底 + 「审」字，与 App 顶栏 seal-mark 同源 -->
-  <rect x="1" y="1" width="46" height="46" rx="7" fill="#b23a3a"/>
-  <rect x="5" y="5" width="38" height="38" rx="4" fill="none" stroke="#f6f1e7" stroke-width="1.5"/>
-  <text x="24" y="33" font-family="'Songti SC','STSong','SimSun',serif" font-size="26"
-        fill="#f6f1e7" text-anchor="middle">审</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- v3：大幅简化+放大，16x16 favicon 友好 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4f9cff"/>
+      <stop offset="100%" stop-color="#1e40af"/>
+    </linearGradient>
+  </defs>
+  <!-- 满版蓝底 -->
+  <rect x="3" y="3" width="58" height="58" rx="12" fill="url(#bg)"/>
+  <!-- 白色文档：放大，去掉内部文字线条，只留轮廓+折角 -->
+  <rect x="11" y="9" width="34" height="42" rx="3" fill="#fff"/>
+  <path d="M35 9 L45 19 L35 19 Z" fill="#d6e4ff"/>
+  <!-- 文档内只留一条粗蓝线（代表标题，缩小后也能看到） -->
+  <rect x="16" y="26" width="22" height="4" rx="2" fill="#3b82f6"/>
+  <!-- 放大对勾圆章：半径从11→14，占右下角更明显 -->
+  <circle cx="46" cy="46" r="14" fill="#fff"/>
+  <path d="M39 46 L44.5 51.5 L54 41" fill="none" stroke="#2563eb" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
