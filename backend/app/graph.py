@@ -244,21 +244,28 @@ def build_review_graph(
 
 
 class ReviewRunner:
-    """审核运行器: graph + MemorySaver checkpointer + 任务登记簿，封装开始/续跑。"""
+    """审核运行器: graph + checkpointer + 任务登记簿，封装开始/续跑。
+
+    默认全内存(MemorySaver + ThreadStore, 测试/无库兜底); 服务入口在
+    DATABASE_URL 配置时注入 Postgres 持久化的 store/checkpointer(store_pg.py),
+    使任务与审批闸口跨重启保留。
+    """
 
     def __init__(
         self,
         extractor: Callable[[str], ContractModel] | None = None,
         retriever: Callable[[str], list[Any]] | None = None,
         review_mode: str = "single",
+        store: Any = None,
+        checkpointer: Any = None,
     ) -> None:
         self.review_mode = review_mode
-        self.checkpointer = MemorySaver()
+        self.store = store if store is not None else ThreadStore()
+        self.checkpointer = checkpointer if checkpointer is not None else MemorySaver()
         # checkpointer 在建图时传入：interrupt/恢复依赖它保存线程状态
         self.graph = build_review_graph(
             extractor=extractor, retriever=retriever, checkpointer=self.checkpointer
         )
-        self.store = ThreadStore()
         self.last_thread_id: str = ""  # 最近一次 start 的 thread_id 
 
     def _config(self, thread_id: str) -> dict:
@@ -284,7 +291,7 @@ class ReviewRunner:
     def start(self, source: str, text: str | None = None, thread_id: str | None = None) -> dict:
         """发起一份合同的审核: 登记任务 → 跑图（可能停在 gate 等审批）。
 
-        thread_id 缺省时新建任务; 队列/路由先登记的场景传入既有 thread_id，
+        thread_id 缺省时新建任务; 队列/路由先登记的场景传入既有 thread_id,
         避免同一任务被登记两次（登记簿与 checkpointer 必须同键）。
         """
         if thread_id is None:

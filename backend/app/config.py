@@ -61,6 +61,7 @@ class Settings(BaseSettings):
             "embedding_api_key_set": bool(self.embedding_api_key),
             "milvus_uri": self.milvus_uri,
             "retrieval_backend": self.retrieval_backend,
+            "database_url_set": bool(self.database_url),  # Postgres 持久化是否配置
         }
 
 

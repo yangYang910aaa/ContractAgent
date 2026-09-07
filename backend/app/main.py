@@ -18,11 +18,16 @@ if __package__ in (None, ""):
 from fastapi import FastAPI, Request
 
 from backend.app import llm
+from backend.app.config import settings
+from backend.app.graph import ReviewRunner
 from backend.app.routes_tasks import router as tasks_router
+from backend.app.store_pg import PgPersistence
 from backend.app.tasks import TaskManager
 
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+
+
 @asynccontextmanager
 async def lifespan(app:FastAPI)->AsyncIterator[None]:
     """应用生命周期：服务停止时干净关闭 TaskManager 的 worker 线程。
@@ -33,6 +38,23 @@ async def lifespan(app:FastAPI)->AsyncIterator[None]:
     yield
     #停止worker
     app.state.manager.shutdown()
+    # Postgres 持久化连接池释放(存在时); 内存模式无此对象
+    persistence = getattr(app.state, "persistence", None)
+    if persistence is not None:
+        persistence.close()
+
+
+def _build_default_manager() -> tuple[TaskManager, PgPersistence | None]:
+    """服务默认 manager: DATABASE_URL 配置则用 Postgres 持久化, 否则全内存兜底。
+
+    Postgres 路径在此显式构造(PgPersistence 建表 + checkpointer setup);
+    连不上数据库会直接抛错——持久化失败宁可起不来, 也不静默退回内存丢任务。
+    """
+    if not settings.database_url:
+        return TaskManager(), None
+    persistence = PgPersistence()
+    runner = ReviewRunner(store=persistence.store, checkpointer=persistence.checkpointer)
+    return TaskManager(runner=runner), persistence
 
 def create_app(manager: TaskManager | None = None) -> FastAPI:
     """建 FastAPI 应用：任务管理器挂在 app.state, 路由经 request 取用。"""
@@ -42,7 +64,10 @@ def create_app(manager: TaskManager | None = None) -> FastAPI:
         version="0.3.0",
         lifespan=lifespan,
     )
-    app.state.manager = manager or TaskManager()
+    app.state.persistence = None
+    if manager is None:
+        manager, app.state.persistence = _build_default_manager()
+    app.state.manager = manager
     app.include_router(tasks_router)
 
     @app.get("/")
@@ -53,10 +78,13 @@ def create_app(manager: TaskManager | None = None) -> FastAPI:
     @app.get("/api/health")
     def health(request: Request) -> dict:
         """健康检查：报告配置就绪状态与外部依赖可达性。"""
+        store = request.app.state.manager.runner.store
         return {
             "status": "ok",
             "config": llm.check_env_ready(),
-            "queued_tasks": len(request.app.state.manager.runner.store.list_records()),
+            "database": "postgres" if request.app.state.persistence else "memory",
+            "database_ready": store.ping(),
+            "queued_tasks": len(store.list_records()),
         }
 
     return app

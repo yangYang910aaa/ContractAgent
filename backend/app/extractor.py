@@ -1,9 +1,9 @@
 """结构化抽取。
 
 分工（刻意把 LLM 调用做薄、把归一化做厚）：
-- extract_contract：唯一调 LLM 的地方。让模型把金额/日期/比例"原样抄回"
+- extract_contract: 唯一调 LLM 的地方。让模型把金额/日期/比例"原样抄回"
   （不做计算、不改格式），再交给下方确定性归一化，避免模型格式化漂移；
-- _parse_* / build_contract_model：纯函数，可离线单测，把原文串解析成
+- _parse_* / build_contract_model: 纯函数，可离线单测，把原文串解析成
   ContractModel 类型化字段，并把模型返回的 evidence 回填到 extraction_meta。
 """
 
@@ -27,7 +27,7 @@ CONTRACT_FIELD_NAMES = {k for k in ContractModel.model_fields if k != "extractio
 
 # 抽取字段 → 中文含义（写进系统提示，指导模型逐项抽取）
 EXTRACT_LABELS: dict[str, str] = {
-    "contract_kind": "合同品类（从标题/正文判断）：enterprise_goods=企业货物采购, gov_goods=政府采购/校服类, "
+    "contract_kind": "合同品类（从标题/正文判断）:enterprise_goods=企业货物采购, gov_goods=政府采购/校服类, "
     "agri_goods=农副产品买卖, tech_service=技术开发/软件/技术服务；无法判断填 null",
     "buyer": "甲方（采购方）名称",
     "supplier": "乙方（供应商）名称",

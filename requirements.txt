@@ -19,6 +19,7 @@ jieba>=0.42
 pytest>=8
 # 生成 PDF 合成样本用（格式真实、内容合成）
 reportlab>=4
-# 可选 Postgres checkpointer：
-# psycopg[binary]>=3.2
-# langgraph-checkpoint-postgres>=2.0
+# Postgres 持久化（任务登记簿 + LangGraph checkpointer；langgraph 1.2.x 配套 3.x）
+psycopg[binary]>=3.2
+psycopg-pool>=3.2
+langgraph-checkpoint-postgres>=3.1

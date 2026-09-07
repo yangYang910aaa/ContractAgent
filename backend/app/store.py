@@ -1,9 +1,7 @@
 """任务/线程登记。
-
-职责：给每个审核任务分配 thread_id (LangGraph checkpointer 键），登记来源文件、
-状态、闸口待审信息与最终报告—— FastAPI 路由据此做列表/详情/审批接口。
-持久化说明: checkpointer 用 MemorySaver (进程内存), 服务重启即失; Postgres
-checkpointer 见 docs/问题与踩坑记录.md,
+ThreadStore: 进程内任务登记簿 (thread_id → TaskRecord),
+记录来源文件、状态(pending/processing/gate/done/error)、闸口载荷、最终报告、解析出的原文全文。线程安全（加锁）。
+这是路由层读任务状态的唯一数据源
 """
 
 from __future__ import annotations
@@ -17,6 +15,7 @@ from typing import Any
 
 def new_thread_id() -> str:
     """生成短 thread_id (uuid4 前 12 位)"""
+    #这个 ID 同时作为 MemorySaver checkpointer 的 thread key，AI 图的对话历史按此 ID 隔离
     return uuid.uuid4().hex[:12]
 
 
@@ -25,14 +24,14 @@ class TaskRecord:
     """一个审核任务在登记簿里的记录。"""
 
     thread_id: str  # LangGraph checkpointer 线程键
-    source: str  # 来源文件路径/标签
-    name: str = ""  # 展示名（原始文件名；上传后与 source 落盘路径分离）
-    source_text: str = ""  # 解析出的合同全文（U2：任务页查看原合同用；图跑完 parse 后落库）
-    status: str = "pending"  # pending=抽取中 / gate=待人工审批 / done=完成 / error=失败
-    gate_payload: dict | None = None  # 闸口待审载荷（风险摘要），审批页展示用
-    report: dict | None = None  # 最终报告（JSON 可序列化）
-    error: str = ""  # 失败原因（抽取/图执行异常）
-    created_at: float = field(default_factory=time.time)  # 创建时间戳（秒）
+    source: str  #worker/文件下载时用。 来源文件路径/标签。上传场景先占位后补全
+    name: str = ""  #前端列表/详情页时。  展示名（原始文件名；上传后与 source 落盘路径分离）
+    source_text: str = ""  #get_task_source()路由。  解析出的合同全文
+    status: str = "pending"  #前端+_resume_or_409。  pending=抽取中 / gate=待人工审批 / done=完成 / error=失败
+    gate_payload: dict | None = None  #审批页前端。 待审风险摘要(仅gate状态有值)
+    report: dict | None = None  #详情页前端。 最终报告（JSON 可序列化）
+    error: str = ""  #前端错误提示。 失败原因（抽取/图执行异常）
+    created_at: float = field(default_factory=time.time)  #list_records排序。 创建时间戳（秒）
 
 
 class ThreadStore:
@@ -43,8 +42,9 @@ class ThreadStore:
         self._lock = threading.Lock()
 
     def create(self, source: str) -> TaskRecord:
-        """登记一个新任务并返回记录 (thread_id 自动分配)。"""
+        """生成id+创建记录+写入字典"""
         record = TaskRecord(thread_id=new_thread_id(), source=source, name=source)
+        # 用with self._lock包裹,确保读-改-写整个序列是原子的
         with self._lock:
             self._records[record.thread_id] = record
         return record
@@ -73,3 +73,11 @@ class ThreadStore:
         """清空登记簿 """
         with self._lock:
             self._records.clear()
+
+    def mark_interrupted(self, reason: str = "") -> int:
+        """启动恢复：内存登记簿进程重启即空，无历史任务可处理（接口与 Pg 实现对齐）。"""
+        return 0
+
+    def ping(self) -> bool:
+        """连通性探针（health 用）：内存实现恒可用。"""
+        return True

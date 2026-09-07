@@ -17,7 +17,7 @@ from backend.app.schemas import ContractModel, Grade, PaymentTerm, RiskItem, Sev
 # ---- 政策阈值（百分比数值；金额单位：元）----
 PREPAY_MAX_PERCENT = 30.0  # P-01：预付款不超过总额 30%
 WARRANTY_MIN_MONTHS = 12  # P-02：质保期不少于 12 个月
-# P-03 责任上限底线(占总额 %)，按品类区分：货物/服务采购 50%；技术开发(委托/合作/
+# 责任上限底线(占总额 %)，按品类区分：货物/服务采购 50%；技术开发(委托/合作/
 # 服务)类行业惯例普遍把赔偿上限压到 30%（科技部示范文本即如此），底线放宽到 30%，
 # 否则真实科技部合同被误停闸口（2026-09-07 实测量化后用户拍板 B 口径）。
 LIABILITY_CAP_MIN_PERCENT: dict[str, float] = {
@@ -49,7 +49,6 @@ RISK_LABELS: dict[str, str] = {
 }
 
 # ContractModel 字段 key → 中文名：用于建议文案/UI 展示（与前端 labels 对齐；
-# 别让 effective_date 这类英文 key 出现在给人看的句子里）
 FIELD_LABELS: dict[str, str] = {
     "contract_kind": "合同品类",
     "buyer": "甲方（采购方）",
@@ -71,7 +70,7 @@ FIELD_LABELS: dict[str, str] = {
 
 # 必填核心字段：缺失会削弱整份审查的可信度
 CORE_REQUIRED = ("buyer", "supplier", "effective_date", "expiry_date", "total_amount", "currency")
-# 金额/日期缺失视为 high（审查无法继续）；主体信息缺失降为 medium
+# 金额/日期缺失视为；主体信息缺失降为 medium
 HIGH_IF_MISSING = ("total_amount", "effective_date", "expiry_date")
 
 # 品类应含条款基线：某字段只在基线内才做"缺失 → medium"检查。
@@ -138,10 +137,8 @@ def _liability_cap_floor(kind: str | None) -> float:
 
 
 def _penalty_quote_is_daily(quote: str) -> bool:
-    """违约金 quote 是否"按日计收"（P-03 畸高阈值只约束日费率）。
+    """违约金 quote 是否"按日计收"。
 
-    背景：真实合同"每次违约支付合同总价的 10%"（科技部 gd 版，tech_01）非按日，
-    现行按日口径误判畸高；判定 = 带"每次/按次/每笔"且无"日/按天" → 非按日。
     """
     # 这种情况是：没有证据原文（离线测试/旧路径）→ 不拦，交给抽取口径约束
     if not quote:
@@ -420,7 +417,7 @@ def _check_policies(model: ContractModel, required: set[str]) -> list[RiskItem]:
 
 
 def _check_ip_and_law(model: ContractModel, required: set[str]) -> list[RiskItem]:
-    """知识产权归属与适用法律检查 (P-05)。
+    """知识产权归属与适用法律检查 。
 
     处理三种情况（均为 medium, 需人工确认/补条款）：
     1) 完全没提 IP 归属;2) 写了归属但未归甲方/采购方；
@@ -473,11 +470,7 @@ def _check_ip_and_law(model: ContractModel, required: set[str]) -> list[RiskItem
     return out
 
 
-# ---- 空白模板占位检测（2026-09-05 起，2026-09-07 扩展官方示范文本写法）----
-# 背景：空白模板（甲方/日期/金额都是占位）会如实触发三条 high"缺必填"停闸口，
-# 演示观感像"系统把好合同审坏了"。这里检测文本里的占位痕迹，命中则把缺必填
-# 降为 medium + 追加"疑似空白模板"提示——不误放行（仍是 conditional_pass），
-# 也不会让模板整批卡在闸口。只作用于"缺必填"类风险，真实缺陷不受影响。
+# ---- 空白模板占位检测----
 
 # 各类占位标记的正则（每类只要命中一次即计数）：
 # - date：年/月/日之间只有空格/下划线/全角空格（真实日期中间是数字或中文数字）
