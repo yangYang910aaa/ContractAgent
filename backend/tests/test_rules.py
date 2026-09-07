@@ -326,3 +326,76 @@ def test_infer_effective_noop_without_signature_or_wording() -> None:
     model2, text2 = _with_sig(effective=None, signature=date(2026, 3, 10),
                               text="本合同自上级批准之日起生效。")
     assert infer_effective_from_signature(model2, text2).effective_date is None
+
+
+def test_tech_service_liability_cap_30_is_ok_but_29_low() -> None:
+    """P-03 技术类底线 30%（2026-09-07 B 口径）：cap=30 不判 too_low（科技部示范
+    文本即 30%），低于 30% 仍判 high。"""
+    model = _with(contract_kind="tech_service", liability_cap=30.0)
+    assert "liability_cap_too_low" not in _risk_types(model)
+    low = _with(contract_kind="tech_service", liability_cap=29.0)
+    assert "liability_cap_too_low" in _risk_types(low)
+
+
+def test_enterprise_liability_cap_30_still_low() -> None:
+    """货物/服务采购底线仍是 50%：cap=30 对企业类仍判 high，不因技术类放宽误伤。"""
+    model = _with(liability_cap=30.0)  # contract_kind=None → 按 enterprise 处理
+    types = _risk_types(model)
+    assert "liability_cap_too_low" in types
+    assert all(r.severity == Severity.high
+               for r in evaluate(model) if r.risk_type == "liability_cap_too_low")
+
+
+def test_amount_mismatch_with_unreliable_total_is_medium() -> None:
+    """金额不一致但总额低置信度/证据为空栏 → medium 待人工核对（tech_03 幻觉场景），
+    不误停闸口；若总额可信则仍 high（test_sample03 覆盖可信路径）。"""
+    from backend.app.schemas import Evidence
+
+    meta = {
+        "total_amount": Evidence(
+            quote="合同金额为（大写）：人民币　　（￥　　　　元）。",
+            clause_ref="第十四条",
+            confidence=0.6,
+        )
+    }
+    model = _with(
+        extraction_meta=meta,
+        payment_schedule=[
+            _term("首付款", "1679900", 50.0),
+            _term("尾款", "335980", 10.0),
+        ],
+    )
+    # 上面分项加总 201.6 万 ≠ 总额 100 万，但总额证据为空栏 + 低置信度 → 只降 medium
+    amounts = [r for r in evaluate(model) if r.risk_type == "amount_inconsistency"]
+    assert amounts and amounts[0].severity == Severity.medium
+    assert grade_report(evaluate(model)) == Grade.conditional_pass
+
+
+def test_penalty_occurrence_based_not_daily_no_high() -> None:
+    """"每次违约按合同总价 X%"（非按日）不适用日费率畸高阈值（tech_01 现象）。"""
+    from backend.app.schemas import Evidence
+
+    meta = {
+        "penalty_rate": Evidence(
+            quote="每次违约，违约方需向守约方支付合同总价的10%",
+            clause_ref="第十六条",
+            confidence=0.9,
+        )
+    }
+    model = _with(penalty_rate=10.0, extraction_meta=meta)
+    assert "penalty_rate_too_high" not in _risk_types(model)
+
+
+def test_penalty_daily_quote_still_high() -> None:
+    """按日计收（每逾期一日 X%）仍走畸高阈值，防豁免把真缺陷放掉。"""
+    from backend.app.schemas import Evidence
+
+    meta = {
+        "penalty_rate": Evidence(
+            quote="每逾期一日按合同总价款的2%向甲方支付违约金",
+            clause_ref="第十一条",
+            confidence=0.9,
+        )
+    }
+    model = _with(penalty_rate=2.0, extraction_meta=meta)
+    assert "penalty_rate_too_high" in _risk_types(model)

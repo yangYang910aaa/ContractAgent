@@ -17,7 +17,13 @@ from backend.app.schemas import ContractModel, Grade, PaymentTerm, RiskItem, Sev
 # ---- 政策阈值（百分比数值；金额单位：元）----
 PREPAY_MAX_PERCENT = 30.0  # P-01：预付款不超过总额 30%
 WARRANTY_MIN_MONTHS = 12  # P-02：质保期不少于 12 个月
-LIABILITY_CAP_MIN_PERCENT = 50.0  # P-03：责任上限不低于总额 50%
+# P-03 责任上限底线(占总额 %)，按品类区分：货物/服务采购 50%；技术开发(委托/合作/
+# 服务)类行业惯例普遍把赔偿上限压到 30%（科技部示范文本即如此），底线放宽到 30%，
+# 否则真实科技部合同被误停闸口（2026-09-07 实测量化后用户拍板 B 口径）。
+LIABILITY_CAP_MIN_PERCENT: dict[str, float] = {
+    "enterprise_goods": 50.0,
+    "tech_service": 30.0,
+}
 CONFIDENTIALITY_MAX_MONTHS = 36  # P-04：保密期不超过 36 个月
 PENALTY_DAILY_MAX_PERCENT = 1.0  # 违约金日利率上限
 AMOUNT_TOLERANCE_RATIO = Decimal("0.01")  # 分项加总 vs 总额允许偏差 1%
@@ -125,6 +131,42 @@ def _mk(
     )
 
 
+def _liability_cap_floor(kind: str | None) -> float:
+    """按品类取 P-03 责任上限底线(占总额 %)。"""
+    # 未登记品类（gov/agri 显式写了上限时也照查）兜底 50，保持历史口径
+    return LIABILITY_CAP_MIN_PERCENT.get(kind or "enterprise_goods", 50.0)
+
+
+def _penalty_quote_is_daily(quote: str) -> bool:
+    """违约金 quote 是否"按日计收"（P-03 畸高阈值只约束日费率）。
+
+    背景：真实合同"每次违约支付合同总价的 10%"（科技部 gd 版，tech_01）非按日，
+    现行按日口径误判畸高；判定 = 带"每次/按次/每笔"且无"日/按天" → 非按日。
+    """
+    # 这种情况是：没有证据原文（离线测试/旧路径）→ 不拦，交给抽取口径约束
+    if not quote:
+        return True
+    occurrence = bool(re.search(r"每次|按次|每笔", quote))
+    daily = bool(re.search(r"日|按天", quote))
+    return not (occurrence and not daily)
+
+
+def _total_amount_reliable(model: ContractModel) -> bool:
+    """总额抽取是否可信（金额一致性 high 的前置门槛）。
+
+    背景：半填合同金额栏空白时 LLM 会"脑补"金额（tech_03 实测 conf=0.6、证据原文
+    仍是"（￥　　元）"空栏），此时分项与总额不一致属幻觉而非真缺陷，硬判 high
+    会把半填合同误停闸口。判定 = 无 meta（测试/旧路径）视为可信；有 meta 时要求
+    置信度 ≥0.7 且证据原文含数字（0.7 与 extractor 低置信度阈值同值，刻意内联防
+    循环依赖）。
+    """
+    meta = model.extraction_meta.get("total_amount")
+    # 这种情况是：没有字段证据 → 默认可信（保持既有判定与测试）
+    if meta is None:
+        return True
+    return meta.confidence >= 0.7 and bool(re.search(r"\d", meta.quote or ""))
+
+
 def _check_required(model: ContractModel) -> list[RiskItem]:
     """必填字段完整性检查。
 
@@ -201,7 +243,22 @@ def _check_amount(model: ContractModel) -> list[RiskItem]:
     # 分支 2：偏差在容忍范围内 → 视为一致，不产生风险
     if deviation <= AMOUNT_TOLERANCE_RATIO:
         return []
-    # 分支 3：偏差超容忍 → high；证据写计算式与具体数字，方便人工核对
+    # 分支 3-1：偏差超容忍但总额不可信（低置信度/证据无数字）→ medium 待人工核对。
+    #   背景：半填合同金额空白被 LLM 脑补出金额（tech_03），不一致属幻觉不是真缺陷；
+    #   降级不静默（medium 仍在报告里提示人工核对），也不误停闸口。
+    if not _total_amount_reliable(model):
+        return [
+            _mk(
+                model,
+                risk_type="amount_inconsistency",
+                severity=Severity.medium,
+                field="total_amount",
+                policy_ref=None,
+                evidence=f"付款期次加总 {summed} 元 ≠ 合同总额 {total} 元（偏差 {deviation:.1%}）。",
+                suggestion="总额抽取置信度低或原文金额栏为空，金额一致性无法自动判定，请人工核对后再审。",
+            )
+        ]
+    # 分支 3-2：偏差超容忍且总额可信 → high；证据写计算式与具体数字，方便人工核对
     return [
         _mk(
             model,
@@ -278,8 +335,9 @@ def _check_policies(model: ContractModel, required: set[str]) -> list[RiskItem]:
             )
         )
 
-    # ---- P-03 责任上限：未明确 → medium；明确但低于 50% → high ----
+    # ---- P-03 责任上限：未明确 → medium；明确但低于品类底线 → high ----
     cap = model.liability_cap
+    floor = _liability_cap_floor(model.contract_kind)
     # 分支 1：完全没约定上限 → medium（建议按 P-03 明确，避免履约争议）
     if cap is None:
         # 这种情况是：品类要求责任上限但正文没写 → medium 提示补条款
@@ -291,11 +349,14 @@ def _check_policies(model: ContractModel, required: set[str]) -> list[RiskItem]:
                     severity=Severity.medium,
                     field="liability_cap",
                     policy_ref="P-03",
-                    suggestion="未明确责任上限，建议按 P-03 约定合理上限（不低于总额 50%）。",
+                    suggestion=(
+                        f"未明确责任上限，建议按 P-03 约定合理上限"
+                        f"（该品类底线不低于总额 {floor:g}%）。"
+                    ),
                 )
             )
-    # 分支 2：有约定但低于政策底线 → high（供应商赔偿被压得过低）
-    elif cap < LIABILITY_CAP_MIN_PERCENT:
+    # 分支 2：有约定但低于该品类底线 → high（供应商赔偿被压得过低）
+    elif cap < floor:
         out.append(
             _mk(
                 model,
@@ -303,7 +364,7 @@ def _check_policies(model: ContractModel, required: set[str]) -> list[RiskItem]:
                 severity=Severity.high,
                 field="liability_cap",
                 policy_ref="P-03",
-                suggestion=f"责任上限 {cap:g}% 低于政策底线 {LIABILITY_CAP_MIN_PERCENT:g}%，建议提高。",
+                suggestion=f"责任上限 {cap:g}% 低于政策底线 {floor:g}%，建议提高。",
             )
         )
 
@@ -337,9 +398,14 @@ def _check_policies(model: ContractModel, required: set[str]) -> list[RiskItem]:
         )
 
     # ---- 违约金日利率（P-03）：>1%/日 → high ----
-    # 分支：违约金率有值且超过阈值 → 罚则畸高。P-03 细则第三条已写明
-    # "日费率超过每日 1% 属畸高"，故 policy_ref 挂 P-03 不算凭空引用。
-    if model.penalty_rate is not None and model.penalty_rate > PENALTY_DAILY_MAX_PERCENT:
+    # 分支：违约金率有值、超过阈值且属"按日计收" → 罚则畸高。P-03 细则第三条已
+    # 写明"日费率超过每日 1% 属畸高"，故 policy_ref 挂 P-03 不算凭空引用；
+    # 非按日（"每次违约按总额 X%"）不适用日费率阈值（2026-09-07 真实合同校准）。
+    if (
+        model.penalty_rate is not None
+        and model.penalty_rate > PENALTY_DAILY_MAX_PERCENT
+        and _penalty_quote_is_daily(_quote(model, "penalty_rate"))
+    ):
         out.append(
             _mk(
                 model,
