@@ -16,7 +16,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from backend.app.parser import extract_text
-from backend.app.pipeline import enrich_policy_hits
+from backend.app.pipeline import enrich_policy_hits, infer_effective_from_signature
 from backend.app.rules import annotate_template_risks, evaluate, grade_report
 from backend.app.schemas import ContractModel, RiskItem
 from backend.app.store import ThreadStore
@@ -123,6 +123,8 @@ def build_review_graph(
             model = extract(state.get("text") or "")
         except Exception as exc:  # LLM/解析异常 → 整份走 error 报告（不拖垮队列）
             return {"error": f"抽取失败：{exc}"}
+        # 真实示范文本把生效写为签字盖章之日, 不写具体日期; 按句式用签署日回填
+        model = infer_effective_from_signature(model, state.get("text") or "")
         return {"extracted": model.model_dump(mode="json")}
 
     def rules_node(state: ReviewState) -> dict:

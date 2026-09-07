@@ -260,3 +260,69 @@ def test_empty_model_does_not_crash() -> None:
     risks = evaluate(ContractModel())
     assert risks  # 全空合同应至少报出必填缺失类风险
     assert grade_report(risks) in {Grade.fail, Grade.conditional_pass}
+
+
+# ---- 生效日兜底推断(签字盖章生效句式) ----
+
+
+def _with_sig(effective=None, signature=None, text=""):
+    """构造只关注生效/签署日的 ContractModel（其余字段默认空）。"""
+    return ContractModel(
+        signature_date=signature,
+        effective_date=effective,
+    ), text
+
+
+def test_infer_effective_from_signature_fills_when_wording_matches() -> None:
+    """正文写"自双方签字盖章之日起生效"且签署日已有 → 生效日回填为签署日。"""
+    from datetime import date
+    from backend.app.rules import infer_effective_from_signature
+    model, text = _with_sig(
+        effective=None,
+        signature=date(2026, 3, 10),
+        text="甲方（采购方）：某校。……合同自双方签字盖章之日起生效。",
+    )
+    out = infer_effective_from_signature(model, text)
+    assert out.effective_date == date(2026, 3, 10)
+
+
+def test_infer_effective_covers_signature_and_party_variants() -> None:
+    """"签名（盖章）之日"与"经签约各方签字盖章后生效"两种真实措辞同样回填。"""
+    from datetime import date
+    from backend.app.rules import infer_effective_from_signature
+    variants = [
+        "本合同自甲、乙双方签名（盖章）之日起成立并生效。",
+        "本合同经签约各方签字盖章后生效。",
+        "合同自双方签字盖章之日起生效。",
+    ]
+    for sentence in variants:
+        model = ContractModel(signature_date=date(2026, 9, 1), effective_date=None)
+        out = infer_effective_from_signature(model, sentence)
+        assert out.effective_date == date(2026, 9, 1), sentence
+
+
+def test_infer_effective_keeps_explicit_effective_date() -> None:
+    """生效日已显式抽到 → 不被覆盖（即使正文同时有"签字盖章生效"句）。"""
+    from datetime import date
+    from backend.app.rules import infer_effective_from_signature
+    model, text = _with_sig(
+        effective=date(2026, 4, 1),
+        signature=date(2026, 3, 10),
+        text="本合同自双方签字盖章之日起生效。",
+    )
+    out = infer_effective_from_signature(model, text)
+    assert out.effective_date == date(2026, 4, 1)
+
+
+def test_infer_effective_noop_without_signature_or_wording() -> None:
+    """签署日缺失，或正文没有"签字盖章生效"句式 → 不推断（宁缺毋滥）。"""
+    from datetime import date
+    from backend.app.rules import infer_effective_from_signature
+    # 情况 1：没有签署日
+    model, text = _with_sig(effective=None, signature=None,
+                            text="本合同自双方签字盖章之日起生效。")
+    assert infer_effective_from_signature(model, text).effective_date is None
+    # 情况 2：句式不匹配（如"经批准之日起生效"）
+    model2, text2 = _with_sig(effective=None, signature=date(2026, 3, 10),
+                              text="本合同自上级批准之日起生效。")
+    assert infer_effective_from_signature(model2, text2).effective_date is None

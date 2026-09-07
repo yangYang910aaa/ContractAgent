@@ -43,6 +43,12 @@ def test_parse_percent_variants() -> None:
     assert _parse_percent("") is None
 
 
+def test_parse_percent_permille() -> None:
+    """千分号按 ÷10 归一：0.5‰=0.05%、1.5‰=0.15%，防止合规值误判畸高。"""
+    assert abs(_parse_percent("0.5‰") - 0.05) < 1e-9
+    assert abs(_parse_percent("每日 1.5‰") - 0.15) < 1e-9
+
+
 def test_parse_int_variants() -> None:
     assert _parse_int("24 个月") == 24
     assert _parse_int("30") == 30

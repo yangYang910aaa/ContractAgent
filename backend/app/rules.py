@@ -504,6 +504,33 @@ def annotate_template_risks(risks: list[RiskItem], text: str) -> list[RiskItem]:
     return out
 
 
+def infer_effective_from_signature(model: ContractModel, text: str) -> ContractModel:
+    """生效日兜底推断: 条款写"签字盖章之日起生效"时, 生效日=正文签署日.
+
+    背景: 校服/政采等官方示范文本把生效方式写成"自双方签字盖章之日起生效",
+    不重复写具体日期; 抽取器照抄该句抽不出 date 类型值, 填写完整的正常合同
+    会误报"缺生效日期" high 停闸口.
+
+    判定口径(宁缺毋滥, 防误推):
+    - 生效日已抽到 -> 不动
+    - 签署日没抽到 -> 无从推断, 不动
+    - 正文没有"签字/盖章...生效"句式 -> 不推断
+    其余情况用签署日回填生效日.
+    """
+    if model.effective_date is not None or model.signature_date is None:
+        return model
+    # 这种情况是: 正文确实写了生效方式与签字/盖章绑定 -> 允许推断.
+    # 覆盖三种真实措辞: 校服"双方签字盖章之日起生效", 农副"双方签名(盖章)
+    # 之日起成立并生效", 科技部"经签约各方签字盖章后生效".
+    if not re.search(
+        r"(?:签字|签名)\s*[（(]?盖章?[）)]?\s*之?日?起?(?:成立并)?生效"
+        r"|经?(?:签约各方|双方).{0,6}(?:签字|签名).{0,4}后生效",
+        text or "",
+    ):
+        return model
+    return model.model_copy(update={"effective_date": model.signature_date})
+
+
 def evaluate(model: ContractModel) -> list[RiskItem]:
     """规则引擎入口：跑全部确定性规则，返回风险清单。
 

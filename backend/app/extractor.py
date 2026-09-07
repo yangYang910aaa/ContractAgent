@@ -36,8 +36,13 @@ EXTRACT_LABELS: dict[str, str] = {
     "expiry_date": "合同到期日",
     "total_amount": "合同总金额（元，保留千分位原样）",
     "currency": "币种",
-    "penalty_rate": "逾期违约金比例（% 数值，如 1.5% 就写 1.5%）",
-    "liability_cap": "责任上限（占合同总额 %）",
+    # 口径提醒: penalty_rate 只取乙方(供应商)逾期交付/履约的违约金比例.
+    # 甲方逾期付款的违约金是甲方义务, 不属于对供应商的审查对象;
+    # 混填会把正常合同误判成 high.
+    "penalty_rate": "乙方（供应商）逾期交付/逾期履约的违约金比例（% 数值，如 1.5% 就写 1.5%；若同时有甲方逾期付款违约金，取乙方违约那一项，不要取甲方的）",
+    # 口径提醒: liability_cap 指赔偿责任上限(如"责任/赔偿总额以合同价款的
+    # X% 为限"); 仅写"违约金总额不超过 X%"不算赔偿责任上限, 填 null.
+    "liability_cap": "赔偿责任上限（占合同总额 %，如'赔偿总额以合同总价的X%为限'；仅违约金总额上限不要填）",
     "warranty_months": "质保期（月数）",
     "termination_notice_days": "解约提前通知期（天数）",
     "ip_ownership": "知识产权归属表述（原句）",
@@ -151,10 +156,18 @@ def _parse_percent(value: str | int | float | None) -> float | None:
     """百分比文本 → 数值口径（1.5% / 每日 1.5% / 20 → 1.5 / 1.5 / 20.0）。
 
     注意：口径与 rules 一致——存百分比数值而非小数（30 表示 30%）。
+    千分号(‰)单独归一化: 真实示范文本常用 0.5‰(=0.05%), 若按 % 直读会偏大
+    10 倍, 合规的 1.5‰ 会被误判成 1.5% 触发"违约金畸高".
     """
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
-    match = re.search(r"\d+(?:\.\d+)?", str(value))
+    text = str(value).strip()
+    # 分支 1：千分号写法（0.5‰）→ 数值 ÷10 折算成百分比
+    permille = re.search(r"(\d+(?:\.\d+)?)\s*‰", text)
+    if permille:
+        return float(permille.group(1)) / 10.0
+    # 分支 2：普通百分比/裸数（% 与"每日"等前缀由 LLM 原样抄回）
+    match = re.search(r"\d+(?:\.\d+)?", text)
     return float(match.group(0)) if match else None
 
 
@@ -286,7 +299,9 @@ _SYSTEM_PROMPT = """你是中文采购合同的结构化抽取器。请从合同
 1. 金额、日期、比例一律【原样抄写正文】，不要换算、不要改格式（如 1,000,000、2026年3月10日、每日 1.5%）；
 2. 字段值直接写内容本身（字符串或数字），不要把 {quote, clause_ref, confidence}
    对象当字段值；正文里找不到的字段填 null，且不要在 evidence 里编造；
-3. payment_schedule 逐期输出：name（期次名）、amount（金额原文）、percent（占总额比例数值，如 20 表示 20%）；
+3. payment_schedule 逐期输出：name（期次名）、amount（金额原文，只填金额数字，
+   严禁把年份/日期等非金额数字当金额）、percent（占总额比例数值，如 20 表示 20%；
+   正文没写比例就填 null）；
 4. evidence 输出为一个 JSON 对象：key 是字段名，value 是 {quote, clause_ref, confidence}。
    quote 必须是正文原句；clause_ref 填所在条款/章节号（如"第四条"，章节式文本填
    "一、质量要求"这类章节头，无条款结构填"前言"）；

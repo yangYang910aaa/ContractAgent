@@ -20,7 +20,12 @@ from backend.app.config import BASE_DIR
 from backend.app.extractor import extract_contract
 from backend.app.parser import extract_text
 from backend.app.policy_rag import PolicyHit, retrieve_policies
-from backend.app.rules import annotate_template_risks, evaluate, grade_report
+from backend.app.rules import (
+    annotate_template_risks,
+    evaluate,
+    grade_report,
+    infer_effective_from_signature,
+)
 from backend.app.schemas import ContractModel, RiskItem
 
 DEFAULT_SAMPLES = sorted((BASE_DIR / "data" / "contracts").glob("*.md"))
@@ -130,6 +135,8 @@ def run_review(path: str | Path) -> dict:
     text = extract_text(path)
     try:
         extracted = extract_contract(text=text)
+        # 真实文本把生效写为签字盖章之日是表述习惯而非疏漏, 按句式兜底回填
+        extracted = infer_effective_from_signature(extracted, text)
     except Exception as exc:  # LLM/接口异常（如格式不支持、超时）
         extracted = ContractModel()
         risks: list[RiskItem] = []
