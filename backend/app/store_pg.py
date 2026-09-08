@@ -1,16 +1,8 @@
 """Postgres 持久化: 任务登记簿(PgThreadStore) + 图检查点(PostgresSaver)。
 
-把此前进程内的 MemorySaver/ThreadStore 换成 PG 落库, 让服务重启后任务列表、
-报告、待审批闸口仍在依赖 psycopg_pool + langgraph-checkpoint-postgres; 
-连接串取 settings.database_url。
-
-约定(易错点):
-- 连接池统一 autocommit + dict_row —— langgraph saver 3.x 的 from_conn_string
-  即如此, 且 setup() 迁移含 CREATE INDEX CONCURRENTLY, 不能在事务块里跑;
-- PgThreadStore 与内存 ThreadStore 接口一致(create/get/update/list_records/
-  clear/mark_interrupted/ping), 路由与队列层无感切换;
-- 业务表 contract_tasks 与 LangGraph checkpointer 自建表(checkpoints 等)
-  同库不同表, thread_id 是共同键(LangGraph 恢复按 thread_id 找检查点)。
+让服务重启后任务列表/报告/待审批闸口仍在, 审批可继续(决策 D24)。
+PgThreadStore 与内存 ThreadStore 接口一致, 路由与队列层无感切换。
+连接串取 settings.database_url; 易错点见 docs/问题与踩坑记录.md(Postgres 持久化落地)。
 """
 
 from __future__ import annotations
@@ -127,6 +119,14 @@ class PgThreadStore:
             ).fetchall()
         return [self._row_to_record(row) for row in rows]
 
+    def delete(self, thread_id: str) -> bool:
+        """删除任务行; 返回是否真的删到(不存在返回 False)。"""
+        with self._pool.connection() as conn:
+            cur = conn.execute(
+                "DELETE FROM contract_tasks WHERE thread_id = %s", (thread_id,)
+            )
+        return cur.rowcount > 0
+
     def clear(self) -> None:
         """清空任务表(测试收尾/清库用)。"""
         with self._pool.connection() as conn:
@@ -135,7 +135,7 @@ class PgThreadStore:
     def mark_interrupted(self, reason: str = "") -> int:
         """启动恢复: 服务中断残留的 pending/processing 任务统一标 error。
 
-        不做自动重跑(中断的 LLM 调用恢复复杂且烧配额); 提示用户重新上传。
+        不做自动重跑, 提示用户重新上传。
         gate/done/error 原样保留(列表可见、gate 可继续审批)。
         """
         reason = reason or "服务重启中断, 请重新上传"
@@ -162,7 +162,7 @@ class PgPersistence:
 
     服务入口(main.create_app)在 settings.database_url 配置时创建, 把
     store/checkpointer 注入 ReviewRunner; 进程退出前 close() 释放连接池。
-    连接池 autocommit: setup 迁移含 CONCURRENTLY 不能跑在事务块里(见模块约定)。
+    连接池 autocommit + dict_row(PostgresSaver 运行所需)。
     """
 
     def __init__(self, database_url: str | None = None) -> None:

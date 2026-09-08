@@ -88,9 +88,75 @@ def test_upload_reject_flow(client: TestClient) -> None:
     client.app.state.manager.run_one(tid)
     resp = client.post(f"/api/tasks/{tid}/reject", json={"note": "质保期不足，打回重谈"})
     assert resp.status_code == 200
-    approval = resp.json()["report"]["approval"]
-    assert approval["action"] == "rejected"
-    assert approval["reviewer_note"] == "质保期不足，打回重谈"
+    body = resp.json()
+    assert body["status"] == "done"
+    assert body["report"]["approval"]["action"] == "rejected"
+    assert body["report"]["approval"]["reviewer_note"] == "质保期不足，打回重谈"
+
+
+def test_delete_done_task_removes_record_and_file(client: TestClient) -> None:
+    """删除任务: 登记簿移除 + 上传落盘文件一并删 + 再查/再删都 404。"""
+    tid = client.post(
+        "/api/tasks", files={"file": ("删除用.md", _sample_bytes(), "text/markdown")}
+    ).json()["thread_id"]
+    manager = client.app.state.manager
+    manager.run_one(tid)  # 缺陷模型 → gate（删除允许放弃待审批）
+    file_path = Path(manager.runner.store.get(tid).source)
+    assert file_path.exists()
+
+    resp = client.delete(f"/api/tasks/{tid}")
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted": tid}
+    assert manager.runner.store.get(tid) is None
+    assert not file_path.exists()  # 上传文件随任务删除
+    assert client.get(f"/api/tasks/{tid}").status_code == 404
+    assert client.delete(f"/api/tasks/{tid}").status_code == 404
+
+
+def test_delete_processing_task_conflict(client: TestClient) -> None:
+    """处理中的任务不可删(409)，避免删到一半的状态/文件。"""
+    tid = client.post(
+        "/api/tasks", files={"file": ("c.md", _sample_bytes(), "text/markdown")}
+    ).json()["thread_id"]
+    manager = client.app.state.manager
+    manager.runner.store.update(tid, status="processing")
+    resp = client.delete(f"/api/tasks/{tid}")
+    assert resp.status_code == 409
+    assert manager.runner.store.get(tid) is not None
+
+
+def test_batch_delete_mixed_results(client: TestClient) -> None:
+    """批量删除: 可删的删掉, 处理中/重复 id 跳过, 结果汇总返回。"""
+    manager = client.app.state.manager
+    deletable = []
+    for _ in range(2):
+        tid = client.post(
+            "/api/tasks", files={"file": ("b.md", _sample_bytes(), "text/markdown")}
+        ).json()["thread_id"]
+        manager.run_one(tid)  # 缺陷模型 → gate（可删）
+        deletable.append(tid)
+    busy = client.post(
+        "/api/tasks", files={"file": ("p.md", _sample_bytes(), "text/markdown")}
+    ).json()["thread_id"]
+    manager.runner.store.update(busy, status="processing")
+
+    resp = client.post(
+        "/api/tasks/batch-delete",
+        json={"thread_ids": [*deletable, busy, deletable[0]]},  # 含重复 id
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert sorted(body["deleted"]) == sorted(deletable)
+    assert body["skipped"] == [{"thread_id": busy, "reason": "任务正在处理"}]
+    for tid in deletable:
+        assert manager.runner.store.get(tid) is None
+    assert manager.runner.store.get(busy) is not None
+
+
+def test_batch_delete_empty_list_422(client: TestClient) -> None:
+    """空列表批量删除应 422(入参校验兜底, 防误清空)。"""
+    resp = client.post("/api/tasks/batch-delete", json={"thread_ids": []})
+    assert resp.status_code == 422
 
 
 def test_edit_patch_reruns_and_second_gate(client: TestClient) -> None:

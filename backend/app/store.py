@@ -69,6 +69,11 @@ class ThreadStore:
         with self._lock:
             return sorted(self._records.values(), key=lambda r: r.created_at, reverse=True)
 
+    def delete(self, thread_id: str) -> bool:
+        """删除一条任务记录; 不存在返回 False。"""
+        with self._lock:
+            return self._records.pop(thread_id, None) is not None
+
     def clear(self) -> None:
         """清空登记簿 """
         with self._lock:

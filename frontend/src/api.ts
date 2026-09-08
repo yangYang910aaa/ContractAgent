@@ -27,6 +27,28 @@ export async function listTasks(): Promise<TaskList> {
   return j(await fetch('/api/tasks'))
 }
 
+/** 删除任务：记录与上传的原文件一并删除（不可恢复）；队列页清理历史用。 */
+export async function deleteTask(threadId: string): Promise<{ deleted: string }> {
+  return j(await fetch(`/api/tasks/${encodeURIComponent(threadId)}`, { method: 'DELETE' }))
+}
+
+/** 批量删除结果：deleted 成功删除，skipped 被跳过的任务及原因。 */
+export interface BatchDeleteResult {
+  deleted: string[]
+  skipped: { thread_id: string; reason: string }[]
+}
+
+/** 批量删除任务（处理中的自动跳过并说明原因）。 */
+export async function batchDeleteTasks(threadIds: string[]): Promise<BatchDeleteResult> {
+  return j(
+    await fetch('/api/tasks/batch-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ thread_ids: threadIds }),
+    }),
+  )
+}
+
 /** 任务详情（详情页轮询用；threadId 来自后端，仍需转义防路径注入）。 */
 export async function getTask(threadId: string): Promise<TaskDetail> {
   return j(await fetch(`/api/tasks/${encodeURIComponent(threadId)}`))

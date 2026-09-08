@@ -5,7 +5,7 @@
 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { listTasks } from '../api'
+import { batchDeleteTasks, listTasks } from '../api'
 import type { TaskSummary, TaskStatus } from '../types'
 
 // 行内「查看」跳详情
@@ -17,8 +17,14 @@ const error = ref('')
 const filter = ref<'all' | TaskStatus>('all')
 const query = ref('') // 按文件名/任务号搜索
 const refreshing = ref(false) // 手动刷新进行中（按钮反馈）
+const deleting = ref(false) // 正在删除中（禁用相关按钮，防重复提交）
+const selected = ref<string[]>([]) // 勾选待删的任务 thread_id（批量删除范围）
+const showConfirm = ref(false) // 删除确认弹窗是否打开
+const pendingIds = ref<string[]>([]) // 弹窗里待删除的任务 id（单删=1 条）
+const notice = ref('') // 操作结果提示（删除成功/跳过原因）
 const lastUpdated = ref('') // 最近一次成功拉取时间（手动刷新时可见变化）
 let timer: number | undefined
+let noticeTimer: number | undefined
 
 const statusText: Record<TaskStatus, string> = {
   pending: '排队中',
@@ -112,6 +118,10 @@ async function load() {
   try {
     const res = await listTasks()
     tasks.value = res.tasks
+    // 列表刷新后清理已不存在/失效的勾选（如刚被别处删除的任务）
+    selected.value = selected.value.filter((id) =>
+      tasks.value.some((t) => t.thread_id === id),
+    )
     concurrency.value = res.concurrency ?? 1
     lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
     error.value = ''
@@ -128,6 +138,99 @@ async function refresh() {
   refreshing.value = false
 }
 
+/** 打开删除确认弹窗：单删/批量都经它（替换原生 confirm）。 */
+function askDelete(ids: string[]) {
+  if (!ids.length || deleting.value) return
+  pendingIds.value = ids
+  showConfirm.value = true
+}
+
+/** 单行删除 = 走批量接口传单个 id，复用同一弹窗。 */
+function askDeleteOne(t: TaskSummary) {
+  askDelete([t.thread_id])
+}
+
+function closeConfirm() {
+  if (deleting.value) return
+  showConfirm.value = false
+  pendingIds.value = []
+}
+
+/** 弹窗里展示的任务（最多 4 条，其余折叠成计数）。 */
+const pendingPreview = computed(() =>
+  pendingIds.value
+    .map((id) => tasks.value.find((t) => t.thread_id === id))
+    .filter((t): t is TaskSummary => Boolean(t))
+    .slice(0, 4),
+)
+
+/** 弹窗提示：选中项里有几项处理中（后端会自动跳过）。 */
+const pendingBusy = computed(
+  () =>
+    pendingIds.value.filter((id) => {
+      const t = tasks.value.find((x) => x.thread_id === id)
+      return t !== undefined && (t.status === 'pending' || t.status === 'processing')
+    }).length,
+)
+
+/** 执行删除：调批量接口，成功后重拉列表并汇报结果。 */
+async function runDelete() {
+  if (deleting.value || pendingIds.value.length === 0) return
+  deleting.value = true
+  try {
+    const res = await batchDeleteTasks(pendingIds.value)
+    showConfirm.value = false
+    const parts = [`已删除 ${res.deleted.length} 项`]
+    if (res.skipped.length) {
+      parts.push(`跳过 ${res.skipped.length} 项（${res.skipped[0].reason}）`)
+    }
+    setNotice(parts.join('，'))
+    await load()
+    // 被跳过的项保留勾选，等处理完可再删
+    selected.value = res.skipped
+      .map((s) => s.thread_id)
+      .filter((id) => tasks.value.some((t) => t.thread_id === id))
+  } catch (err) {
+    setNotice(err instanceof Error ? `删除失败：${err.message}` : '删除失败')
+  } finally {
+    deleting.value = false
+  }
+}
+
+/** 一次性操作结果提示，几秒后自动消失。 */
+function setNotice(text: string) {
+  notice.value = text
+  if (noticeTimer) window.clearTimeout(noticeTimer)
+  noticeTimer = window.setTimeout(() => {
+    notice.value = ''
+  }, 6000)
+}
+
+/** 勾选/取消一行。 */
+function toggleSelect(id: string) {
+  selected.value = selected.value.includes(id)
+    ? selected.value.filter((x) => x !== id)
+    : [...selected.value, id]
+}
+
+function isSelected(id: string) {
+  return selected.value.includes(id)
+}
+
+/** 当前筛选+搜索后的可见行是否已全选。 */
+const allVisibleSelected = computed(
+  () =>
+    visible.value.length > 0 &&
+    visible.value.every((t) => selected.value.includes(t.thread_id)),
+)
+
+/** 表头全选/全不选（作用于可见行，不影响被筛选藏起来的行）。 */
+function toggleAll() {
+  selected.value = allVisibleSelected.value
+    ? selected.value.filter((id) => !visible.value.some((t) => t.thread_id === id))
+    : Array.from(new Set([...selected.value, ...visible.value.map((t) => t.thread_id)]))
+}
+
 onMounted(() => {
   load()
   // 轮询 2.5s：队列状态持续变化，页面开销可忽略
@@ -136,6 +239,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (timer) window.clearInterval(timer)
+  if (noticeTimer) window.clearTimeout(noticeTimer)
 })
 </script>
 
@@ -155,6 +259,7 @@ onUnmounted(() => {
     </div>
 
     <p v-if="error" class="err">{{ error }}</p>
+    <p v-if="notice" class="ok-note">{{ notice }}</p>
     <p class="sysline muted">
       并发上限 {{ concurrency }} · 排队 {{ counts.pending }} · 审查中 {{ counts.processing }}
       <template v-if="lastUpdated"> · 更新于 {{ lastUpdated }}</template>
@@ -224,6 +329,21 @@ onUnmounted(() => {
       </button>
     </div>
 
+    <!-- 批量操作条：勾选后出现（删除选中 / 取消选择） -->
+    <div v-if="selected.length" class="bulkbar">
+      <span class="bulk-count">
+        已选 <b class="mono-num">{{ selected.length }}</b> 项
+      </span>
+      <span class="bulk-actions">
+        <button class="btn btn-danger sm" :disabled="deleting" @click="askDelete(selected)">
+          删除选中
+        </button>
+        <button class="btn btn-plain sm" :disabled="deleting" @click="selected = []">
+          取消选择
+        </button>
+      </span>
+    </div>
+
     <div v-if="!tasks.length" class="empty-card">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7l2-3h12l2 3v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"></path><path d="M4 7h16M9 12h6"></path></svg>
       <p>还没有任务——上传几份合同后就会出现在这里</p>
@@ -236,12 +356,22 @@ onUnmounted(() => {
     <!-- 任务列表 -->
     <div v-else class="card list">
       <div class="th">
+        <label class="sel-hd" title="全选当前列表">
+          <input type="checkbox" :checked="allVisibleSelected" @change="toggleAll" />
+        </label>
         <span>任务（文件 / 任务号）</span>
         <span>状态</span>
         <span>风险 / 评级</span>
         <span class="op-hd">操作</span>
       </div>
       <div v-for="t in visible" :key="t.thread_id" class="row">
+        <label class="sel">
+          <input
+            type="checkbox"
+            :checked="isSelected(t.thread_id)"
+            @change="toggleSelect(t.thread_id)"
+          />
+        </label>
         <div class="name">
           <span class="file-line">
             <span class="ficon" :class="fileChip(t).cls">{{ fileChip(t).label }}</span>
@@ -260,7 +390,43 @@ onUnmounted(() => {
           </span>
           <span v-if="t.grade" class="grade" :class="gradeClass(t)">{{ dispGrade(t) }}</span>
         </span>
-        <button class="op" @click="emit('open', t.thread_id)">查看 →</button>
+        <span class="ops">
+          <button class="op" @click="emit('open', t.thread_id)">查看 →</button>
+          <button class="op del" :disabled="deleting" @click="askDeleteOne(t)">
+            {{ deleting ? '删除中…' : '删除' }}
+          </button>
+        </span>
+      </div>
+    </div>
+
+    <!-- 删除确认弹窗：单删/批量共用（替换原生 confirm） -->
+    <div v-if="showConfirm" class="modal-mask" @click.self="closeConfirm">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="删除确认">
+        <h3>删除{{ pendingIds.length > 1 ? ` ${pendingIds.length} 项任务` : '任务' }}</h3>
+        <div class="modal-body">
+          <p>
+            将删除{{ pendingIds.length > 1 ? ` ${pendingIds.length} 项` : '该' }}任务，
+            任务记录与上传的原文件会一并删除，<b class="danger-text">不可恢复</b>：
+          </p>
+          <ul class="del-list">
+            <li v-for="t in pendingPreview" :key="t.thread_id">
+              <span class="del-name">{{ t.source }}</span>
+              <span class="mono-num del-tid">{{ t.thread_id }}</span>
+            </li>
+          </ul>
+          <p v-if="pendingIds.length > pendingPreview.length" class="muted">
+            …共 {{ pendingIds.length }} 项（其余省略）
+          </p>
+          <p v-if="pendingBusy > 0" class="warn-txt">
+            其中 {{ pendingBusy }} 项正在处理中，会被自动跳过，不会误删。
+          </p>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" :disabled="deleting" @click="closeConfirm">取消</button>
+          <button class="btn btn-danger" :disabled="deleting" @click="runDelete">
+            {{ deleting ? '删除中…' : '确认删除' }}
+          </button>
+        </div>
       </div>
     </div>
   </section>
@@ -480,9 +646,10 @@ onUnmounted(() => {
 
 .th {
   display: grid;
-  /* 四列表格：任务弹性占主，状态/风险按比例铺满整行，操作固定右对齐，
+  /* 五列表格：勾选列窄置首，任务弹性占主，状态/风险按比例铺满整行，
+     操作固定右对齐，
      避免"1fr auto auto"把所有内容推到最右挤成一簇 */
-  grid-template-columns: minmax(240px, 1.3fr) minmax(108px, 0.55fr) minmax(220px, 1fr) 84px;
+  grid-template-columns: 30px minmax(240px, 1.3fr) minmax(108px, 0.55fr) minmax(220px, 1fr) 156px;
   align-items: center;
   gap: 16px;
   padding: 8px 18px;
@@ -500,7 +667,7 @@ onUnmounted(() => {
 
 .row {
   display: grid;
-  grid-template-columns: minmax(240px, 1.3fr) minmax(108px, 0.55fr) minmax(220px, 1fr) 84px;
+  grid-template-columns: 30px minmax(240px, 1.3fr) minmax(108px, 0.55fr) minmax(220px, 1fr) 156px;
   align-items: center;
   gap: 16px;
   padding: 12px 18px;
@@ -588,13 +755,177 @@ onUnmounted(() => {
   font-weight: 600;
   padding: 4px 8px;
   border-radius: 6px;
-  justify-self: end;
   cursor: pointer;
   transition: background 0.12s ease;
 }
 
 .op:hover {
   background: var(--pri-soft);
+}
+
+/* 行内操作组: 查看(靛蓝) + 删除(红, 危险操作语义) */
+.ops {
+  display: flex;
+  gap: 6px;
+  justify-self: end;
+}
+
+.op.del {
+  color: var(--seal-deep);
+}
+
+.op.del:hover {
+  background: var(--seal-soft);
+}
+
+.op:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* 操作结果提示（删除成功/跳过原因，绿色一闪而过） */
+.ok-note {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--ok);
+  font-weight: 600;
+}
+
+/* 批量操作条：勾选后出现 */
+.bulkbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 0 10px;
+  padding: 8px 12px;
+  border: 1px dashed var(--pri);
+  border-radius: 8px;
+  background: var(--pri-soft);
+}
+
+.bulk-count {
+  font-size: 13px;
+  color: var(--pri-deep);
+}
+
+.btn-danger {
+  background: var(--seal);
+  border-color: var(--seal);
+  color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--seal-deep);
+  border-color: var(--seal-deep);
+}
+
+.btn-danger:disabled {
+  opacity: 0.6;
+}
+
+/* 表头/行内勾选框 */
+.sel-hd,
+.sel {
+  display: inline-grid;
+  place-items: center;
+}
+
+.sel-hd input,
+.sel input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--pri);
+  cursor: pointer;
+}
+
+/* 删除确认弹窗：单删/批量共用 */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(23, 31, 48, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+  padding: 20px;
+}
+
+.modal {
+  width: min(460px, 100%);
+  background: #fff;
+  border-radius: 12px;
+  padding: 18px 20px;
+  box-shadow: 0 18px 50px rgba(23, 31, 48, 0.28);
+}
+
+.modal h3 {
+  margin: 0 0 10px;
+  font-size: 17px;
+}
+
+.modal-body {
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+
+.modal-body p {
+  margin: 0 0 8px;
+}
+
+.danger-text {
+  color: var(--seal-deep);
+}
+
+.del-list {
+  list-style: none;
+  margin: 4px 0 10px;
+  padding: 0;
+  max-height: 168px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.del-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.del-list li:last-child {
+  border-bottom: 0;
+}
+
+.del-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.del-tid {
+  flex: none;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.warn-txt {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
 }
 
 /* 同名徽标：同一份文档被反复上传时提示重复 */
@@ -687,7 +1018,7 @@ onUnmounted(() => {
     flex: 1 1 100%;
   }
 
-  .row .op {
+  .row .ops {
     margin-left: auto;
   }
 }

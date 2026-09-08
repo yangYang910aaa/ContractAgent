@@ -334,6 +334,26 @@ class ReviewRunner:
         state = self.graph.invoke(Command(resume=answer), self._config(thread_id))
         return self._finish(thread_id, state)
 
+    def delete_task(self, thread_id: str) -> bool:
+        """删除任务: 登记簿记录 + checkpointer 线程状态, 返回是否删到记录。
+
+        上传落盘文件的磁盘清理由路由层负责(它知道 uploads 目录语义)。
+        checkpointer 清理失败不阻断(登记簿删除为主; 旧线程状态残留无害,
+        同 thread_id 不会复用)。
+        """
+        if self.store.get(thread_id) is None:
+            return False
+        # 分支: checkpointer 支持按线程删除(PostgresSaver/MemorySaver 新版) →
+        # 检查点一并清, 防孤儿状态
+        deleter = getattr(self.checkpointer, "delete_thread", None)
+        if deleter is not None:
+            try:
+                deleter(self._config(thread_id))
+            except Exception:
+                pass
+        self.store.delete(thread_id)
+        return True
+
 
 def _print_summary(state: dict) -> None:
     """CLI 剧本 2: 打印最终报告摘要（文件/评级/风险/审批）。"""

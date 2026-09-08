@@ -43,6 +43,37 @@ def get_manager(request: Request) -> TaskManager:
     return request.app.state.manager
 
 
+def _remove_source_file(source: str) -> None:
+    """删除任务对应的上传落盘文件(仅限 data/uploads 内, 防误删任意路径)。"""
+    try:
+        path = Path(source).resolve()
+    except Exception:
+        return
+    # 这种情况是: 源不在上传目录(内置样本路径/脏数据) → 不动磁盘
+    try:
+        path.relative_to(UPLOAD_DIR.resolve())
+    except ValueError:
+        return
+    try:
+        if path.is_file():
+            path.unlink()
+    except OSError:
+        pass  # 删文件失败不阻断任务删除(登记簿删除为主)
+
+
+def _delete_one(manager: TaskManager, thread_id: str) -> str | None:
+    """删单个任务(登记簿 + 检查点 + 上传文件); 成功返回 None, 失败返回原因。"""
+    record = manager.runner.store.get(thread_id)
+    if record is None:
+        return "任务不存在"
+    # 这种情况是: 正在处理中 → 拒绝删(防删到一半的文件/状态)
+    if record.status in ("pending", "processing"):
+        return "任务正在处理"
+    manager.runner.delete_task(thread_id)
+    _remove_source_file(record.source)
+    return None
+
+
 class ApprovalIn(BaseModel):
     """审批入参: 只收意见文本; 动作(放行/打回)由不同路由决定."""
 
@@ -54,6 +85,12 @@ class EditIn(BaseModel):
 
     patches: dict = Field(description="字段补丁，如 {'warranty_months': 24}")
     note: str = Field(default="", description="修改说明")
+
+
+class BatchDeleteIn(BaseModel):
+    """批量删除入参: 要删除的任务 thread_id 列表(去重后逐个删)。"""
+
+    thread_ids: list[str] = Field(min_length=1, description="任务 thread_id 列表")
 
 
 class TaskSummaryOut(BaseModel):
@@ -159,7 +196,7 @@ async def upload_task(
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
     # 两段式登记：先建任务拿 thread_id（落盘文件名用），再补 source 并入队——
-    # 落盘路径依赖 thread_id，不能像 submit 那样一步到位（易错点）
+    # 落盘路径依赖 thread_id，不能像 submit 那样一步到位
     thread_id = manager.register(file.filename or "contract")
     target = UPLOAD_DIR / f"{thread_id}{suffix}"
     content = await file.read()
@@ -176,6 +213,45 @@ def list_tasks(manager: TaskManager = Depends(get_manager)) -> dict:
     records = manager.runner.store.list_records()
     # worker_count 用 getattr 兜底：测试注入的假 manager 可能缺该属性，默认 1
     return {"tasks": [_summary(r) for r in records], "concurrency": getattr(manager, "worker_count", 1)}
+
+
+@router.delete("/tasks/{thread_id}")
+def delete_task(thread_id: str, manager: TaskManager = Depends(get_manager)) -> dict:
+    """删除任务: 登记簿记录 + 检查点线程状态 + 上传落盘文件(不可恢复)。
+
+    什么时候用: 队列页清理历史任务(任务列表只增不减)。
+    口径: done/error/gate 可删(删 gate 即放弃待审批); pending/processing 409,
+    防删到一半的文件/状态; 任务不存在 404。
+    """
+    reason = _delete_one(manager, thread_id)
+    if reason is not None:
+        code = 404 if reason == "任务不存在" else 409
+        raise HTTPException(status_code=code, detail=reason)
+    return {"deleted": thread_id}
+
+
+@router.post("/tasks/batch-delete")
+def batch_delete(
+    payload: BatchDeleteIn, manager: TaskManager = Depends(get_manager)
+) -> dict:
+    """批量删除任务(单条失败不阻断整批, 结果汇总返回)。
+
+    口径与单删一致: 处理中的任务跳过并说明; 已删除/重复 id 去重。
+    """
+    deleted: list[str] = []
+    skipped: list[dict] = []
+    seen: set[str] = set()
+    for thread_id in payload.thread_ids:
+        # 这种情况是: 同一批里重复传了同一 id → 只处理一次
+        if thread_id in seen:
+            continue
+        seen.add(thread_id)
+        reason = _delete_one(manager, thread_id)
+        if reason is None:
+            deleted.append(thread_id)
+        else:
+            skipped.append({"thread_id": thread_id, "reason": reason})
+    return {"deleted": deleted, "skipped": skipped}
 
 
 class SamplesIn(BaseModel):

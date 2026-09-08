@@ -112,6 +112,15 @@ def test_clear_and_unknown_field(pg: PgPersistence) -> None:
         store.update("whatever", not_a_field=True)
 
 
+def test_delete_removes_row(pg: PgPersistence) -> None:
+    """delete 删行并返回是否删到; 不存在的 id 返回 False。"""
+    store = pg.store
+    record = store.create("del.md")
+    assert store.delete(record.thread_id) is True
+    assert store.get(record.thread_id) is None
+    assert store.delete(record.thread_id) is False
+
+
 def test_gate_survives_new_connection_and_resume(pg: PgPersistence) -> None:
     """核心价值: 闸口任务在全新连接/进程后仍可恢复审批并出报告。"""
     graph1 = build_review_graph(

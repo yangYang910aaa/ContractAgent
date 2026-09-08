@@ -438,11 +438,16 @@ function openSource(clause?: string, evidence?: string) {
             <button class="btn btn-ghost" @click="downloadReport">导出 JSON</button>
           </div>
 
-          <!-- 审批留痕：done 报告里回显最近一次审批动作与意见 -->
+          <!-- 审批留痕：done 报告回显最近一次审批动作与意见(动作徽章 + 意见块, 避免横排挤成三列) -->
           <div v-if="detail.report.approval" class="card pad appr">
-            <span class="muted">审批记录：</span>
-            <b>{{ detail.report.approval.action === 'approved' ? '放行' : detail.report.approval.action === 'rejected' ? '打回' : '编辑重审' }}</b>
-            <span v-if="detail.report.approval.reviewer_note" class="note">「{{ detail.report.approval.reviewer_note }}」</span>
+            <div class="appr-head">
+              <span class="muted">审批记录</span>
+              <span class="chip" :class="detail.report.approval.action">
+                {{ detail.report.approval.action === 'approved' ? '放行' : detail.report.approval.action === 'rejected' ? '打回' : '编辑重审' }}
+              </span>
+            </div>
+            <p v-if="detail.report.approval.reviewer_note" class="note">{{ detail.report.approval.reviewer_note }}</p>
+            <p v-else class="note none">（未填写审批意见）</p>
           </div>
 
           <!-- 结论条：疑似空白模板单独成结论，不混进下方风险清单 -->
@@ -811,16 +816,59 @@ function openSource(clause?: string, evidence?: string) {
 
 .appr {
   margin-top: 12px;
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
   background: var(--card-2);
   border-radius: 8px;
-  padding: 10px 14px;
-  font-size: 13.5px;
+  padding: 12px 16px;
+  font-size: 14.5px;
+}
+
+.appr-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* 标签不随全局 .muted 走浅灰, 在卡片内加深加粗, 保证可读 */
+.appr-head .muted {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* 动作徽章: 放行绿 / 打回红 / 编辑重审靛蓝(与闸口操作语义一致) */
+.appr .chip {
+  padding: 2px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.appr .chip.approved {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.appr .chip.rejected {
+  color: var(--seal-deep);
+  background: var(--seal-soft);
+}
+
+.appr .chip.edited {
+  color: var(--pri-deep);
+  background: var(--pri-soft);
 }
 
 .appr .note {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14.5px;
+  white-space: pre-wrap; /* 保留打回原因里的换行, 条目式意见按行展示 */
+  word-break: break-word;
+  line-height: 1.7;
+}
+
+.appr .note.none {
   color: var(--ink-2);
 }
 
@@ -1019,7 +1067,7 @@ function openSource(clause?: string, evidence?: string) {
 }
 
 .s-card h3 {
-  font-size: 13.5px;
+  font-size: 15px;
   font-weight: 700;
   margin: 0 0 12px;
 }
@@ -1038,7 +1086,8 @@ function openSource(clause?: string, evidence?: string) {
 }
 
 .s-mode {
-  font-size: 12px;
+  font-size: 13px;
+  color: var(--ink-2);
 }
 
 .s-stats {
@@ -1056,8 +1105,8 @@ function openSource(clause?: string, evidence?: string) {
 }
 
 .s-stat span {
-  font-size: 11.5px;
-  color: var(--muted);
+  font-size: 13px;
+  color: var(--ink-2);
   font-weight: 600;
 }
 
@@ -1076,7 +1125,7 @@ function openSource(clause?: string, evidence?: string) {
 }
 
 .s-kv {
-  padding: 5px 0;
+  padding: 7px 0;
   border-bottom: 1px solid var(--line);
 }
 
@@ -1085,13 +1134,16 @@ function openSource(clause?: string, evidence?: string) {
 }
 
 .s-kv dt {
-  font-size: 11.5px;
-  color: var(--muted);
+  font-size: 12.5px;
+  color: var(--ink-2);
+  font-weight: 500;
+  letter-spacing: 0.02em;
 }
 
 .s-kv dd {
-  margin: 1px 0 0;
-  font-size: 13px;
+  margin: 2px 0 0;
+  font-size: 15px;
+  font-weight: 600;
   color: var(--ink);
   word-break: break-all;
 }
@@ -1136,22 +1188,23 @@ function openSource(clause?: string, evidence?: string) {
 .c-txt {
   flex: 1;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: 14px;
   font-weight: 600;
-  color: var(--ink-2);
+  color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .c-cnt {
-  font-size: 11px;
-  color: var(--muted);
+  font-size: 12px;
+  color: var(--ink-2);
   flex: none;
 }
 
 .s-empty {
-  font-size: 12px;
+  font-size: 13px;
+  color: var(--ink-2);
   margin-bottom: 10px;
 }
 
