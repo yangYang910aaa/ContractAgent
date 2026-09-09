@@ -17,6 +17,7 @@ from langgraph.types import Command, interrupt
 
 from backend.app.parser import extract_text
 from backend.app.pipeline import enrich_policy_hits, infer_effective_from_signature
+from backend.app.reviewer import BlindReviewOutput, blind_review, merge_review
 from backend.app.rules import annotate_template_risks, evaluate, grade_report
 from backend.app.schemas import ContractModel, RiskItem
 from backend.app.store import ThreadStore
@@ -39,6 +40,7 @@ class ReviewState(TypedDict, total=False):
     approvals: Annotated[list[dict], operator.add]  # 审批历史（reducer 追加，编辑重审可多条）
     rerun: bool  # True=审批要求 edited，需回 rules 重审（edge 判定用）
     report: dict  # 最终报告（JSON 可序列化）
+    review: dict  # 双审合并结果段（mode/stats/details/summary；单审不写此键）
     error: str  # 抽取/图执行错误信息
     review_mode: str  # single / double / parallel（多智能体决策钩子，默认 single）
 
@@ -62,6 +64,7 @@ def _build_gate_payload(state: ReviewState) -> dict:
                 "evidence": (r.get("evidence") or "")[:120],
                 "policy_ref": r.get("policy_ref"),
                 "suggestion": r.get("suggestion", ""),
+                "origin": r.get("origin"),  # rules/review：让审批页看出哪条是复核补抓
             }
             for r in high
         ],
@@ -94,12 +97,14 @@ def _parse_approval(answer: Any) -> dict:
 def build_review_graph(
     extractor: Callable[[str], ContractModel] | None = None,
     retriever: Callable[[str], list[Any]] | None = None,
+    reviewer: Callable[[str], BlindReviewOutput] | None = None,
     checkpointer: Any = None,
 ) -> Any:
     """构造 LangGraph 审核图 
 
     extractor: text -> ContractModel (默认 extract_contract 真 LLM)  
     retriever: query -> PolicyHit 列表 (默认 pipeline.enrich 的默认检索)。
+    reviewer: text -> BlindReviewOutput（双审盲审复核器；默认 blind_review 真 LLM）。
     checkpointer: MemorySaver 等；不传也能跑，但 interrupt/HITL 必须配
     checkpointer (LangGraph 硬约束，见 docs/问题与踩坑记录.md)。
     返回 compiled graph。
@@ -136,6 +141,39 @@ def build_review_graph(
         model = ContractModel.model_validate(state["extracted"])
         risks = annotate_template_risks(evaluate(model), state.get("text") or "")
         return {"risks": [r.model_dump(mode="json") for r in risks], "rerun": False}
+
+    def review_node(state: ReviewState) -> dict:
+        """双审盲审：复核 LLM 只看原文分条+政策条文，独立出清单后与主审合并。
+
+        只有 review_mode=double 的条件边会进这里；合并后的 risks 覆盖主审风险，
+        再交给 policy 节点统一补政策引用（复核新增项也带依据可溯源）。
+        盲审失败不阻断：保留主审结果并在 review 段附 error。
+        """
+        risks = _risks_from_dicts(state.get("risks", []))
+        text = state.get("text") or ""
+        # 这种情况是：无正文（异常路径）→ 盲审无意义，跳过复核但留痕
+        if not text.strip():
+            return {
+                "review": {
+                    "mode": "double",
+                    "summary": "无正文，跳过独立复核",
+                    "stats": {"findings": 0, "agreed": 0, "upgraded": 0, "added": 0, "noted": 0},
+                    "details": [],
+                }
+            }
+        run = reviewer or (lambda t: blind_review(text=t, retriever=retriever))
+        try:
+            output = run(text)
+        except Exception as exc:  # 注入的复核器异常也按 best-effort 处理（不拖垮队列）
+            output = BlindReviewOutput(findings=[], error=f"盲审失败：{exc}")
+        outcome = merge_review(risks, output.findings)
+        # 这种情况是：复核调用/政策读取失败 → 错误挂到 review 段（主审结果保留）
+        if output.error:
+            outcome.review["error"] = output.error
+        return {
+            "risks": [r.model_dump(mode="json") for r in outcome.risks],
+            "review": outcome.review,
+        }
 
     def policy_node(state: ReviewState) -> dict:
         """为带 policy_ref 的风险检索政策原文（引用依据，检索失败不阻断）。"""
@@ -185,6 +223,7 @@ def build_review_graph(
                 "risks": state.get("risks", []),
                 "policy_hits": state.get("policy_hits", []),
                 "extracted": state.get("extracted"),
+                "review": state.get("review"),
                 "approval": state.get("approval"),
                 "review_mode": state.get("review_mode", "single"),
                 "status": "done",
@@ -210,6 +249,7 @@ def build_review_graph(
     builder.add_node("parse", parse_node)
     builder.add_node("extract", extract_node)
     builder.add_node("rules", rules_node)
+    builder.add_node("review", review_node)
     builder.add_node("policy", policy_node)
     builder.add_node("grade", grade_node)
     builder.add_node("gate", gate_node)
@@ -224,7 +264,13 @@ def build_review_graph(
         lambda s: "error" if s.get("error") else "rules",
         {"error": "error", "rules": "rules"},
     )
-    builder.add_edge("rules", "policy")
+    # 这种情况是：双审 → 先进 review 盲审合并，再 policy 补引用；单审 → 直连 policy
+    builder.add_conditional_edges(
+        "rules",
+        lambda s: "review" if s.get("review_mode") == "double" else "policy",
+        {"review": "review", "policy": "policy"},
+    )
+    builder.add_edge("review", "policy")
     builder.add_edge("policy", "grade")
     # 这种情况是：存在 high（评级 fail）→ 停闸口等人工；否则直达报告
     builder.add_conditional_edges(
@@ -255,6 +301,7 @@ class ReviewRunner:
         self,
         extractor: Callable[[str], ContractModel] | None = None,
         retriever: Callable[[str], list[Any]] | None = None,
+        reviewer: Callable[[str], BlindReviewOutput] | None = None,
         review_mode: str = "single",
         store: Any = None,
         checkpointer: Any = None,
@@ -264,7 +311,10 @@ class ReviewRunner:
         self.checkpointer = checkpointer if checkpointer is not None else MemorySaver()
         # checkpointer 在建图时传入：interrupt/恢复依赖它保存线程状态
         self.graph = build_review_graph(
-            extractor=extractor, retriever=retriever, checkpointer=self.checkpointer
+            extractor=extractor,
+            retriever=retriever,
+            reviewer=reviewer,
+            checkpointer=self.checkpointer,
         )
         self.last_thread_id: str = ""  # 最近一次 start 的 thread_id 
 
@@ -288,11 +338,19 @@ class ReviewRunner:
             self.store.update(thread_id, source_text=state["text"])
         return state
 
-    def start(self, source: str, text: str | None = None, thread_id: str | None = None) -> dict:
+    def start(
+        self,
+        source: str,
+        text: str | None = None,
+        thread_id: str | None = None,
+        review_mode: str | None = None,
+    ) -> dict:
         """发起一份合同的审核: 登记任务 → 跑图（可能停在 gate 等审批）。
 
         thread_id 缺省时新建任务; 队列/路由先登记的场景传入既有 thread_id,
         避免同一任务被登记两次（登记簿与 checkpointer 必须同键）。
+        review_mode 缺省用构造参数 self.review_mode；队列/服务可按任务覆盖
+        （任务登记簿存的 review_mode 由 TaskManager 起跑时传入）。
         """
         if thread_id is None:
             record = self.store.create(source)
@@ -307,7 +365,10 @@ class ReviewRunner:
             if not record.source:
                 self.store.update(tid, source=source)
         self.last_thread_id = tid
-        init: dict = {"source": source, "review_mode": self.review_mode}
+        init: dict = {
+            "source": source,
+            "review_mode": review_mode or self.review_mode,
+        }
         if text is not None:
             init["text"] = text
         state = self.graph.invoke(init, self._config(tid))

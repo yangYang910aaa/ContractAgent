@@ -127,6 +127,35 @@ const templateNotice = computed(
   () => reportRisks.value.find((r) => r.risk_type === 'blank_template_suspected') ?? null,
 )
 const listRisks = computed(() => reportRisks.value.filter((r) => r.risk_type !== 'blank_template_suspected'))
+// 双审复核段：review_mode=double 的报告才有（merge_review 产出；单审为 null）
+const review = computed(() => detail.value?.report?.review ?? null)
+const reviewError = computed(() => review.value?.error ?? '')
+
+// 复核发现的处理结果 → 徽标文案/样式（与后端 outcome 对齐）
+const outcomeText: Record<string, string> = {
+  agreed: '与主审一致',
+  added: '复核新增',
+  upgraded: '取高升级',
+  noted: '仅提示',
+}
+const outcomeClass: Record<string, string> = {
+  agreed: 'rv-agree',
+  added: 'rv-added',
+  upgraded: 'rv-upgrade',
+  noted: 'rv-note',
+}
+
+/** 复核统计挑出非零项，右栏/卡片顶部的 chips 用。 */
+const reviewChips = computed(() => {
+  const s = review.value?.stats
+  if (!s) return []
+  return [
+    { key: 'added', label: '复核新增', count: s.added },
+    { key: 'upgraded', label: '取高升级', count: s.upgraded },
+    { key: 'agreed', label: '与主审一致', count: s.agreed },
+    { key: 'noted', label: '仅提示', count: s.noted },
+  ].filter((c) => c.count > 0)
+})
 
 /** 政策行解析：已知标签行（文件编号/版本/生效日期/归口部门/适用范围/第X条）
  * 拆出标签与内容，标签用强调色、内容保持正文色——关键信息一眼可分。 */
@@ -361,6 +390,7 @@ function openSource(clause?: string, evidence?: string) {
             <div class="risk-top">
               <span class="stamp stamp-seal">{{ severityText.high }}</span>
               <span class="risk-type serif">{{ riskLabel(r) }}</span>
+              <span v-if="r.origin === 'review'" class="origin-badge" title="独立复核盲审补抓，未参考主审结论">复核新增</span>
               <span v-if="r.policy_ref" class="mono-num ref">{{ r.policy_ref }}</span>
             </div>
             <button v-if="r.clause_ref || r.evidence" class="clause-link"
@@ -457,6 +487,30 @@ function openSource(clause?: string, evidence?: string) {
             <p class="tpl-sug">{{ prettyField(templateNotice.suggestion ?? '') }}</p>
           </div>
 
+          <!-- 双审复核段：盲审独立结论与主审 diff 的结果（一致/新增/升级/仅提示） -->
+          <div v-if="review && review.mode === 'double'" class="card pad rv-card">
+            <div class="rv-head">
+              <h4 class="rv-title">独立复核（盲审）</h4>
+              <span class="muted rv-desc">复核只看原文与政策，不看主审结论</span>
+            </div>
+            <p v-if="reviewError" class="err">{{ reviewError }}</p>
+            <p v-else-if="review.summary" class="rv-summary">{{ review.summary }}</p>
+            <div v-if="reviewChips.length" class="rv-chips">
+              <span v-for="c in reviewChips" :key="c.key" class="chip" :class="outcomeClass[c.key]">
+                {{ c.label }} {{ c.count }}
+              </span>
+            </div>
+            <ul v-if="review.details?.length" class="rv-list">
+              <li v-for="(d, i) in review.details" :key="i" class="rv-row">
+                <span class="chip" :class="outcomeClass[d.outcome]">{{ outcomeText[d.outcome] ?? d.outcome }}</span>
+                <span class="rv-type serif">{{ riskLabel(d) }}</span>
+                <span v-if="d.severity" class="muted rv-sev">{{ severityText[d.severity] }}</span>
+                <span v-if="d.clause_ref" class="muted mono-num rv-clause">{{ d.clause_ref }}</span>
+                <span v-if="d.policy_ref" class="mono-num ref">{{ d.policy_ref }}</span>
+              </li>
+            </ul>
+          </div>
+
           <!-- 风险清单：空=自动放行提示，非空逐条展示 -->
           <template v-if="listRisks.length">
             <h4>风险清单</h4>
@@ -464,6 +518,7 @@ function openSource(clause?: string, evidence?: string) {
               <div class="risk-top">
                 <span class="stamp" :class="severityClass[r.severity]">{{ severityText[r.severity] }}</span>
                 <span class="risk-type serif">{{ riskLabel(r) }}</span>
+                <span v-if="r.origin === 'review'" class="origin-badge" title="独立复核盲审补抓，未参考主审结论">复核新增</span>
                 <span v-if="r.policy_ref" class="mono-num ref">{{ r.policy_ref }}</span>
               </div>
               <button v-if="r.clause_ref || r.evidence" class="clause-link"
@@ -1277,6 +1332,106 @@ function openSource(clause?: string, evidence?: string) {
   border-color: var(--seal);
   background: var(--seal);
   box-shadow: 0 0 0 3px var(--seal-soft);
+}
+
+/* ---- 双审复核段（report.review）与"复核新增"徽标 ---- */
+.origin-badge {
+  align-self: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--pri-soft);
+  color: var(--pri);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.rv-card {
+  margin: 12px 0;
+  border-left: 3px solid var(--pri);
+}
+
+.rv-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.rv-title {
+  margin: 0;
+  font-size: 15px;
+}
+
+.rv-desc {
+  font-size: 11.5px;
+}
+
+.rv-summary {
+  margin: 4px 0 8px;
+  font-size: 13px;
+  color: #444;
+}
+
+.rv-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.rv-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.rv-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 12.5px;
+}
+
+.rv-row + .rv-row {
+  border-top: 1px dashed var(--line);
+}
+
+.rv-type {
+  font-weight: 600;
+  color: #222;
+}
+
+.rv-sev {
+  font-size: 11.5px;
+}
+
+.rv-clause {
+  font-size: 11.5px;
+}
+
+/* outcome 徽标色：一致=灰绿、新增=主色、升级=朱、仅提示=灰 */
+.chip.rv-agree {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.chip.rv-added {
+  background: var(--pri-soft);
+  color: var(--pri);
+}
+
+.chip.rv-upgrade {
+  background: var(--seal-soft);
+  color: var(--seal);
+}
+
+.chip.rv-note {
+  background: var(--line);
+  color: var(--muted);
 }
 
 </style>

@@ -26,6 +26,7 @@ class TaskRecord:
     thread_id: str  # LangGraph checkpointer 线程键
     source: str  #worker/文件下载时用。 来源文件路径/标签。上传场景先占位后补全
     name: str = ""  #前端列表/详情页时。  展示名（原始文件名；上传后与 source 落盘路径分离）
+    review_mode: str = "single"  # 审查模式（single/double）；worker 起跑时读它决定是否盲审
     source_text: str = ""  #get_task_source()路由。  解析出的合同全文
     status: str = "pending"  #前端+_resume_or_409。  pending=抽取中 / gate=待人工审批 / done=完成 / error=失败
     gate_payload: dict | None = None  #审批页前端。 待审风险摘要(仅gate状态有值)

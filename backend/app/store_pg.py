@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS contract_tasks (
     thread_id    text PRIMARY KEY,
     source       text NOT NULL,
     name         text NOT NULL DEFAULT '',
+    review_mode  text NOT NULL DEFAULT 'single',
     source_text  text NOT NULL DEFAULT '',
     status       text NOT NULL DEFAULT 'pending',
     gate_payload jsonb,
@@ -37,6 +38,7 @@ CREATE TABLE IF NOT EXISTS contract_tasks (
 _FIELD_COLUMNS: dict[str, str] = {
     "source": "source",
     "name": "name",
+    "review_mode": "review_mode",
     "source_text": "source_text",
     "status": "status",
     "gate_payload": "gate_payload",
@@ -58,9 +60,15 @@ class PgThreadStore:
         self._ensure_table()
 
     def _ensure_table(self) -> None:
-        """幂等建表(启动/构造时执行, 重复建不报错)。"""
+        """幂等建表 + 老库补列(启动/构造时执行, 重复执行不报错)。"""
         with self._pool.connection() as conn:
             conn.execute(_TABLE_DDL)
+            # 老库升级：review_mode 是后加列，CREATE TABLE IF NOT EXISTS 不会补
+            # 已存在的表，需单独 ADD COLUMN IF NOT EXISTS（PG 支持原子幂等加列）
+            conn.execute(
+                "ALTER TABLE contract_tasks ADD COLUMN IF NOT EXISTS "
+                "review_mode text NOT NULL DEFAULT 'single'"
+            )
 
     def _row_to_record(self, row: dict) -> TaskRecord:
         """DB 行(dict) → TaskRecord; jsonb 列 psycopg 已自动解成 dict。"""
@@ -71,9 +79,17 @@ class PgThreadStore:
         record = TaskRecord(thread_id=new_thread_id(), source=source, name=source)
         with self._pool.connection() as conn:
             conn.execute(
-                "INSERT INTO contract_tasks (thread_id, source, name, status, created_at) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (record.thread_id, record.source, record.name, record.status, record.created_at),
+                "INSERT INTO contract_tasks "
+                "(thread_id, source, name, review_mode, status, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (
+                    record.thread_id,
+                    record.source,
+                    record.name,
+                    record.review_mode,
+                    record.status,
+                    record.created_at,
+                ),
             )
         return record
 
@@ -81,8 +97,9 @@ class PgThreadStore:
         """按 thread_id 取任务记录; 不存在返回 None。"""
         with self._pool.connection() as conn:
             row = conn.execute(
-                "SELECT thread_id, source, name, source_text, status, gate_payload, "
-                "report, error, created_at FROM contract_tasks WHERE thread_id = %s",
+                "SELECT thread_id, source, name, review_mode, source_text, status, "
+                "gate_payload, report, error, created_at FROM contract_tasks "
+                "WHERE thread_id = %s",
                 (thread_id,),
             ).fetchone()
         return self._row_to_record(row) if row else None
@@ -114,8 +131,9 @@ class PgThreadStore:
         """全部任务(按创建时间倒序, 供队列/列表页展示)。"""
         with self._pool.connection() as conn:
             rows = conn.execute(
-                "SELECT thread_id, source, name, source_text, status, gate_payload, "
-                "report, error, created_at FROM contract_tasks ORDER BY created_at DESC"
+                "SELECT thread_id, source, name, review_mode, source_text, status, "
+                "gate_payload, report, error, created_at FROM contract_tasks "
+                "ORDER BY created_at DESC"
             ).fetchall()
         return [self._row_to_record(row) for row in rows]
 

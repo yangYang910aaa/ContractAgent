@@ -376,6 +376,7 @@ onUnmounted(() => {
           <span class="file-line">
             <span class="ficon" :class="fileChip(t).cls">{{ fileChip(t).label }}</span>
             <span class="file">{{ t.source }}</span>
+            <span v-if="t.review_mode === 'double'" class="mode-badge" title="主审 + 独立复核盲审">双审</span>
             <span v-if="nameCounts.get(t.source.trim().toLowerCase())! > 1" class="dup-badge mono-num">
               同名 ×{{ nameCounts.get(t.source.trim().toLowerCase()) }}
             </span>
@@ -935,6 +936,16 @@ onUnmounted(() => {
   color: var(--warn);
   background: var(--warn-soft);
   border: 1px solid rgba(192, 127, 18, 0.3);
+  border-radius: 6px;
+  padding: 0 8px;
+}
+
+.mode-badge {
+  flex: none;
+  font-size: 11px;
+  color: var(--pri);
+  background: var(--pri-soft);
+  border: 1px solid rgba(52, 86, 209, 0.25);
   border-radius: 6px;
   padding: 0 8px;
 }

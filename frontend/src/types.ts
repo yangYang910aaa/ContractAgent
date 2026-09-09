@@ -18,6 +18,7 @@ export interface GateHighRisk {
   evidence?: string
   policy_ref?: string | null
   suggestion?: string
+  origin?: 'rules' | 'review' | null // 风险来源：review=盲审复核补抓（审批页标注）
 }
 
 /** 闸口载荷：ask 是给审批人看的引导文案。 */
@@ -37,6 +38,7 @@ export interface RiskItem {
   policy_ref?: string | null
   suggestion?: string
   field?: string | null // 关联的 ContractModel 字段名（前端高亮预留）
+  origin?: 'rules' | 'review' | null // 来源：rules=主审 / review=复核新增（报告徽标）
 }
 
 /** 政策引用：报告里 policy_ref 对应的政策原文片段与相似度。 */
@@ -54,6 +56,33 @@ export interface Approval {
   patches?: Record<string, unknown> | null
 }
 
+/** 双审 review 段里一条复核发现的处理结果（outcome 与后端 merge_review 对齐）。 */
+export interface ReviewDetail {
+  risk_type: string
+  severity: Severity
+  clause_ref?: string
+  evidence?: string
+  policy_ref?: string | null
+  suggestion?: string
+  outcome: 'agreed' | 'added' | 'upgraded' | 'noted' // 一致/复核新增/取高升级/仅提示
+  note?: string // outcome 的补充说明（如复核门拦截原因）
+}
+
+/** 双审复核结果段（review_mode=double 的报告才有值；merge_review 产出）。 */
+export interface ReviewSection {
+  mode: 'double'
+  summary?: string // 一句话摘要（前端卡片首行）
+  stats: {
+    findings: number // 复核发现总数
+    agreed: number // 与主审一致
+    upgraded: number // 取高升级
+    added: number // 复核新增（并入风险）
+    noted: number // 仅提示不并入
+  }
+  details?: ReviewDetail[]
+  error?: string | null // 盲审调用失败说明（best-effort）
+}
+
 /** 最终报告：grade 为 null 表示审查失败（见 error）。 */
 export interface Report {
   contract_file?: string
@@ -63,6 +92,7 @@ export interface Report {
   extracted?: Record<string, unknown> | null
   approval?: Approval | null
   review_mode?: string // single/double/parallel（多智能体决策钩子）
+  review?: ReviewSection | null // 双审复核段（double 模式报告）
   error?: string
   status?: string
 }
@@ -72,6 +102,7 @@ export interface TaskSummary {
   thread_id: string
   source: string // 展示名：原始文件名
   status: TaskStatus
+  review_mode?: string // single/double（队列行徽标）
   grade?: Grade
   risk_count?: number | null // done=报告风险数；gate=待审 high 数；其余 null
   template?: boolean // 报告含"疑似空白模板"结论（前端评级显示"待确认"）

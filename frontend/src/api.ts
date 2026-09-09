@@ -15,10 +15,14 @@ async function j<T>(resp: Response): Promise<T> {
   return resp.json() as Promise<T>
 }
 
-/** 上传一份合同（multipart），返回任务 thread_id。 */
-export async function uploadContract(file: File): Promise<{ thread_id: string; status: string }> {
+/** 上传一份合同（multipart），返回任务 thread_id；reviewMode 选单审/双审。 */
+export async function uploadContract(
+  file: File,
+  reviewMode: 'single' | 'double' = 'single',
+): Promise<{ thread_id: string; status: string; review_mode: string }> {
   const form = new FormData()
   form.append('file', file)
+  form.append('review_mode', reviewMode)
   return j(await fetch('/api/tasks', { method: 'POST', body: form }))
 }
 

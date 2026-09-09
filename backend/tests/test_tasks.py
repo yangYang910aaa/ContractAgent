@@ -59,11 +59,20 @@ class _FlakyRunner:
     def __init__(self, fail_times: int = 2, exc: Exception | None = None) -> None:
         self.store = ThreadStore()
         self.calls = 0
+        self.modes: list[str | None] = []  # start 收到的 review_mode（断言任务级覆盖用）
         self._fail_times = fail_times
         self._exc = exc or RuntimeError("429 rate limit: 触发限流")
 
-    def start(self, source: str, thread_id: str | None = None, text: str | None = None) -> dict:
+    def start(
+        self,
+        source: str,
+        thread_id: str | None = None,
+        text: str | None = None,
+        review_mode: str | None = None,
+    ) -> dict:
+        """模拟 ReviewRunner.start 新签名（review_mode 关键字忽略——计数与状态为主）。"""
         self.calls += 1
+        self.modes.append(review_mode)
         if self.calls <= self._fail_times:
             raise self._exc
         self.store.update(thread_id, status="done", report={"grade": "pass"})
@@ -97,5 +106,19 @@ def test_nontransient_failure_no_retry(monkeypatch: pytest.MonkeyPatch) -> None:
         assert manager.runner.calls == 1  # 只试了一次
         assert record.status == "error"
         assert "审查失败" in record.error
+    finally:
+        manager.shutdown()
+
+
+def test_submit_double_mode_reaches_worker_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    """任务级 review_mode：submit 登记 double → worker 起跑时把模式传给 runner.start。"""
+    monkeypatch.setattr(tasks_mod, "RETRY_BACKOFF_BASE", 0.01)
+    runner = _FlakyRunner(fail_times=0)
+    manager = TaskManager(runner=runner, worker=True, workers=1)
+    try:
+        tid = manager.submit("sample_x.md", review_mode="double")
+        assert manager.runner.store.get(tid).review_mode == "double"
+        assert wait_until_settled(manager, tid, timeout=20) is not None
+        assert runner.modes == ["double"]  # worker 把登记簿的模式带进了 start
     finally:
         manager.shutdown()

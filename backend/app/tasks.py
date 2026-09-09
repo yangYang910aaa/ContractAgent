@@ -106,7 +106,12 @@ class TaskManager:
             while attempt < MAX_ATTEMPTS:
                 attempt += 1
                 try:
-                    self.runner.start(record.source, thread_id=thread_id)
+                    # 按任务登记的审查模式起跑：double 会在 rules 后多跑一路盲审
+                    self.runner.start(
+                        record.source,
+                        thread_id=thread_id,
+                        review_mode=record.review_mode,
+                    )
                     last_exc = None
                     break
                 except Exception as exc:  # 图/LLM 异常，先判断能否重试
@@ -124,9 +129,12 @@ class TaskManager:
 
  
 
-    def register(self, source: str) -> str:
-        """只创建任务记录，不入队，返回 thread_id。"""
-        return self.runner.store.create(source).thread_id
+    def register(self, source: str, review_mode: str = "single") -> str:
+        """只创建任务记录，不入队，返回 thread_id；登记审查模式供 worker 起跑用。"""
+        thread_id = self.runner.store.create(source).thread_id
+        # 模式不是登记必填信息，用 update 补写（内存/PG 白名单都支持该字段）
+        self.runner.store.update(thread_id, review_mode=review_mode)
+        return thread_id
 
     def enqueue(self, thread_id: str) -> None:
         """把已登记任务放进队列 (register 与 enqueue 之间可更新 source)"""
@@ -134,9 +142,9 @@ class TaskManager:
             raise ValueError(f"任务不存在: {thread_id}")
         self._queue.put(thread_id)
 
-    def submit(self, source: str) -> str:
+    def submit(self, source: str, review_mode: str = "single") -> str:
         """登记任务并入队，返回 thread_id (worker 会按序处理)"""
-        thread_id = self.register(source)
+        thread_id = self.register(source, review_mode=review_mode)
         self.enqueue(thread_id)
         return thread_id
     
@@ -147,7 +155,11 @@ class TaskManager:
             raise ValueError(f"任务不存在：{thread_id}")
         self.runner.store.update(thread_id, status="processing")
         try:
-            state = self.runner.start(record.source, thread_id=thread_id)
+            state = self.runner.start(
+                record.source,
+                thread_id=thread_id,
+                review_mode=record.review_mode,
+            )
         except Exception as exc:
             self.runner.store.update(thread_id, status="error", error=f"审查失败：{exc}")
             state = {}

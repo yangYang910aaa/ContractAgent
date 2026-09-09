@@ -290,3 +290,41 @@ def test_source_and_file_missing_task_404(client: TestClient) -> None:
     """不存在的任务：/source 与 /file 都回 404。"""
     assert client.get("/api/tasks/not-exist/source").status_code == 404
     assert client.get("/api/tasks/not-exist/file").status_code == 404
+
+
+def test_upload_double_mode_registers_and_shows_in_list(client: TestClient) -> None:
+    """上传带 review_mode=double：任务登记与列表/详情都回带该模式（服务双审入口）。"""
+    resp = client.post(
+        "/api/tasks",
+        files={"file": ("c.md", _sample_bytes(), "text/markdown")},
+        data={"review_mode": "double"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["review_mode"] == "double"
+    manager = client.app.state.manager
+    assert manager.runner.store.get(body["thread_id"]).review_mode == "double"
+    # 列表与详情摘要统一带模式（前端队列行/详情页徽标数据源）
+    listed = client.get("/api/tasks").json()["tasks"]
+    assert any(t["thread_id"] == body["thread_id"] and t["review_mode"] == "double" for t in listed)
+    detail = client.get(f"/api/tasks/{body['thread_id']}").json()
+    assert detail["review_mode"] == "double"
+
+
+def test_upload_invalid_review_mode_400(client: TestClient) -> None:
+    """parallel 等未实现模式：上传直接 400，不落任务。"""
+    resp = client.post(
+        "/api/tasks",
+        files={"file": ("c.md", _sample_bytes(), "text/markdown")},
+        data={"review_mode": "parallel"},
+    )
+    assert resp.status_code == 400
+    assert "review_mode" in resp.json()["detail"] or "审查模式" in resp.json()["detail"]
+
+
+def test_samples_enqueue_with_double_mode(client: TestClient) -> None:
+    """样本批量入队也支持 review_mode：登记簿落 double（回归/评测按需选双审）。"""
+    resp = client.post("/api/tasks/samples", json={"count": 1, "review_mode": "double"})
+    assert resp.status_code == 200
+    tid = resp.json()["tasks"][0]["thread_id"]
+    assert client.app.state.manager.runner.store.get(tid).review_mode == "double"

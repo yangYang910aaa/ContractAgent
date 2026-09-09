@@ -91,6 +91,8 @@ class RiskItem(BaseModel):
     policy_ref: str | None = None  # 政策引用（如 "政策库检索结果）
     suggestion: str = ""  # 建议
     field: str | None = None  # 关联的 ContractModel 字段名
+    # 风险来源：rules=主审确定性规则（默认）/ review=盲审复核新增（双审模式并入的 high）
+    origin: Literal["rules", "review"] = "rules"
 
 
 class ApprovalRecord(BaseModel):

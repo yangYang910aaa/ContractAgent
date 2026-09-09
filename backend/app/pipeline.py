@@ -115,20 +115,27 @@ def build_report(
     extracted: ContractModel,
     risks: list[RiskItem],
     policy_hits: list[dict],
+    review: dict | None = None,
 ) -> dict:
-    """把流水线各环节结果组装成报告 dict（JSON 可直接序列化）。"""
-    return {
+    """把流水线各环节结果组装成报告 dict（JSON 可直接序列化）。
+
+    review 为双审（review_mode=double）的合并结果段；单审传 None，报告里为 null。
+    """
+    report = {
         "contract_file": contract_file,
         "grade": grade_report(risks).value,
         "risks": [risk.model_dump(mode="json") for risk in risks],  # date/Decimal → JSON 类型
         "policy_hits": policy_hits,
         "extracted": extracted.model_dump(mode="json"),
     }
+    report["review"] = review
+    return report
 
 
-def run_review(path: str | Path) -> dict:
+def run_review(path: str | Path, review_mode: str = "single") -> dict:
     """完整跑一份合同：取文本 → 抽取 → 规则 → 政策检索 → 报告。
 
+    review_mode: single=仅主审规则（默认）/ double=主审规则 + 独立盲审复核。
     抽取环节异常不中断批处理：报告带 error 字段，便于 CLI 批量跑时定位坏文件。
     """
     path = Path(path)
@@ -146,12 +153,20 @@ def run_review(path: str | Path) -> dict:
             "risks": [],
             "policy_hits": [],
             "extracted": extracted.model_dump(),
+            "review": None,
             "error": f"抽取失败：{exc}",
         }
     # 模板检测：原文含多处空白占位时缺必填降 medium（否则空白模板会误停闸口）
     risks = annotate_template_risks(evaluate(extracted), text)
+    review: dict | None = None
+    # 这种情况是：双审模式 → 盲审复核并与主审合并（合并后的新增 high 也参与检索引用）
+    if review_mode == "double":
+        from backend.app.reviewer import double_review  # 延迟导入：双审才拉 reviewer 链
+
+        risks, review = double_review(risks, text)
+    # 政策引用基于最终风险清单检索（复核新增项也带政策依据，report 才可溯源）
     policy_hits = enrich_policy_hits(risks)
-    return build_report(str(path), extracted, risks, policy_hits)
+    return build_report(str(path), extracted, risks, policy_hits, review=review)
 
 
 def _summary_line(report: dict) -> str:

@@ -15,6 +15,12 @@ const busy = ref(false)
 const uploading = ref('') // 当前正在传的文件名（进度文案）
 const results = ref<{ name: string; ok: boolean; tid?: string; error?: string }[]>([])
 const hint = '支持 PDF / Word / 文本(md,txt)，可多选批量上传；审核在后台顺序进行。'
+// 审查模式：single=主审规则；double=主审 + 独立复核盲审（多一次 LLM 调用）
+const reviewMode = ref<'single' | 'double'>('single')
+const modeOptions = [
+  { value: 'single', label: '单审', desc: '规则主审，快' },
+  { value: 'double', label: '主审 + 盲审复核', desc: '独立复核补漏，结论更稳' },
+] as const
 
 const allDone = computed(() => !busy.value && results.value.length > 0)
 
@@ -41,7 +47,7 @@ async function uploadAll() {
   for (const file of picked.value) {
     uploading.value = file.name
     try {
-      const res = await uploadContract(file)
+      const res = await uploadContract(file, reviewMode.value)
       results.value.push({ name: file.name, ok: true, tid: res.thread_id })
     } catch (err) {
       results.value.push({ name: file.name, ok: false, error: err instanceof Error ? err.message : '上传失败' })
@@ -59,6 +65,28 @@ async function uploadAll() {
     <div class="head">
       <h2>上传合同</h2>
       <p class="muted">{{ hint }}</p>
+    </div>
+
+    <!-- 审查模式：双审每份多一路独立复核 LLM（报告含 review 段） -->
+    <div class="mode card pad">
+      <div class="mode-head">
+        <span class="mode-title">审查模式</span>
+        <span class="mode-note muted">双审为"主审 + 独立盲审复核"，不看主审结论独立再查一遍，可补抓漏检</span>
+      </div>
+      <div class="mode-opts">
+        <button
+          v-for="opt in modeOptions"
+          :key="opt.value"
+          type="button"
+          class="mode-opt"
+          :class="{ on: reviewMode === opt.value }"
+          :disabled="busy"
+          @click="reviewMode = opt.value"
+        >
+          <b>{{ opt.label }}</b>
+          <span class="muted">{{ opt.desc }}</span>
+        </button>
+      </div>
     </div>
 
     <!-- 上传入口：整卡可点，已选文件后显示列表 -->
@@ -255,5 +283,70 @@ async function uploadAll() {
 
 .err-txt {
   font-size: 12.5px;
+}
+
+.mode {
+  margin-bottom: 12px;
+}
+
+.mode-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.mode-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.mode-note {
+  font-size: 12px;
+}
+
+.mode-opts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.mode-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 10px 14px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.mode-opt b {
+  font-size: 13.5px;
+  letter-spacing: 0.01em;
+}
+
+.mode-opt span {
+  font-size: 11.5px;
+}
+
+.mode-opt:hover:not(:disabled) {
+  border-color: var(--pri);
+}
+
+.mode-opt.on {
+  border-color: var(--pri);
+  background: var(--pri-soft);
+  box-shadow: 0 2px 10px rgba(52, 86, 209, 0.12);
+}
+
+.mode-opt:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 </style>

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -102,6 +102,7 @@ class TaskSummaryOut(BaseModel):
     thread_id: str  # 任务标识
     source: str  # 展示用原始文件名
     status: str  # pending/processing/gate/done/error
+    review_mode: str = "single"  # 审查模式（single/double）；队列行与详情页展示
     grade: str | None = None  # 报告评级（pass/conditional_pass/fail，done 后有值）
     gate_payload: dict | None = None  # 闸口待审载荷（gate 状态有值）
     risk_count: int | None = None  # 风险数（done=报告风险数，gate=待审 high 数）
@@ -149,6 +150,7 @@ def _summary(record) -> TaskSummaryOut:
         # 展示用原始文件名（name）；兼容旧记录回退到路径 basename
         source=(record.name or Path(record.source).name) if (record.name or record.source) else "",
         status=record.status,
+        review_mode=record.review_mode,
         grade=(record.report or {}).get("grade") if record.report else None,
         gate_payload=record.gate_payload,
         risk_count=risk_count,
@@ -180,15 +182,26 @@ def _clause_blocks(text: str) -> list[dict]:
 # ---- 上传与队列查询 ----
 
 
+def _validated_mode(review_mode: str) -> str:
+    """审查模式入参校验：只认 single/double（parallel 未实现，拒绝防误解）。"""
+    # 这种情况是：前端/调用方传了没实现的模式 → 400 明确提示
+    if review_mode not in ("single", "double"):
+        raise HTTPException(status_code=400, detail=f"不支持的审查模式：{review_mode}（仅 single/double）")
+    return review_mode
+
+
 @router.post("/tasks")
 async def upload_task(
     file: UploadFile,
+    review_mode: str = Form("single"),
     manager: TaskManager = Depends(get_manager),
 ) -> dict:
     """上传合同并登记审查任务.
 
     什么时候用: 用户在前端选文件上传. 返回 thread_id 供轮询任务进度.
+    review_mode: single=主审 / double=主审+独立盲审复核（多一次 LLM 调用）。
     """
+    review_mode = _validated_mode(review_mode)
     suffix = Path(file.filename or "").suffix.lower()
     # 分支：后缀不在白名单 → 400 明确提示（防任意文件写入）
     if suffix not in ALLOWED_SUFFIXES:
@@ -197,14 +210,14 @@ async def upload_task(
 
     # 两段式登记：先建任务拿 thread_id（落盘文件名用），再补 source 并入队——
     # 落盘路径依赖 thread_id，不能像 submit 那样一步到位
-    thread_id = manager.register(file.filename or "contract")
+    thread_id = manager.register(file.filename or "contract", review_mode=review_mode)
     target = UPLOAD_DIR / f"{thread_id}{suffix}"
     content = await file.read()
     target.write_bytes(content)
     # 登记簿 source 补成落盘路径（worker 取盘解析）
     manager.runner.store.update(thread_id, source=str(target))
     manager.enqueue(thread_id)
-    return {"thread_id": thread_id, "status": "pending"}
+    return {"thread_id": thread_id, "status": "pending", "review_mode": review_mode}
 
 
 @router.get("/tasks", response_model=TaskListOut)
@@ -262,6 +275,7 @@ class SamplesIn(BaseModel):
     """
 
     count: int = Field(default=3, ge=1, le=9, description="内置 sample_*.md 取前 N 份")
+    review_mode: str = "single"  # 审查模式（single/double）；回归/评测可按需选双审
 
 
 @router.post("/tasks/samples")
@@ -274,16 +288,17 @@ def enqueue_samples(
     什么时候用: 回归测试与 Phase 4 评测需要免上传跑内置样本; 前端无入口.
     """
     samples = sorted((BASE_DIR / "data" / "contracts").glob("sample_*.md"))[: body.count]
+    review_mode = _validated_mode(body.review_mode)
     # 这种情况是：本地样本缺失（生成器没跑过）→ 明确 404 提示先生成
     if not samples:
         raise HTTPException(status_code=404, detail="data/contracts 下没有 sample_*.md，请先运行样本生成器")
     queued: list[dict] = []
     for path in samples:
-        tid = manager.register(path.name)
+        tid = manager.register(path.name, review_mode=review_mode)
         # register 已把文件名存进 name（展示用），这里再补落盘 source
         manager.runner.store.update(tid, source=str(path))
         manager.enqueue(tid)
-        queued.append({"thread_id": tid, "source": path.name})
+        queued.append({"thread_id": tid, "source": path.name, "review_mode": review_mode})
     return {"tasks": queued}
 
 
