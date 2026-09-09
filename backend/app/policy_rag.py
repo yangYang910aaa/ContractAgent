@@ -1,12 +1,13 @@
 """政策库检索
 
-两层设计(对应执行计划风险预案"Milvus 可达则用，否则用内存")
-- MemoryStore:进程内余弦相似度，离线可测、零外部依赖；
+两层设计: Milvus 可达则用，否则用内存存储。
+- MemoryStore:进程内余弦相似度。
 - MilvusStore:pymilvus 3.0.1 MilvusClient 写法，插入后必须 flush()
   HNSW + COSINE,用于正式入库检索；
 
-数据:data/policies/*.md(P-01~P-05)，每条政策一个检索单元，
-metadata 带 policy_ref,检索结果可回指政策编号（防"凭空判断"）。
+数据:data/policies/*.md(P-01~P-05)。纵向分条(2026-09-09, D25 落地)后
+每个政策文件拆成"文件头(适用范围) + 各 第X条"多个检索单元——检索粒度从
+"整份政策"细化到"具体条文"，引用编号仍 policy_ref=P-0X(评测/报告锚点不变)。
 """
 
 from __future__ import annotations
@@ -22,6 +23,9 @@ from backend.app.config import BASE_DIR, settings
 from backend.app.llm import get_embedding_model
 
 POLICY_DIR = BASE_DIR / "data" / "policies"
+
+# 政策文件内条文头：行首"## 第X条 …"（标题行即条文边界，拆条时作单元标题保留）
+_ARTICLE_RE = re.compile(r"(?m)^##\s*(第[一二三四五六七八九十百\d]+条.*)$")
 
 
 @dataclass
@@ -43,17 +47,45 @@ class PolicyHit:
     score: float  # 余弦相似度（0~1，越高越相关）
 
 
+def _split_doc_articles(
+    full_text: str, source: str, policy_ref: str
+) -> list[IndexDoc]:
+    """把一份政策全文拆成检索单元：文件头一条 + 每个"## 第X条"一条。
+
+    背景：整文件单向量入库时，一条政策里"适用范围/阈值/豁免"混在一起，
+    检索只能整文件命中、报告引用也只能给整份；分条后 query 命中到具体条文
+    （如"预付款上限"命中 P-01 第二条，"无需预付情形"命中第三条）。
+    文件头（标题/编号/适用范围/归口）单列一条，保证适用范围类判定仍可召回。
+    兜底：正文没有"第X条"结构（异常/新文件）→ 整文件一条，行为与旧版一致。
+    """
+    matches = list(_ARTICLE_RE.finditer(full_text))
+    # 这种情况是：无条文结构 → 整文件单条（兼容历史/异常文件）
+    if not matches:
+        return [IndexDoc(text=full_text.strip(), source=source, policy_ref=policy_ref)]
+    docs: list[IndexDoc] = []
+    # 第一个条文前的文件头（标题/编号/版本/归口/适用范围）独立成检索单元
+    header = full_text[: matches[0].start()].strip()
+    if header:
+        docs.append(IndexDoc(text=header, source=source, policy_ref=policy_ref))
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(full_text)
+        article = full_text[m.start() : end].strip()
+        if article:
+            docs.append(IndexDoc(text=article, source=source, policy_ref=policy_ref))
+    return docs
+
+
 def load_policies() -> list[IndexDoc]:
-    """读 data/policies/*.md 为待入库条目；编号从文件名前缀解析（P-0X）。"""
+    """读 data/policies/*.md 并纵向分条为待入库条目; 编号从文件名前缀解析(P-0X)。"""
     docs: list[IndexDoc] = []
     for path in sorted(POLICY_DIR.glob("*.md")):
         match = re.match(r"(P-\d+)", path.name)
-        # 分支：文件名不带 P-编号 → 跳过（防止脏文件混入政策库）
+        # 分支：文件名不带 P-编号 → 跳过
         if not match:
             continue
-        docs.append(
-            IndexDoc(
-                text=path.read_text(encoding="utf-8").strip(),
+        docs.extend(
+            _split_doc_articles(
+                full_text=path.read_text(encoding="utf-8"),
                 source=path.name,
                 policy_ref=match.group(1),
             )
@@ -65,7 +97,7 @@ class MemoryStore:
     """进程内向量检索：文本 → 向量后存内存，查询按余弦相似度取 top-k。"""
 
     def __init__(self, embedding_model=None):
-        # embedding_model 可注入（测试用假向量），默认用 DashScope 模型
+        # embedding_model 可注入，默认用 DashScope 模型
         self._embedding = embedding_model or get_embedding_model()
         self._docs: list[IndexDoc] = []  # 正文与元数据（与向量一一对应）
         self._vectors: list[list[float]] = []  # 已归一化向量
@@ -88,16 +120,18 @@ class MemoryStore:
             if not doc.text.strip():
                 continue
             self._docs.append(doc)
+            #入库时归一化向量   
             self._vectors.append(_normalize(vec))
 
     def similarity_search(self, query: str, k: int = 2) -> list[PolicyHit]:
         """把 query 向量化，与库内全部向量算余弦相似度取前 k。"""
-        q = _normalize(self._embedding.embed_query(query))
+        q = _normalize(self._embedding.embed_query(query)) #query 归一化
         scored = [
-            (doc, _cosine(q, vec))
+            (doc, _cosine(q, vec)) # 计算余弦相似度
             for doc, vec in zip(self._docs, self._vectors)
         ]
-        scored.sort(key=lambda item: item[1], reverse=True)
+        scored.sort(key=lambda item: item[1], reverse=True) # 按相似度降序排序
+        # 取top-k
         return [
             PolicyHit(policy_ref=doc.policy_ref, source=doc.source, text=doc.text, score=score)
             for doc, score in scored[:k]
@@ -121,7 +155,7 @@ class MilvusStore:
         self.client = MilvusClient(uri=self.uri)
 
     def _probe_dim(self) -> int:
-        """用一句话向量化探测维度（DashScope qwen3.7 = 1024）。"""
+        """用一句话向量化探测维度(DashScope qwen3.7 = 1024)。"""
         return len(self._embedding.embed_query("测试"))
 
     def _ensure_collection(self) -> None:
@@ -132,6 +166,8 @@ class MilvusStore:
         if self.client.has_collection(self.collection_name):
             return
         dim = self._probe_dim()
+
+        #幂等建表：若集合已存在则跳过
         schema = self.client.create_schema(auto_id=True, enable_dynamic_field=True)
         schema.add_field("pk", DataType.INT64, is_primary=True, auto_id=True)
         schema.add_field("text", DataType.VARCHAR, max_length=65535)
@@ -139,24 +175,28 @@ class MilvusStore:
         schema.add_field("policy_ref", DataType.VARCHAR, max_length=16)
         schema.add_field("vector", DataType.FLOAT_VECTOR, dim=dim)
         self.client.create_collection(self.collection_name, schema=schema)
-        # 建 HNSW + COSINE 索引并加载，检索才能命中
+
+        # 建 HNSW + COSINE 索引并加载，检索才能命中。语义上的相似度索引。
         index = self.client.prepare_index_params()
         index.add_index(
             field_name="vector",
             index_type="HNSW",
             metric_type="COSINE",
+
+            #M=16:每个节点的最大连接数,越大召回越好，但内存越高
+            #efConstruction=128:构建时的搜索宽度,越大索引质量越好但建索引越慢
             params={"M": 16, "efConstruction": 128},
         )
         self.client.create_index(self.collection_name, index_params=index)
         self.client.load_collection(self.collection_name)
 
     def insert(self, docs: list[IndexDoc]) -> None:
-        """向量化 + 入库 + flush；集合已有数据时跳过（防重复累积）。"""
+        """向量化 + 入库 + flush; 集合已有数据时跳过(防重复累积)。"""
         self._ensure_collection()
         count = self.client.get_collection_stats(self.collection_name).get("row_count", 0)
         # 分支：已有数据 → 不再重复灌入（可手动清集合后重灌）
         if count > 0:
-            print(f"ℹ️  {self.collection_name} 已有 {count} 条，跳过导入")
+            print(f"{self.collection_name} 已有 {count} 条，跳过导入")
             return
         rows = [d for d in docs if d.text.strip()]
         vectors = self._embedding.embed_documents([d.text for d in rows])
@@ -168,7 +208,7 @@ class MilvusStore:
         self.client.flush(self.collection_name)  # 关键：不 flush 检索不到
 
     def similarity_search(self, query: str, k: int = 2) -> list[PolicyHit]:
-        """query 向量化后在 Milvus 检索 top-k，返回带政策编号的命中。"""
+        """query 向量化后在 Milvus 检索 top-k, 返回带政策编号的命中。"""
         vec = self._embedding.embed_query(query)
         results = self.client.search(
             collection_name=self.collection_name,
@@ -195,7 +235,7 @@ class MilvusStore:
 
 
 def _normalize(vec: list[float]) -> list[float]:
-    """向量归一化：让点积即余弦相似度，方便内存检索。"""
+    """向量归一化：让点积=余弦相似度"""
     norm = math.sqrt(sum(x * x for x in vec)) or 1.0
     return [x / norm for x in vec]
 
@@ -206,11 +246,11 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 def _milvus_reachable(uri: str, timeout: float = 2.0) -> bool:
-    """快速探测 Milvus 端口可达性（socket 级，不触发 pymilvus 长超时）。
+    """快速探测 Milvus 端口可达性(socket 级，不触发 pymilvus 长超时)。
 
-    分支依据：uri 形如 http://host:port；解析失败或连不上都按不可达处理。
+    分支依据:uri 形如 http://host:port; 解析失败或连不上都按不可达处理。
     """
-    parsed = urlparse(uri)
+    parsed = urlparse(uri)   # 解析 http://host:port
     host, port = parsed.hostname, parsed.port or 19530
     if not host:
         return False
@@ -222,9 +262,9 @@ def _milvus_reachable(uri: str, timeout: float = 2.0) -> bool:
 
 
 def get_store(backend: str | None = None, embedding_model=None) -> MemoryStore | MilvusStore:
-    """store 工厂：按配置选实现，Milvus 不可达自动退回内存。
+    """store 工厂: 按配置选实现, Milvus 不可达自动退回内存。
 
-    backend 取值：memory / milvus / auto（默认读 .env RETRIEVAL_BACKEND）。
+    backend 取值:memory / milvus / auto(默认读 .env RETRIEVAL_BACKEND)。
     """
     backend = backend or settings.retrieval_backend
     # 分支：显式 memory → 直接用内存，不探测外部依赖
@@ -233,8 +273,8 @@ def get_store(backend: str | None = None, embedding_model=None) -> MemoryStore |
     # 分支：milvus 或 auto 且端口可达 → 用真库
     if backend == "milvus" or (backend == "auto" and _milvus_reachable(settings.milvus_uri)):
         return MilvusStore(uri=settings.milvus_uri, embedding_model=embedding_model)
-    # 分支：auto 但 Milvus 不可达 → 退回内存（计划风险预案）
-    print(f"⚠️  Milvus({settings.milvus_uri}) 不可达，退回内存检索")
+    # 分支：auto 但 Milvus 不可达 → 退回内存
+    print(f"⚠️ Milvus({settings.milvus_uri}) 不可达，退回内存检索")
     return MemoryStore(embedding_model=embedding_model)
 
 

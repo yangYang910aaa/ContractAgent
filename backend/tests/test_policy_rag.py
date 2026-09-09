@@ -1,7 +1,14 @@
 """policy_rag 单测：内存检索 + 政策入库 + store 工厂（用确定性假向量，离线可跑）。"""
 
 from backend.app import policy_rag as pr
-from backend.app.policy_rag import IndexDoc, MemoryStore, get_store, index_policies, retrieve_policies
+from backend.app.policy_rag import (
+    IndexDoc,
+    MemoryStore,
+    _split_doc_articles,
+    get_store,
+    index_policies,
+    retrieve_policies,
+)
 
 
 class FakeEmbeddings:
@@ -40,12 +47,20 @@ def test_memory_store_insert_and_search() -> None:
 def test_ingest_policies_into_memory() -> None:
     store = MemoryStore(embedding_model=FakeEmbeddings())
     index_policies(store=store)
-    assert store.doc_count == 5  # data/policies 共 5 条政策
+    # 纵向分条后：5 个文件各含"文件头 + N 个第X条"检索单元（总数远大于 5）
+    assert store.doc_count > 5
     refs = {d.policy_ref for d in store.docs}
     assert refs == {f"P-0{i}" for i in range(1, 6)}
+    # 每个政策编号都应同时有"文件头/适用范围"与"第X条"两类单元（细粒度检索的前提）
+    for ref in sorted(refs):
+        same = [d for d in store.docs if d.policy_ref == ref]
+        assert len(same) >= 2, f"{ref} 应拆成头+条文多个检索单元"
+        assert any("第" in d.text and "条" in d.text for d in same)
     # 政策引用随检索结果带回（防"凭空判断"的依据）
     hits = store.similarity_search("保密期超过 36 个月属于高风险", k=1)
     assert hits[0].policy_ref == "P-04"
+    # 分条后命中应落在含阈值句的具体条文（而不是整份/文件头）
+    assert "36 个月" in hits[0].text or "保密" in hits[0].text
 
 
 def test_retrieve_policies_helper_with_memory_backend() -> None:
@@ -55,3 +70,27 @@ def test_retrieve_policies_helper_with_memory_backend() -> None:
 
 def test_store_factory_memory_backend() -> None:
     assert isinstance(get_store(backend="memory"), MemoryStore)
+
+
+def test_split_doc_articles_units() -> None:
+    """政策全文拆条：文件头单列 + 每个 ## 第X条 独立成单元（含标题行）。"""
+    text = (
+        "# 采购合同审核制度 细则 P-09\n"
+        "文件编号：P-09\n适用范围：企业采购初审\n"
+        "## 第一条 预付款上限\n"
+        "预付款合计不得超过总额 30%。\n"
+        "## 第二条 无需预付情形\n"
+        "校服等按示范文本执行，不要求预付安排。\n"
+    )
+    docs = _split_doc_articles(text, "P-09.md", "P-09")
+    assert [d.policy_ref for d in docs] == ["P-09"] * 3
+    assert "适用范围" in docs[0].text  # 文件头（适用范围）独立可召回
+    assert "第一条 预付款上限" in docs[1].text and "30%" in docs[1].text
+    assert "第二条 无需预付情形" in docs[2].text
+
+
+def test_split_doc_articles_without_headers_falls_back_to_single() -> None:
+    """没有条文结构 → 整文件单条（兼容旧版/异常文件）。"""
+    docs = _split_doc_articles("只有一句话的政策说明", "P-09.md", "P-09")
+    assert len(docs) == 1
+    assert docs[0].text == "只有一句话的政策说明"
