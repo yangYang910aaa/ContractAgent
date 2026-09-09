@@ -7,6 +7,7 @@ from backend.app.policy_rag import (
     _split_doc_articles,
     get_store,
     index_policies,
+    load_policy_full,
     retrieve_policies,
 )
 
@@ -94,3 +95,10 @@ def test_split_doc_articles_without_headers_falls_back_to_single() -> None:
     docs = _split_doc_articles("只有一句话的政策说明", "P-09.md", "P-09")
     assert len(docs) == 1
     assert docs[0].text == "只有一句话的政策说明"
+
+
+def test_load_policy_full_returns_whole_file() -> None:
+    """整份政策全文按 source 取回（报告"查看完整条文"展开用）；文件不存在回空串。"""
+    full = load_policy_full("P-01_预付款比例.md")
+    assert "P-01" in full and "预付款" in full
+    assert load_policy_full("not-exist.md") == ""

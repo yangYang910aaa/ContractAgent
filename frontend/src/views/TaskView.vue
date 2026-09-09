@@ -554,10 +554,10 @@ function openSource(clause?: string, evidence?: string) {
                 </p>
               </template>
               <!-- 完整条文默认收起，需要核对政策依据时展开看全文（不再只看截断片段） -->
-              <details v-if="h.text" class="policy-more">
+              <details v-if="h.full_text || h.text" class="policy-more">
                 <summary class="muted">查看完整条文</summary>
                 <div class="policy-full">
-                  <p v-for="(ln, li) in policyReflow(h.text)" :key="li" :class="policyRowClass(li, ln)">
+                  <p v-for="(ln, li) in policyReflow(h.full_text ?? h.text ?? '')" :key="li" :class="policyRowClass(li, ln)">
                     <template v-if="policyRowParts(ln).lbl">
                       <span class="lbl">{{ policyRowParts(ln).lbl }}</span>{{ policyRowParts(ln).val }}
                     </template>

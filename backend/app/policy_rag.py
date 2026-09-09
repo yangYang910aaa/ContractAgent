@@ -93,6 +93,27 @@ def load_policies() -> list[IndexDoc]:
     return docs
 
 
+# 整份政策全文缓存：同一文件被多条命中时只读一次盘
+_FULL_TEXT_CACHE: dict[str, str] = {}
+
+
+def load_policy_full(source: str) -> str:
+    """按 source 文件名取某政策的整份全文（报告"查看完整条文"展开用）。
+
+    分条后检索命中是"具体条文"（IndexDoc.text），但报告仍应能展开整份政策；
+    source 即入库时的文件名（如 P-01_预付款比例.md），文件不存在返回空串。
+    """
+    if source in _FULL_TEXT_CACHE:
+        return _FULL_TEXT_CACHE[source]
+    path = POLICY_DIR / Path(source).name
+    try:
+        text = path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+    except OSError:
+        text = ""
+    _FULL_TEXT_CACHE[source] = text
+    return text
+
+
 class MemoryStore:
     """进程内向量检索：文本 → 向量后存内存，查询按余弦相似度取 top-k。"""
 

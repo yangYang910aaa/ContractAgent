@@ -47,6 +47,7 @@ export interface PolicyHit {
   score?: number | null
   snippet?: string // 引用片段（后端已去 md 标记并按句截断）
   text?: string | null // 命中政策的完整条文（前端"查看完整条文"展开用）
+  full_text?: string | null // 该政策的整份全文（分条后 text 是命中条文，展开用整份）
 }
 
 /** 审批记录：edited 时 patches 是字段补丁（回后端 rules 重审用）。 */

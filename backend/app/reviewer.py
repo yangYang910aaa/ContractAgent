@@ -300,9 +300,10 @@ def _policy_context(
 ) -> tuple[list[IndexDoc], str | None]:
     """取盲审用的政策条文（policy_ref + 正文）。
 
-    默认本地直读 data/policies 全量（当前仅 5 条，全量给全口径最稳、零 embedding
-    调用）；测试/未来可注入 retriever(query)->[PolicyHit] 改逐条检索命中段落——
-    语料纵向分条/横向扩类后这里要换成按条款检索 top-k 并控制 prompt 长度。
+    默认本地直读 data/policies 全量条文（纵向分条后为 21 个"文件头+第X条"单元，
+    总字数与原 5 份整文件相当，全量给全口径最稳、零 embedding 调用）；
+    测试/未来可注入 retriever(query)->[PolicyHit] 改按条检索——语料横向扩类、
+    单元显著增多后再切 top-k 并控制 prompt 长度（2026-09-09 决定）。
     """
     # 这种情况是：调用方注入了检索器（图测试/未来语料规模化）→ 用检索命中
     if retriever is not None:

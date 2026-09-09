@@ -19,7 +19,7 @@ from pathlib import Path
 from backend.app.config import BASE_DIR
 from backend.app.extractor import extract_contract
 from backend.app.parser import extract_text
-from backend.app.policy_rag import PolicyHit, retrieve_policies
+from backend.app.policy_rag import PolicyHit, load_policy_full, retrieve_policies
 from backend.app.rules import (
     annotate_template_risks,
     evaluate,
@@ -35,8 +35,7 @@ def enrich_policy_hits(
     risks: list[RiskItem],
     retriever=None,  # (query: str) -> list[PolicyHit]，测试可注入假检索器
 ) -> list[dict]:
-    """为带 policy_ref 的风险检索政策原文，去重后返回引用清单。
-
+    """拿到规则引擎产出的风险名单后,为每条带policy_ref的风险去向量库检索政策原文,让报告可溯源。
     作用：让报告里的每条政策类风险都有"依据哪条政策"的原文可查
     （防 LLM/规则凭空判断；检索失败不阻断审查，该条留空）。
     """
@@ -44,10 +43,11 @@ def enrich_policy_hits(
     hits: list[dict] = []
     seen: set[str] = set()
     for risk in risks:
-        # 分支：规则没给政策编号（纯逻辑风险如金额不一致）→ 无需检索
+        # 分支：多条风险可能引用同一条政策,只检索一次，避免重复向量检索
         if not risk.policy_ref or risk.policy_ref in seen:
             continue
         seen.add(risk.policy_ref)
+        #优先用证据原文作query,没有才用建议文本
         query = risk.evidence or risk.suggestion
         try:
             top = retriever(query)[0] if retriever(query) else None
@@ -59,8 +59,10 @@ def enrich_policy_hits(
                     "policy_ref": top.policy_ref,
                     "score": round(top.score, 3),
                     "snippet": _policy_snippet(top.text),
-                    # 完整条文一并带回，前端可"查看完整条文"展开（不再只能看截断）
+                    # text=命中的具体条文（分条后检索到条）；full_text=整份政策，
+                    # 前端"查看完整条文"展开整份用（分条前 text 即整份，现两者分开）
                     "text": top.text,
+                    "full_text": load_policy_full(top.source),
                 }
             )
         else:
@@ -69,18 +71,14 @@ def enrich_policy_hits(
 
 
 def _policy_snippet(text: str, limit: int = 200) -> str:
-    """政策原文 → 报告里的引用片段（保留行结构，每条信息单独一行）。
-
-    之前是压平成一段再 text[:200]：标题/编号/适用范围全挤一行还切半句，
-    观感差（用户反馈，2026-09-05）。规则：去每行 md 标题符 → 把
-    "文件编号：X　　版本：Y"这类同行多信息按全角空格拆成独立行 → 逐行
-    累积到 limit，超长行在句末标点断并加省略号。
+    """智能截断:政策原文 → 报告里的引用片段（保留行结构，每条信息单独一行）。
+        规则：去每行 md 标题符 → 把"文件编号:X　　版本:Y"这类同行多信息按全角空格拆成独立行 → 逐行
+    累积到 limit, 超长行在句末标点断并加省略号。
     """
     out: list[str] = []
     total = 0
     for raw in text.splitlines():
-        # 先去行首 Markdown 标记；注意不能在拆段前折叠空白（会把"　　"压成单空格，
-        # 导致 文件编号/版本/生效日期 同段信息拆不开）
+        # 先去除行首 Markdown 标记；注意不能在拆段前折叠空白（会把"　　"压成单空格，导致 文件编号/版本/生效日期 同段信息拆不开）
         line = re.sub(r"^(?:#{1,6}|>|-|\*)\s*", "", raw.strip())
         # 同行多段信息按 2+ 空白拆成独立段，段内多余空白再折叠
         pieces = [re.sub(r"\s+", " ", p).strip() for p in re.split(r"[\s\u3000]{2,}", line) if p.strip()]
@@ -117,15 +115,15 @@ def build_report(
     policy_hits: list[dict],
     review: dict | None = None,
 ) -> dict:
-    """把流水线各环节结果组装成报告 dict（JSON 可直接序列化）。
+    """把流水线各环节结果组装成报告 dict(JSON 可直接序列化)。
 
-    review 为双审（review_mode=double）的合并结果段；单审传 None，报告里为 null。
+    review 为双审(review_mode=double)的合并结果段；单审传 None,报告里为 null。
     """
     report = {
-        "contract_file": contract_file,
-        "grade": grade_report(risks).value,
+        "contract_file": contract_file,  #来源文件路径
+        "grade": grade_report(risks).value, #high/medium/low的等级评分
         "risks": [risk.model_dump(mode="json") for risk in risks],  # date/Decimal → JSON 类型
-        "policy_hits": policy_hits,
+        "policy_hits": policy_hits, #政策引用清单
         "extracted": extracted.model_dump(mode="json"),
     }
     report["review"] = review
@@ -139,10 +137,12 @@ def run_review(path: str | Path, review_mode: str = "single") -> dict:
     抽取环节异常不中断批处理：报告带 error 字段，便于 CLI 批量跑时定位坏文件。
     """
     path = Path(path)
+    #parser 取全文
     text = extract_text(path)
     try:
+        #LLM 结构化抽取
         extracted = extract_contract(text=text)
-        # 真实文本把生效写为签字盖章之日是表述习惯而非疏漏, 按句式兜底回填
+        # 合同写"自签字盖章之日起生效"时回填 签字日期
         extracted = infer_effective_from_signature(extracted, text)
     except Exception as exc:  # LLM/接口异常（如格式不支持、超时）
         extracted = ContractModel()
@@ -156,7 +156,7 @@ def run_review(path: str | Path, review_mode: str = "single") -> dict:
             "review": None,
             "error": f"抽取失败：{exc}",
         }
-    # 模板检测：原文含多处空白占位时缺必填降 medium（否则空白模板会误停闸口）
+    # 先跑规则引擎, 再叠加模版检测
     risks = annotate_template_risks(evaluate(extracted), text)
     review: dict | None = None
     # 这种情况是：双审模式 → 盲审复核并与主审合并（合并后的新增 high 也参与检索引用）

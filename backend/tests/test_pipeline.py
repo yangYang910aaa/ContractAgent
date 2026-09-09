@@ -37,6 +37,8 @@ def test_enrich_policy_hits_dedup_and_skip_nonpolicy() -> None:
     assert hits[0]["score"] == 0.9
     # 完整条文随报告带回（前端"查看完整条文"用），片段不裸存 markdown 标题
     assert hits[0]["text"] == "条文"
+    # 分条后 text=命中条文，full_text=整份政策（假检索无真实文件 → 空串但键必须存在）
+    assert "full_text" in hits[0]
     assert "##" not in hits[0]["snippet"]
 
 
