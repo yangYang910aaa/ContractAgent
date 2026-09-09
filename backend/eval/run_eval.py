@@ -43,6 +43,7 @@ from backend.app.config import BASE_DIR
 from backend.app.pipeline import run_review
 from backend.app.schemas import Grade, Severity
 from backend.app.rules import RISK_LABELS
+from backend.eval.field_gt import EXPECTED_FIELDS, FIELD_GROUPS
 
 # 语料根目录与 GT 默认位置(均为本地数据, 不入库; D21 口径只服务回归/评测)
 VARIANTS_DIR = BASE_DIR / "data/合同模板/合同变体/out"
@@ -53,6 +54,18 @@ DEFAULT_OUT = BASE_DIR / "backend/eval/output"
 _GRADES = {g.value for g in Grade}
 _SEVERITIES = {s.value for s in Severity}
 _REVIEW_MODES = ("single", "double")
+
+# 字段准确率判分用：字段 → 比较口径（见 _field_outcome）
+_DATE_FIELDS = {"signature_date", "effective_date", "expiry_date"}
+_AMOUNT_FIELDS = {"total_amount"}
+_NUM_FIELDS = {
+    "penalty_rate",
+    "liability_cap",
+    "warranty_months",
+    "confidentiality_months",
+    "termination_notice_days",
+}
+_FIELD_FLAT = [f for group in FIELD_GROUPS.values() for f in group]
 
 
 @dataclass
@@ -67,6 +80,7 @@ class GtEntry:
     judge: bool = True  # False=只观察不判分(如真实合同 tech_01)
     why: str = ""  # 期望依据(人工说明, 供走查)
     path: Path | None = None  # 解析后的文件绝对路径(load_gt 后填充)
+    expected_fields: dict = field(default_factory=dict)  # 字段级期望(仅 sample 有, field_gt 提供)
 
     @property
     def expected_highs(self) -> set[str]:
@@ -136,7 +150,138 @@ def _observed(entry: GtEntry, report: dict) -> dict:
         "grade": report.get("grade"),
         "high_types": {r["risk_type"] for r in risks if r.get("severity") == Severity.high.value},
         "error": report.get("error"),
+        "fields": _fields_observed(entry, report),  # 字段级判定（无 GT 的文件为 None）
     }
+
+
+def _num_key(value) -> float | None:
+    """数值字段归一键：int/float/数字字符串 → 6 位 float（千分位容忍）；None 保留。"""
+    if value is None:
+        return None
+    return round(float(str(value).replace(",", "")), 6)
+
+
+def _field_outcome(field: str, expected, actual) -> str:
+    """单字段抽取判定: ok / wrong / missing（expected=None 表示正文本无此内容）。
+
+    口径（第一期, 尺子用）：
+    - 期望无值（None）：抽到空/缺失 → ok，抽到值 → wrong（幻觉, 呼应 tech_03 教训）；
+    - 期望有值：抽取为空 → missing；有值按字段口径比（日期/金额精确, 数值容差 1e-6,
+      期次表逐期比金额+比例并忽略期次名, 文本字段精确）。
+    """
+    # 这种情况是：期望正文没有该内容 → 只查"有没有幻觉出值"
+    if expected is None:
+        empty = actual is None or actual == "" or actual == []
+        return "ok" if empty else "wrong"
+    # 这种情况是：期望有值但抽取缺失
+    if actual is None or actual == "":
+        return "missing"
+    # 期次表：金额+比例逐期对齐（忽略期次名；期数与顺序都要一致）
+    if field == "payment_schedule":
+        exp_pairs = [(_num_key(t.get("amount")), _num_key(t.get("percent"))) for t in expected]
+        act_pairs = [(_num_key(t.get("amount")), _num_key(t.get("percent"))) for t in actual]
+        return "ok" if exp_pairs == act_pairs else "wrong"
+    # 金额/日期精确（金额归一去千分位；date 已是 ISO 串）
+    if field in _AMOUNT_FIELDS:
+        return "ok" if _num_key(expected) == _num_key(actual) else "wrong"
+    if field in _DATE_FIELDS:
+        return "ok" if str(expected) == str(actual) else "wrong"
+    # 数值字段容差比较；其余（kind/buyer/supplier/currency）精确文本
+    if field in _NUM_FIELDS:
+        ok = (
+            _num_key(expected) is not None
+            and _num_key(actual) is not None
+            and abs(_num_key(expected) - _num_key(actual)) <= 1e-6
+        )
+    else:
+        ok = str(expected) == str(actual)
+    return "ok" if ok else "wrong"
+
+
+def _fields_observed(entry: GtEntry, report: dict) -> dict | None:
+    """逐字段判抽取结果：{字段: ok/wrong/missing}；无字段 GT 的文件返回 None。"""
+    if not entry.expected_fields:
+        return None
+    extracted = report.get("extracted") or {}
+    out: dict[str, str] = {}
+    for field, expected in entry.expected_fields.items():
+        out[field] = _field_outcome(field, expected, extracted.get(field))
+    return out
+
+
+def _field_level_metrics(entries: list[GtEntry], observed: list[dict]) -> dict:
+    """对"一次全语料运行"的字段观测算准确率（纯函数, 便于单测）。
+
+    observed 与 entries 一一对应；只统计带 expected_fields 的文件。
+    返回整体准确率 + 每字段 ok/wrong/missing + 分组汇总。
+    """
+    totals: dict[str, dict] = {}
+    group_totals: dict[str, dict] = {g: {"ok": 0, "wrong": 0, "missing": 0} for g in FIELD_GROUPS}
+    for entry, obs in zip(entries, observed):
+        fields = obs.get("fields")
+        if not fields:
+            continue
+        for field, outcome in fields.items():
+            acc = totals.setdefault(field, {"ok": 0, "wrong": 0, "missing": 0})
+            acc[outcome] += 1
+            for group, members in FIELD_GROUPS.items():
+                if field in members:
+                    group_totals[group][outcome] += 1
+                    break
+    per_field: dict[str, dict] = {}
+    for field, acc in totals.items():
+        n = sum(acc.values())
+        per_field[field] = {**acc, "accuracy": round(acc["ok"] / n, 4) if n else None}
+    per_group: dict[str, dict] = {}
+    for group, acc in group_totals.items():
+        n = sum(acc.values())
+        per_group[group] = {**acc, "accuracy": round(acc["ok"] / n, 4) if n else None}
+    ok = sum(a["ok"] for a in totals.values())
+    total = sum(sum(a.values()) for a in totals.values())
+    return {
+        "overall_accuracy": round(ok / total, 4) if total else None,
+        "per_field": per_field,
+        "per_group": per_group,
+    }
+
+
+def _field_collapse(judged: list[GtEntry], run_metrics: list[dict]) -> dict:
+    """N 次运行的字段判定 → 整体波动 + 每字段/每组跨运行合并 totals。"""
+    per_run: list[dict] = []
+    for run_no in range(1, len(run_metrics[0]) + 1):
+        observed = [run_metrics[i][run_no] for i in range(len(judged))]
+        per_run.append(_field_level_metrics(judged, observed))
+    overall = _collapse([m["overall_accuracy"] for m in per_run])
+    merged_field: dict[str, dict] = {}
+    merged_group: dict[str, dict] = {}
+    for m in per_run:
+        for field, acc in m["per_field"].items():
+            bucket = merged_field.setdefault(field, {"ok": 0, "wrong": 0, "missing": 0})
+            for key in ("ok", "wrong", "missing"):
+                bucket[key] += acc[key]
+        for group, acc in m["per_group"].items():
+            bucket = merged_group.setdefault(group, {"ok": 0, "wrong": 0, "missing": 0})
+            for key in ("ok", "wrong", "missing"):
+                bucket[key] += acc[key]
+    for bucket in list(merged_field.values()) + list(merged_group.values()):
+        n = sum(bucket.values())
+        bucket["accuracy"] = round(bucket["ok"] / n, 4) if n else None
+    return {"overall": overall, "per_field": merged_field, "per_group": merged_group}
+
+
+def _print_field_section(field_col: dict, mode: str) -> None:
+    """打印字段准确率段（整体波动 + 分组 + 逐字段）。"""
+    if field_col["overall"] is None:
+        print(f"\n===== 字段准确率 {mode}: 无字段 GT（第一期仅 9 份 sample） =====")
+        return
+    col = field_col["overall"]
+    print(f"\n===== 字段准确率 {mode}(mean={col['mean']}, 波动=[{col['min']},{col['max']}]) =====")
+    for group, acc in field_col["per_group"].items():
+        acc_txt = f"{acc['accuracy']:.4f}" if acc["accuracy"] is not None else "-"
+        print(f"  [{group}] acc={acc_txt}  ok={acc['ok']} wrong={acc['wrong']} missing={acc['missing']}")
+    for field, acc in sorted(field_col["per_field"].items()):
+        acc_txt = f"{acc['accuracy']:.4f}" if acc["accuracy"] is not None else "-"
+        print(f"    {field}: acc={acc_txt}  ok={acc['ok']} wrong={acc['wrong']} missing={acc['missing']}")
 
 
 def _run_level_metrics(entries: list[GtEntry], observed: list[dict]) -> dict:
@@ -242,6 +387,11 @@ def _summary_line(entry: GtEntry, states: list[dict]) -> str:
         fps = sorted({t for s in states for t in s["high_types"]})
         if fps:
             parts.append(f"误报high={fps}")
+    # 字段级摘要(有字段 GT 的 sample): 跨运行合并 ok/总数, 一眼看抽取稳不稳
+    if entry.expected_fields:
+        ok = sum(1 for s in states for o in (s.get("fields") or {}).values() if o == "ok")
+        total = sum(len(s.get("fields") or {}) for s in states)
+        parts.append(f"字段{ok}/{total}")
     errors = [s["error"] for s in states if s["error"]]
     if errors:
         parts.append(f"错误x{len(errors)}:{errors[0][:60]}")
@@ -291,8 +441,10 @@ def _run_mode(
     return per_file, run_metrics
 
 
-def _aggregate(judged: list[GtEntry], run_metrics: list[dict], mode: str) -> tuple[dict, dict]:
-    """汇总某模式 N 次运行: 打印头部指标/类型级/单份明细, 返回 (metrics, per_type_merged)。"""
+def _aggregate(
+    judged: list[GtEntry], run_metrics: list[dict], mode: str
+) -> tuple[dict, dict, dict]:
+    """汇总某模式 N 次运行: 打印头部指标/类型级/字段准确率, 返回三项聚合。"""
     # 每次运行(全语料一遍)是一个独立的指标样本 → N 个样本取均值与波动区间
     headline: dict = {}
     for run_no in range(1, len(run_metrics[0]) + 1):
@@ -324,7 +476,10 @@ def _aggregate(judged: list[GtEntry], run_metrics: list[dict], mode: str) -> tup
         f1 = 2 * p * r / (p + r) if p + r else 0.0
         print(f"  {risk_type}: tp={tp} fp={fp} fn={fn} "
               f"precision={p:.3f} recall={r:.3f} f1={f1:.3f}")
-    return metrics, merged_per_type
+    # ---- 字段准确率（尺子, 第一期仅 9 份 sample 有字段 GT）----
+    field_col = _field_collapse(judged, run_metrics)
+    _print_field_section(field_col, mode)
+    return metrics, merged_per_type, field_col
 
 
 def _print_single_summaries(per_file: list[dict], mode: str | None = None) -> None:
@@ -380,12 +535,13 @@ def _main_compare(entries: list[GtEntry], judged: list[GtEntry], runs: int, out_
     for mode in _REVIEW_MODES:
         print(f"\n########## review_mode={mode} ##########")
         per_file, run_metrics = _run_mode(entries, judged, runs, mode, label=f"[{mode}]")
-        metrics, merged_per_type = _aggregate(judged, run_metrics, mode)
+        metrics, merged_per_type, field_col = _aggregate(judged, run_metrics, mode)
         results[mode] = {
             "per_file": per_file,
             "run_metrics": run_metrics,
             "metrics": metrics,
             "per_type_merged": merged_per_type,
+            "field_accuracy": field_col,
         }
 
     # ---- 并列对比表(mean 列; 波动区间同单跑) ----
@@ -409,6 +565,11 @@ def _main_compare(entries: list[GtEntry], judged: list[GtEntry], runs: int, out_
     if det_a and det_b:
         print(f"\n漏检率对比(1-检出率): single={1 - det_a['mean']:.4f} "
               f"double={1 - det_b['mean']:.4f}")
+    fa_a = results["single"]["field_accuracy"]["overall"]
+    fa_b = results["double"]["field_accuracy"]["overall"]
+    if fa_a and fa_b:
+        print(f"字段准确率(抽取, 与模式无关): single={fa_a['mean']:.4f} "
+              f"double={fa_b['mean']:.4f}")
 
     print("\n===== double 相对 single 逐文件差异 =====")
     for mode in _REVIEW_MODES:
@@ -437,6 +598,9 @@ def _main_compare(entries: list[GtEntry], judged: list[GtEntry], runs: int, out_
         "generated": time.strftime("%Y-%m-%d %H:%M:%S"),
         "runs": runs,
         "modes": {mode: results[mode]["metrics"] for mode in _REVIEW_MODES},
+        "field_accuracy": {
+            mode: results[mode]["field_accuracy"] for mode in _REVIEW_MODES
+        },
         "per_type_merged": {
             mode: results[mode]["per_type_merged"] for mode in _REVIEW_MODES
         },
@@ -481,7 +645,17 @@ def main(argv: list[str] | None = None) -> int:
     entries = [e for e in _load_json(gt_path) if args.set in ("all", e.set_)]
     for entry in entries:
         entry.path = _resolve(entry)
+        # 字段级期望由生成器 spec 提供（field_gt）；变体/真实合同暂无
+        entry.expected_fields = EXPECTED_FIELDS.get(entry.file, {})
     problems = _validate(entries, quiet=args.list)
+    # 字段 GT 对齐校验：sample 语料与 field_gt 一一对应（缺一条说明生成器/语料漂移）
+    if args.set in ("all", "samples"):
+        for key in EXPECTED_FIELDS:
+            if not any(e.file == key for e in entries):
+                problems.append(f"字段 GT 无对应语料: {key}")
+        for e in entries:
+            if e.set_ == "samples" and e.file not in EXPECTED_FIELDS:
+                problems.append(f"{e.file}: 缺字段 GT(未在 field_gt 登记)")
     if args.check:
         return 0 if not problems else 2
     if args.list:
@@ -506,7 +680,9 @@ def main(argv: list[str] | None = None) -> int:
         return _main_compare(entries, judged, args.runs, args.out)
 
     per_file, run_metrics = _run_mode(entries, judged, args.runs, args.review_mode)
-    metrics, merged_per_type = _aggregate(judged, run_metrics, _mode_label(args.review_mode))
+    metrics, merged_per_type, field_col = _aggregate(
+        judged, run_metrics, _mode_label(args.review_mode)
+    )
     _print_single_summaries(per_file)
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -518,6 +694,7 @@ def main(argv: list[str] | None = None) -> int:
         "review_mode": args.review_mode,
         "metrics": metrics,
         "per_type_merged": merged_per_type,
+        "field_accuracy": field_col,
         "files": per_file,
     }
     out_json = args.out / f"run_eval_{args.review_mode}_{stamp}.json"
