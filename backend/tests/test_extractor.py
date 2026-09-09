@@ -80,6 +80,16 @@ def test_parse_kind_variants() -> None:
     assert _parse_kind(None) is None
 
 
+def test_parse_kind_pure_software_purchase_is_not_tech() -> None:
+    """成品软件"采购"不是技术开发服务：裸"软件"不再判 tech（sample_05 回归）。"""
+    assert _parse_kind("企业管理软件采购合同") is None  # 无服务/开发形态词 → 回退默认 enterprise
+    assert _parse_kind("软件采购") is None
+    # 服务/开发形态仍正确归 tech（真实 tech 合同与既有"软件技术开发"用例不受影响）
+    assert _parse_kind("软件开发与实施服务") == "tech_service"
+    assert _parse_kind("软件技术服务") == "tech_service"
+    assert _parse_kind("系统集成服务") == "tech_service"
+
+
 def test_build_contract_model_keeps_parsed_kind() -> None:
     """LLM 原始输出里的 contract_kind 经解析后写入 ContractModel。"""
     model = build_contract_model({"contract_kind": "农副产品买卖合同"})

@@ -28,7 +28,8 @@ CONTRACT_FIELD_NAMES = {k for k in ContractModel.model_fields if k != "extractio
 # 抽取字段 → 中文含义（写进系统提示，指导模型逐项抽取）
 EXTRACT_LABELS: dict[str, str] = {
     "contract_kind": "合同品类（从标题/正文判断）:enterprise_goods=企业货物采购, gov_goods=政府采购/校服类, "
-    "agri_goods=农副产品买卖, tech_service=技术开发/软件/技术服务；无法判断填 null",
+    "agri_goods=农副产品买卖, tech_service=技术开发/技术服务/软件开发/系统集成等（服务形态）；"
+    "单纯购买成品软件/货物属 enterprise_goods；无法判断填 null",
     "buyer": "甲方（采购方）名称",
     "supplier": "乙方（供应商）名称",
     "signature_date": "合同签署日期",
@@ -45,7 +46,10 @@ EXTRACT_LABELS: dict[str, str] = {
     # X% 为限"); 仅写"违约金总额不超过 X%"不算赔偿责任上限, 填 null.
     "liability_cap": "赔偿责任上限（占合同总额 %，如'赔偿总额以合同总价的X%为限'；仅违约金总额上限不要填）",
     "warranty_months": "质保期（月数）",
-    "termination_notice_days": "解约提前通知期（天数）",
+    # 口径提醒: termination_notice_days 只取"提前 N 日书面通知解除合同"的 N;
+    # 催告期（"经催告 N 日内未履行可解除"）与异议期不是解约通知期, 填 null
+    # （校服等示范文本常见催告表述, 2026-09-09 字段尺子实测被误抽）
+    "termination_notice_days": "解约提前通知期（天数，只填正文明确写'提前 N 日书面通知解除合同'的 N；催告期不算）",
     "ip_ownership": "知识产权归属表述（原句）",
     "confidentiality_months": "保密期（月数）",
     "governing_law": "适用法律",
@@ -56,7 +60,7 @@ class ExtractionEvidence(BaseModel):
     """单条字段证据：原文摘录 + 条款引用 + 置信度。
 
     模型实测把 evidence 输出成 {字段名: 证据} 对象而非列表，故 schema 直接按
-    dict 声明（键即 ContractModel 字段名），build 阶段再回填 extraction_meta。
+    dict 声明(键即 ContractModel 字段名), build 阶段再回填 extraction_meta。
     """
 
     quote: str = ""  # 原文摘录（模型必须抄原文，不允许改写）
@@ -69,12 +73,12 @@ class PaymentRaw(BaseModel):
 
     name: str = ""  # 期次名称
     amount: str | None = None  # 金额（原文，如 "200,000"）
-    # 比例模型可能给数字或字符串（实测返回 int），归一化统一兜底
+    # 比例模型可能给数字或字符串，归一化统一兜底
     percent: int | float | str | None = None  # 占总额比例（如 20 = 20%）
 
 
 class ExtractionSchema(BaseModel):
-    """with_structured_output 用的输出结构：普通字段 + 证据列表。"""
+    """LLM with_structured_output 用的输出结构：普通字段 + 证据列表。"""
 
     contract_kind: str | None = None  # 合同品类（enterprise_goods/gov_goods/agri_goods/tech_service）
     buyer: str | None = None  # 采购方名称
@@ -98,12 +102,11 @@ class ExtractionSchema(BaseModel):
     evidence: dict[str, ExtractionEvidence] = Field(default_factory=dict)  # 字段名 → 证据
 
 
-# ---- 确定性归一化（纯函数，核心测试面）----
+# ---- 确定性归一化:把 LLM 输出的不规范的、格式多变的原始值，通过纯函数 转换成类型安全、格式统一的目标值----
 
 
 def _parse_kind(value: str | None) -> str | None:
-    """LLM 品类输出 → 枚举值；识别不到返回 None（规则按企业采购默认处理）。
-
+    """LLM 品类输出 :把LLM输出的品类描述映射到四个枚举值之一。
     兼容模型直接给枚举值或给中文描述/含关键词的文本两种形态。
     """
     if not value:
@@ -118,13 +121,18 @@ def _parse_kind(value: str | None) -> str | None:
         return "gov_goods"
     if any(kw in text for kw in ("农副", "农产品")):
         return "agri_goods"
-    if any(kw in text for kw in ("技术开发", "技术服务", "软件", "系统集成")):
+    # 这种情况是：tech 只认"服务/开发形态"——技术开发/技术服务/软件开发/系统集成等；
+    # 单纯"软件/货物采购"是 enterprise（sample_05 企业管理软件采购被裸"软件"误判过）
+    if any(
+        kw in text
+        for kw in ("技术开发", "技术服务", "软件开发", "软件服务", "软件定制", "委托开发", "系统集成")
+    ):
         return "tech_service"
     return None
 
 
 def _parse_amount(value: str | int | float | None) -> Decimal | None:
-    """金额串 → Decimal（元）。容忍千分位/单位/空格；解析不到返回 None。"""
+    """把各种写法的金额字符串转为Decimal(元)。容忍千分位/单位/空格"""
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
     # 只取数字主体（含千分位与小数），丢弃"元/人民币"等字样
@@ -138,7 +146,7 @@ def _parse_amount(value: str | int | float | None) -> Decimal | None:
 
 
 def _parse_cn_date(value: str | None) -> date | None:
-    """中文/ISO 日期串 → date；解析不到（如"无期限"）返回 None。"""
+    """把中文/ISO/斜杠三种日期字符串转为date对象。"""
     if not value:
         return None
     text = value.strip()
@@ -154,9 +162,9 @@ def _parse_cn_date(value: str | None) -> date | None:
 
 
 def _parse_percent(value: str | int | float | None) -> float | None:
-    """百分比文本 → 数值口径（1.5% / 每日 1.5% / 20 → 1.5 / 1.5 / 20.0）。
+    """百分比文本 → 数值口径(1.5% / 每日 1.5% / 20 → 1.5 / 1.5 / 20.0)。
 
-    注意：口径与 rules 一致——存百分比数值而非小数（30 表示 30%）。
+    注意：口径与 rules 一致——存百分比数值而非小数(30 表示 30%)。
     千分号(‰)单独归一化: 真实示范文本常用 0.5‰(=0.05%), 若按 % 直读会偏大
     10 倍, 合规的 1.5‰ 会被误判成 1.5% 触发"违约金畸高".
     """
@@ -173,7 +181,7 @@ def _parse_percent(value: str | int | float | None) -> float | None:
 
 
 def _parse_int(value: str | int | float | None) -> int | None:
-    """月数/天数文本 → int（"24 个月"→24）；解析不到返回 None。"""
+    """月数/天数文本 → int("24 个月"→24)；解析不到返回 None。"""
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
     match = re.search(r"\d+", str(value))
@@ -181,9 +189,9 @@ def _parse_int(value: str | int | float | None) -> int | None:
 
 
 def _parse_months(value: str | int | float | None) -> int | None:
-    """质保/保密期等「月数」字段 → int（单位感知：2 年→24、6 个月→6、裸数→原值）。
+    """质保/保密期等「月数」字段 → int(2 年→24、6 个月→6、裸数→原值)。
 
-    作用：真实合同常按「年」写期限（如校服合同「质保 2 年」），LLM 按"原样抄写"
+    作用：真实合同常按「年」写期限(如校服合同「质保 2 年」),LLM 按"原样抄写"
     原则可能返回 "2 年"——直接取数字会得到 2，被规则误判成不足 12 个月（易错点）。
     判定口径：文本带「N 年」→ N×12；带「N 个月/月」→ N；只有裸数字 → 原值；
     解析不到返回 None。
@@ -213,7 +221,7 @@ def _clamp_confidence(value: float) -> float:
 
 
 def build_contract_model(raw: dict) -> ContractModel:
-    """把 LLM 输出 dict 归一化成类型化 ContractModel，并回填字段证据。
+    """把 LLM 输出 dict 归一化成类型化 ContractModel,并回填字段证据。
 
     规则：
     - 每个字段独立容错——单个字段解析失败只置 None，不影响其他字段；
@@ -302,7 +310,8 @@ _SYSTEM_PROMPT = """你是中文采购合同的结构化抽取器。请从合同
    对象当字段值；正文里找不到的字段填 null，且不要在 evidence 里编造；
 3. payment_schedule 逐期输出：name（期次名）、amount（金额原文，只填金额数字，
    严禁把年份/日期等非金额数字当金额）、percent（占总额比例数值，如 20 表示 20%；
-   正文没写比例就填 null）；
+   正文没写比例就填 null）；一次性付清/整笔支付不是付款期次，此时输出空数组
+   （只有正文明确列出多期/分期才逐期输出）；
 4. evidence 输出为一个 JSON 对象：key 是字段名，value 是 {quote, clause_ref, confidence}。
    quote 必须是正文原句；clause_ref 填所在条款/章节号（如"第四条"，章节式文本填
    "一、质量要求"这类章节头，无条款结构填"前言"）；
@@ -360,12 +369,6 @@ def _normalize_drifted(raw: dict) -> dict:
 def _recover_completion(exc: Exception) -> dict | None:
     """从 with_structured_output 的解析报错里还原模型原始 JSON。
 
-    langchain 报错形如 "Failed to parse X from completion {json} Got: …"，但不同
-    版本里 json 与 Got: 之间可能是空格、句点或换行（实测见 "}. Got:"，2026-09-05
-    农副 GF 示范文本上传踩坑）——固定正则去猜分隔符会漏匹配。改为：定位
-    'completion ' 之后的第一个 '{'，用 json.JSONDecoder.raw_decode 从该处解析，
-    天然处理嵌套花括号并忽略尾部杂讯。解析失败返回 None（上层按原异常抛给
-    error 报告，宁缺毋滥）。
     """
     text = str(exc)
     # 分支 1：报错里没有 completion 字样（接口/超时类异常）→ 无法还原
@@ -382,22 +385,90 @@ def _recover_completion(exc: Exception) -> dict | None:
     return raw if isinstance(raw, dict) else None
 
 
-def extract_contract(llm=None, text: str = "") -> ContractModel:
-    """对合同全文做一次结构化抽取: LLM 抄原文 → build 归一化回填证据。
+# 双读试点字段：尺子(决策 D30)实证付款期次跨次漂移最大(payment_schedule 0.37)，
+# 二次抽取多数一致可压漂移；后续可按同一机制扩展其它低置信度/金额日期字段。
+DOUBLE_READ_FIELDS: tuple[str, ...] = ("payment_schedule",)
 
-    llm 可注入（测试用假模型）；不传则用默认 chat 模型（低温、关 thinking,
-    抽取任务不需要深度推理，能显著降时延与成本）。
-    """
-    model = llm or get_chat_model(temperature=0.0, enable_thinking=False)
-    structured = model.with_structured_output(ExtractionSchema, method="json_mode")
+
+def _single_read(structured, text: str) -> ContractModel:
+    """调一次结构化抽取并归一化（漂移输出兜底；异常上抛由调用方决定是否吞）。"""
     try:
         result = structured.invoke([("system", _system_message()), ("human", text)])
     except Exception as exc:
         raw = _recover_completion(exc)
-        # 这种情况是：解析失败但报错里带原始 completion → 归一化兜底后照常审核
+        # 这种情况是：解析失败但报错里带原始 completion → 归一化兜底后照常返回
         if raw is not None:
             return build_contract_model(_normalize_drifted(raw))
-        # 这种情况是：还原失败（接口/超时/格式不支持）→ 原样抛出走 error 报告
+        # 这种情况是：还原失败（接口/超时/格式不支持）→ 原样抛出
         raise
     raw = result.model_dump() if hasattr(result, "model_dump") else result
     return build_contract_model(raw)
+
+
+def _terms_signature(terms: list[PaymentTerm]) -> list[tuple]:
+    """付款期次判同签名：[(金额, 比例)]——与字段尺子同一口径，忽略期次名差异。"""
+    return [(t.amount, t.percent) for t in terms]
+
+
+def _field_equal(field: str, a, b) -> bool:
+    """双读字段判同：付款期次按期次签名比；其余字段直接等值（None 与空都算一致）。"""
+    # 这种情况是：付款期次 → 序列签名比较（顺序敏感，与尺子/金额规则口径一致）
+    if field == "payment_schedule":
+        return _terms_signature(a or []) == _terms_signature(b or [])
+    return a == b
+
+
+def _merge_double_read(
+    first: ContractModel,
+    second: ContractModel,
+    fields: tuple[str, ...] = DOUBLE_READ_FIELDS,
+) -> ContractModel:
+    """双读合并：对指定字段两读比对——一致用首读；不一致保留首读并标需人工。
+
+    作用：LLM 抽取跨次漂移时（如付款期次比例 20% 偶发写成 0.2），二次抽取能
+    暴露不一致；宁标人工复核也不静默采用可能错的一读。半填/空缺不算问题：
+    两读都空视为一致（不脑补，呼应 D23 低置信度口径）。
+    """
+    meta = dict(first.extraction_meta)
+    changed = False
+    for field in fields:
+        # 这种情况是：两读一致（含都为空）→ 采用首读，不动证据
+        if _field_equal(field, getattr(first, field), getattr(second, field)):
+            continue
+        # 这种情况是：两读不一致 → 保留首读，把该字段标 needs_human_review
+        evidence = meta.get(field)
+        if evidence is None:
+            evidence = Evidence(quote="", clause_ref="", confidence=0.0, needs_human_review=True)
+        else:
+            evidence = evidence.model_copy(update={"needs_human_review": True})
+        meta[field] = evidence
+        changed = True
+    if not changed:
+        return first
+    return first.model_copy(update={"extraction_meta": meta})
+
+
+def extract_contract(
+    llm=None,
+    text: str = "",
+    double_read_fields: tuple[str, ...] = DOUBLE_READ_FIELDS,
+) -> ContractModel:
+    """对合同全文做结构化抽取: LLM 抄原文 → build 归一化回填证据（关键字段双读）。
+
+    llm 可注入；不传则用默认 chat 模型（低温、关 thinking,
+    抽取任务不需要深度推理，能显著降时延与成本）。
+    double_read_fields: 需要二次抽取比对的关键字段（默认付款期次）；传空元组关闭。
+    成本：开启时每份多 1 次 LLM 抽取调用（第二读失败不阻断，以首读为准）。
+    """
+    model = llm or get_chat_model(temperature=0.0, enable_thinking=False)
+    structured = model.with_structured_output(ExtractionSchema, method="json_mode")
+    first = _single_read(structured, text)
+    # 这种情况是：没开双读 → 一次抽取即返回（向后兼容/评测对照）
+    if not double_read_fields:
+        return first
+    try:
+        second = _single_read(structured, text)
+    except Exception as exc:
+        # 这种情况是：第二读失败（限流/超时）→ 以首读为准，不阻断审查
+        return first
+    return _merge_double_read(first, second, double_read_fields)
