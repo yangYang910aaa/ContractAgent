@@ -47,6 +47,8 @@ class Settings(BaseSettings):
 
     # ---- 检索后端：milvus 不可用时自动退回内存----
     retrieval_backend: Literal["auto", "milvus", "memory"] = "auto"  
+    # 检索模式：hybrid=向量+BM25 经 RRF 融合（默认，报告引用更稳）/ vector=仅向量（回退对比用）
+    retrieval_mode: Literal["hybrid", "vector"] = "hybrid"
 
     @property
     def embedding_api_key(self) -> str:

@@ -252,6 +252,123 @@ class MilvusStore:
         return hits
 
 
+def _tokenize(text: str) -> list[str]:
+    """中文分词（jieba）→ BM25 词元：丢弃空白，统一小写。
+
+    jieba 首次导入会构建词典缓存（约 0.6s）且带 SyntaxWarning，故惰性导入并静音。
+    易错点：中文单字虚词（的/了/和…）几乎每篇都有，不过滤会让"无关查询"也拿到
+    非零 BM25 分并挤进 RRF 候选池，故按停用词表剔除。
+    """
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        import jieba
+
+    return [
+        tok.strip().lower()
+        for tok in jieba.lcut(text or "")
+        if tok.strip() and tok.strip() not in _BM25_STOPWORDS
+    ]
+
+
+# BM25 停用词：中文虚词/标点类单字（保留"不得/超过"这类有判定意义的词）
+_BM25_STOPWORDS = {
+    "的", "了", "和", "与", "或", "等", "是", "在", "为", "及", "以", "对", "就",
+    "也", "都", "而", "并", "着", "被", "把", "之", "其", "该", "本", "上", "下",
+    "，", "。", "、", "；", "：", "（", "）", "%", "％",
+}
+
+
+class BM25Index:
+    """政策条文的 BM25 索引（与向量库共用同一批 IndexDoc，检索单元一致）。"""
+
+    def __init__(self, docs: list[IndexDoc]):
+        from rank_bm25 import BM25Okapi  # 惰性导入：只有走混合检索才需要
+
+        self.docs = [d for d in docs if d.text.strip()]
+        self._bm25 = BM25Okapi([_tokenize(d.text) for d in self.docs]) if self.docs else None
+
+    def search(self, query: str, k: int = 10) -> list[PolicyHit]:
+        """BM25 检索：按词元重叠打分排序，取前 k（无索引时返回空）。"""
+        if self._bm25 is None:
+            return []
+        scores = self._bm25.get_scores(_tokenize(query))
+        order = sorted(range(len(self.docs)), key=lambda i: scores[i], reverse=True)
+        return [
+            PolicyHit(
+                policy_ref=self.docs[i].policy_ref,
+                source=self.docs[i].source,
+                text=self.docs[i].text,
+                score=float(scores[i]),
+            )
+            for i in order[:k]
+            # 这种情况是：0 分（无任何词元重叠）→ 不进入候选，避免污染 RRF 融合
+            if scores[i] > 0
+        ]
+
+
+def rrf_fuse(hit_lists: list[list[PolicyHit]], k: int = 60, top_k: int = 3) -> list[PolicyHit]:
+    """RRF（Reciprocal Rank Fusion）融合多路检索结果。
+
+    公式：score(d) = Σ 1/(k + rank_i(d))；k 默认 60（业界常用，弱化头部单路主导）。
+    同一检索单元（source+text）在多路命中只累加分数一次每路；返回 top_k，
+    score 写 RRF 分（越大越靠前；与余弦分不同量纲，仅用于排序）。
+    """
+    fused: dict[tuple[str, str], float] = {}
+    meta: dict[tuple[str, str], PolicyHit] = {}
+    for hits in hit_lists:
+        for rank, hit in enumerate(hits, start=1):
+            key = (hit.source, hit.text)
+            fused[key] = fused.get(key, 0.0) + 1.0 / (k + rank)
+            meta.setdefault(key, hit)
+    order = sorted(fused.items(), key=lambda kv: kv[1], reverse=True)
+    return [
+        PolicyHit(
+            policy_ref=meta[key].policy_ref,
+            source=meta[key].source,
+            text=meta[key].text,
+            score=round(score, 6),
+        )
+        for key, score in order[:top_k]
+    ]
+
+
+class HybridRetriever:
+    """混合检索：向量召回 + BM25 召回，经 RRF 融合（政策规模变大后提升引用准确率）。"""
+
+    def __init__(self, store, docs: list[IndexDoc], pool: int = 10, rrf_k: int = 60):
+        self.store = store  # MemoryStore / MilvusStore（提供 similarity_search）
+        self.bm25 = BM25Index(docs)
+        self.pool = pool  # 每路召回条数（融合前候选池）
+        self.rrf_k = rrf_k
+
+    def search(self, query: str, k: int = 3) -> list[PolicyHit]:
+        """两路召回（各 pool 条）→ RRF 融合取前 k。"""
+        vector_hits = self.store.similarity_search(query, k=self.pool)
+        bm25_hits = self.bm25.search(query, k=self.pool)
+        return rrf_fuse([vector_hits, bm25_hits], k=self.rrf_k, top_k=k)
+
+
+# 混合检索器进程内缓存：向量库与 BM25 索引构建成本高，避免每次查询重灌
+_HYBRID_CACHE: dict[str, HybridRetriever] = {}
+
+
+def _get_hybrid(backend: str | None, embedding_model) -> HybridRetriever:
+    """按后端取（并缓存）混合检索器；检索单元固定为 load_policies() 的全量条文。"""
+    # 缓存键带上"是否注入自定义 embedding"，避免测试假向量与真实向量互相污染
+    key = f"{backend or 'auto'}|{'custom' if embedding_model is not None else 'default'}"
+    if key not in _HYBRID_CACHE:
+        store = get_store(backend=backend, embedding_model=embedding_model)
+        docs = load_policies()
+        if isinstance(store, MemoryStore) and store.doc_count == 0:
+            store.insert(docs)
+        elif isinstance(store, MilvusStore):
+            store.insert(docs)
+        _HYBRID_CACHE[key] = HybridRetriever(store, docs)
+    return _HYBRID_CACHE[key]
+
+
 # ---- 向量工具（纯函数）----
 
 
@@ -311,8 +428,18 @@ def retrieve_policies(
     k: int = 2,
     backend: str | None = None,
     embedding_model=None,
+    mode: str | None = None,
 ) -> list[PolicyHit]:
-    """按问题检索政策条目，返回带 policy_ref 的命中（供 rules/LLM 引用）。"""
+    """按问题检索政策条目，返回带 policy_ref 的命中（供 rules/LLM 引用）。
+
+    mode：hybrid=向量+BM25 经 RRF 融合（默认，读 settings.retrieval_mode）/
+    vector=仅向量（回退与对比用）。
+    """
+    mode = mode or settings.retrieval_mode
+    # 分支：混合检索 → 复用进程内缓存的检索器（向量库+BM25 索引只建一次）
+    if mode == "hybrid":
+        return _get_hybrid(backend, embedding_model).search(query, k=k)
+    # 分支：纯向量（历史行为，保留作对比基线）
     store = get_store(backend=backend, embedding_model=embedding_model)
     # 分支：内存库为空 → 先灌政策再检索；Milvus 的 insert 自带幂等跳过
     if isinstance(store, MemoryStore) and store.doc_count == 0:
