@@ -463,14 +463,16 @@ def test_open_ended_amount_downgrades_missing_total_with_explicit_notice() -> No
     """月结/按实结算合同无总额：缺必填 high → medium，且建议里显式写明"已降为提示级"。"""
     from backend.app.rules import annotate_open_ended_risks
 
-    model = _with(total_amount=None, expiry_date=None)
+    model = _with(total_amount=None, effective_date=None, expiry_date=None)
     text = "双方每月结算一次，每月30日前结清当月货款。"
     risks = annotate_open_ended_risks(evaluate(model), text)
     total = next(r for r in risks if r.field == "total_amount")
     assert total.severity == Severity.medium
     assert "已降为提示级" in total.suggestion
-    # 其它缺必填（到期日；文本无"有效期 N 年"语境）不受影响，仍是 high
-    assert next(r for r in risks if r.field == "expiry_date").severity == Severity.high
+    # 生效日：正文既无签署日期表述也无空白日期栏 → 仍是 high
+    assert next(r for r in risks if r.field == "effective_date").severity == Severity.high
+    # 到期日：正文无"至 YYYY 年"具体结束日期 → 按开放式期限降 medium
+    assert next(r for r in risks if r.field == "expiry_date").severity == Severity.medium
 
 
 def test_open_ended_term_and_signing_downgrade_with_notice() -> None:
@@ -494,6 +496,38 @@ def test_open_ended_annotation_keeps_normal_missing_high() -> None:
     model = _with(total_amount=None)
     risks = annotate_open_ended_risks(evaluate(model), "甲方应于2026年12月31日前交付货物。")
     assert next(r for r in risks if r.field == "total_amount").severity == Severity.high
+
+
+def test_open_ended_order_based_total_medium() -> None:
+    """按订单结算（无固定总额）→ 缺总额降 medium 并附提示。"""
+    from backend.app.rules import annotate_open_ended_risks
+
+    model = _with(total_amount=None)
+    text = "二、订单要求：买方订单均以书面传真/邮件形式通知卖方，卖方收到订单后两个工作日内回复。"
+    risks = annotate_open_ended_risks(evaluate(model), text)
+    total = next(r for r in risks if r.field == "total_amount")
+    assert total.severity == Severity.medium and "已降为提示级" in total.suggestion
+
+
+def test_open_ended_effective_and_expiry_without_concrete_date() -> None:
+    """生效日"自合同签订之日起"、到期日以验收为界（无"至 YYYY 年"）→ 均降提示级。"""
+    from backend.app.rules import annotate_open_ended_risks
+
+    model = _with(effective_date=None, expiry_date=None)
+    text = "2.3 服务期限：自合同签订之日起至本项目验收合格之日止。"
+    risks = annotate_open_ended_risks(evaluate(model), text)
+    by_field = {r.field: r for r in risks if r.risk_type == "missing_required_field"}
+    assert by_field["effective_date"].severity == Severity.medium
+    assert by_field["expiry_date"].severity == Severity.medium
+
+
+def test_missing_expiry_with_concrete_end_date_stays_high() -> None:
+    """正文写了"至 2027 年"却抽不到到期日 → 保留 high（提示人工核对抽取）。"""
+    from backend.app.rules import annotate_open_ended_risks
+
+    model = _with(expiry_date=None)
+    risks = annotate_open_ended_risks(evaluate(model), "本合同有效期至 2027 年 3 月 9 日。")
+    assert next(r for r in risks if r.field == "expiry_date").severity == Severity.high
 
 
 # ---- 空白模板检测精化（真实合同走查 2026-09-10）----
