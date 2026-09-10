@@ -131,6 +131,39 @@ def _parse_kind(value: str | None) -> str | None:
     return None
 
 
+# 企业货物/服务形态的强信号词：出现在正文时，即便模型判了 tech_service 也纠正回来
+# （真实合同走查 2026-09-10："汽车定点维修服务采购合同""软件代理销售协议"被判 tech，
+# 导致按技术类基线误报 IP/保密/责任上限缺失）
+_ENTERPRISE_FORM_KEYWORDS = ("代理销售", "购销", "买卖", "供货", "维修", "维保", "耗材", "租赁")
+# tech 形态的强信号词：只认"开发/集成"类具体形态；"技术服务"四个字常出现在代理销售、
+# 维修等非技术合同里，不能作为判 tech 的依据（故用"技术服务合同"而非裸"技术服务"）
+_TECH_FORM_KEYWORDS = (
+    "技术开发",
+    "技术服务合同",
+    "软件开发",
+    "软件服务",
+    "软件定制",
+    "委托开发",
+    "系统集成",
+)
+
+
+def _normalize_kind(kind: str | None, text: str) -> str | None:
+    """按正文形态校正品类：企业货物/服务强信号（代理销售/供货/维修等）优先于 tech。
+
+    判定口径：kind 非空、正文含企业形态强信号且不含 tech 强信号 → 改判 enterprise_goods；
+    其余情况保持模型/关键词判据结果不变（只在"明显矛盾"时纠正，避免过度干预）。
+    """
+    if not kind or not text:
+        return kind
+    # 分支：正文含企业货物/服务强信号且无 tech 强信号 → 纠正为 enterprise_goods
+    if any(kw in text for kw in _ENTERPRISE_FORM_KEYWORDS) and not any(
+        kw in text for kw in _TECH_FORM_KEYWORDS
+    ):
+        return "enterprise_goods"
+    return kind
+
+
 def _parse_amount(value: str | int | float | None) -> Decimal | None:
     """把各种写法的金额字符串转为Decimal(元)。容忍千分位/单位/空格"""
     if value is None or (isinstance(value, str) and not value.strip()):
@@ -220,7 +253,7 @@ def _clamp_confidence(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
-def build_contract_model(raw: dict) -> ContractModel:
+def build_contract_model(raw: dict, text: str = "") -> ContractModel:
     """把 LLM 输出 dict 归一化成类型化 ContractModel,并回填字段证据。
 
     规则：
@@ -274,7 +307,8 @@ def build_contract_model(raw: dict) -> ContractModel:
         )
 
     return ContractModel(
-        contract_kind=_parse_kind(raw.get("contract_kind")),
+        # 品类先按模型/关键词判据解析，再按正文形态校正（代理销售/维修等不会被判 tech）
+        contract_kind=_normalize_kind(_parse_kind(raw.get("contract_kind")), text),
         buyer=_s("buyer"),
         supplier=_s("supplier"),
         signature_date=_parse_cn_date(_s("signature_date")),
@@ -316,7 +350,10 @@ _SYSTEM_PROMPT = """你是中文采购合同的结构化抽取器。请从合同
    quote 必须是正文原句；clause_ref 填所在条款/章节号（如"第四条"，章节式文本填
    "一、质量要求"这类章节头，无条款结构填"前言"）；
    confidence：原文明确命中给 0.9+，有推断或表述含糊给 0.6~0.85，找不到的字段不写 key；
-5. contract_kind 只从标题/首部/条款风格判断，不要凭正文金额猜；
+5. contract_kind 只从标题/首部/条款风格判断，不要凭正文金额猜：
+   成品货物/耗材/代理销售/供货/维修保养/租赁类合同判 enterprise_goods；
+   只有标的为软件开发、技术开发/服务、系统集成等信息技术服务交付才判 tech_service；
+   政府采购/校服类判 gov_goods，农副产品买卖判 agri_goods；
 6. 只输出 JSON。"""
 
 
@@ -398,11 +435,11 @@ def _single_read(structured, text: str) -> ContractModel:
         raw = _recover_completion(exc)
         # 这种情况是：解析失败但报错里带原始 completion → 归一化兜底后照常返回
         if raw is not None:
-            return build_contract_model(_normalize_drifted(raw))
+            return build_contract_model(_normalize_drifted(raw), text)
         # 这种情况是：还原失败（接口/超时/格式不支持）→ 原样抛出
         raise
     raw = result.model_dump() if hasattr(result, "model_dump") else result
-    return build_contract_model(raw)
+    return build_contract_model(raw, text)
 
 
 def _terms_signature(terms: list[PaymentTerm]) -> list[tuple]:

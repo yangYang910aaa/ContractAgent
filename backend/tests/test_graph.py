@@ -182,7 +182,9 @@ def test_extract_error_goes_error_report() -> None:
 
 def test_start_reads_file_when_no_text_given() -> None:
     """start 不给 text 时应按 source 读盘（真实上传链路形态）。"""
-    sample_md = BASE_DIR / "data" / "contracts" / "sample_06_学生校服采购合同_正常.md"
+    # 用企业正常样本（与 _normal_model 的品类一致）：校服文本配企业模型会触发
+    # P-09 转包限制等文本级 medium，测"读盘"没必要引入跨品类噪音
+    sample_md = BASE_DIR / "data" / "contracts" / "sample_01_电子元件采购合同_正常.md"
     runner, _ = _runner(_normal_model())
     state = runner.start(str(sample_md))
     assert state["report"]["grade"] == "pass"

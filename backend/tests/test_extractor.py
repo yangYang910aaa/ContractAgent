@@ -97,6 +97,28 @@ def test_build_contract_model_keeps_parsed_kind() -> None:
     assert build_contract_model({}).contract_kind is None
 
 
+def test_kind_normalized_by_contract_form() -> None:
+    """企业货物/服务形态（维修/代理销售/供货）优先于 tech（真实合同走查 2026-09-10）。"""
+    # 模型误判 tech，但正文是汽车维修服务采购 → 校正为 enterprise_goods
+    model = build_contract_model(
+        {"contract_kind": "tech_service"},
+        text="汽车定点维修服务采购合同\n甲、乙双方达成以下车辆维修服务条款：",
+    )
+    assert model.contract_kind == "enterprise_goods"
+    # 软件代理销售合同里出现"技术服务"字样，也不得判 tech
+    model2 = build_contract_model(
+        {"contract_kind": "tech_service"},
+        text="软件代理销售协议\n乙方提供产品销售与技术服务支持，代理销售期间……",
+    )
+    assert model2.contract_kind == "enterprise_goods"
+    # 真技术开发合同（含开发/集成强信号）保持 tech_service
+    model3 = build_contract_model(
+        {"contract_kind": "tech_service"},
+        text="技术开发（委托）合同\n乙方负责系统集成与软件开发交付。",
+    )
+    assert model3.contract_kind == "tech_service"
+
+
 # ---- LLM 原始输出 → ContractModel ----
 
 

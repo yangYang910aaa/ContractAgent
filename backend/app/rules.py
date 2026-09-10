@@ -25,6 +25,9 @@ LIABILITY_CAP_MIN_PERCENT: dict[str, float] = {
 CONFIDENTIALITY_MAX_MONTHS = 36  # P-04：保密期不超过 36 个月
 PENALTY_DAILY_MAX_PERCENT = 1.0  # 违约金日利率上限
 AMOUNT_TOLERANCE_RATIO = Decimal("0.01")  # 分项加总 vs 总额允许偏差 1%
+# 预付款期次的名称关键词：P-01 第二条明文把"以'首付款'名义在交付或验收前支付的部分"
+# 计入预付款，备料款/启动款同理（真实合同走查 2026-09-10：70% "首付款"曾被漏判）
+_PREPAY_NAME_KEYWORDS = ("预付", "首付", "备料款", "启动款")
 
 # 风险类型机器码 → 中文展示名（risk_type 是评测/接口对齐的编码，展示永远走
 # 中文 label；新增风险类型时必须在此登记，否则界面会裸显机器码）
@@ -220,6 +223,24 @@ def _check_dates(model: ContractModel) -> list[RiskItem]:
     return out
 
 
+def _term_amount_implausible(term: PaymentTerm, total: Decimal) -> bool:
+    """期次金额是否疑似"把百分比抽进了金额字段"（真实合同走查暴露，2026-09-10）。
+
+    背景：合同只写比例（如"预付款（70%）"）时，抽取会把 70 填进 amount；
+    金额一致性照算就得到"期次加总 70 元 ≠ 总额 480 万"的假 high 误停闸。
+    判定（宁缺毋滥，只拦明显不合常理的形态）：
+    - amount 与 percent 数值相同 → 直接判为百分比串位；
+    - 总额 ≥1 万时 amount ≤100 → 任何真实付款期次都不可能是这个量级。
+    """
+    amount = term.amount
+    # 分支：没抽到金额 → 不算"疑似串位"（由其它分支处理）
+    if amount is None:
+        return False
+    if term.percent is not None and Decimal(str(term.percent)) == amount:
+        return True
+    return total >= Decimal("10000") and amount <= 100
+
+
 def _check_amount(model: ContractModel) -> list[RiskItem]:
     """金额一致性校验：付款期次加总应 ≈ 合同总额。
 
@@ -231,6 +252,22 @@ def _check_amount(model: ContractModel) -> list[RiskItem]:
     # 分支 1：总额缺失/非正，或没有任何带金额的期次 → 无从校验，跳过
     if total is None or total <= 0 or not terms:
         return []
+    # 分支 1-1：存在"疑似百分比串位"的期次金额 → 加总口径不可信，不参与一致性判定；
+    #   降级为 medium 提示人工核对（不静默、不误停闸口，呼应 D23 低置信度处理口径）
+    doubtful = [t for t in terms if _term_amount_implausible(t, total)]
+    if doubtful:
+        shown = "、".join(f"{t.name or '期次'} {t.amount}" for t in doubtful[:3])
+        return [
+            _mk(
+                model,
+                risk_type="amount_inconsistency",
+                severity=Severity.medium,
+                field="total_amount",
+                policy_ref=None,
+                evidence=f"付款期次金额疑似抽取为百分比（{shown}），无法校验金额一致性。",
+                suggestion="期次金额疑似被抽成比例数字，金额一致性无法自动判定，请人工核对付款计划后再审。",
+            )
+        ]
     summed = sum((t.amount for t in terms), Decimal("0"))
     deviation = abs(summed - total) / total
     # 分支 2：偏差在容忍范围内 → 视为一致，不产生风险
@@ -273,8 +310,9 @@ def _prepay_ratio(model: ContractModel) -> tuple[PaymentTerm, float] | None:
     """
     total = model.total_amount
     for term in model.payment_schedule:
-        # 分支 1：只认名称含「预付」的期次，避免误把验收款当预付款
-        if "预付" not in term.name:
+        # 分支 1：只认名称含预付类关键词的期次（预付/首付/备料款/启动款，见 P-01 第二条），
+        #   避免误把验收款/进度款当预付款
+        if not any(kw in term.name for kw in _PREPAY_NAME_KEYWORDS):
             continue
         # 分支 2：期次带显式比例 → 直接用（抽取/人工填写阶段应尽量带比例）
         if term.percent is not None:
@@ -464,34 +502,52 @@ def _check_ip_and_law(model: ContractModel, required: set[str]) -> list[RiskItem
 
 # 各类占位标记的正则（每类只要命中一次即计数）：
 # - date：年/月/日之间只有空格/下划线/全角空格（真实日期中间是数字或中文数字）
-# - amount：金额词与「元」之间只有冒号/空格等（填写后会有 数字/大写中文 等实义字符）
+# - amount：金额词空值或"￥　　元"形态（填写后会有 数字/大写中文 等实义字符）
 # - amount_cap：金额大写栏空白（大写：＿＿＿）
 # - party：冒号后跟下划线（甲方（采购方）：＿＿＿）
 # - fill：成串下划线/全角下划线（模板填空位）
-# - blank：冒号后整段空白（官方示范文本常用纯空格填空栏，不一定画下划线）
+# - blank：冒号后只剩空白直到行尾（真空白值；易错点：不得用"冒号+空格"判断，
+#   PDF 抽取把"甲方：    乙方："这类排版间距也带出空格，会误伤已签合同）
 # - dot：点线/省略号填充栏（GF 示范文本用 "……………" 引出待填内容）
 # - box：□ 勾选/未选框（示范文本"选项处打 √/×"结构）
-# - void_punct：填空式条款的"空标点"（"标准是 ；""要求： 。"）——占位无实义
-#   内容，汉字/冒号后直接空格跟句号/分号（正常书写中标点紧贴前文无空格）
-# - void_unit：填空式条款的"空单位"（"第 项办理""%向甲方""定金 元""日内结清"）
-#   ——占位前是空格 + 量词/单位/勾选项（正常填写时数字与单位间无空格或已填实义）
+# 说明：原 void_punct/void_unit（空格+标点/单位）在 2026-09-10 真实合同走查中
+# 被证实是 PDF 排版空格的产物（已签合同也命中），会误报"疑似空白模板"，故移除
 _BLANK_PATTERN_RE: dict[str, re.Pattern] = {
     "date": re.compile(r"年[ ＿_\u3000]*月[ ＿_\u3000]*日"),
-    "amount": re.compile(r"(?:货款|合同)?(?:金额|价款|总价)[为是：:（( ]{0,5}元"),
+    "amount": re.compile(
+        r"(?:金额|价款|总价|货款)[为是：:]\s*[＿_ \u3000]*元(?!\s*[）)])"
+        r"|[￥¥][\s＿_\u3000]{2,}元"
+    ),
     "amount_cap": re.compile(r"大写[：:]\s*[＿_ \u3000]*[）)]"),
     "party": re.compile(r"[：:]\s*[＿_]{2,}"),
     "fill": re.compile(r"[＿_]{3,}"),
-    "blank": re.compile(r"[：:][\s\u3000]{4,}"),
+    "blank": re.compile(r"[：:][ \u3000]{3,}(?=\n|$)"),
     "dot": re.compile(r"[.．…]{3,}"),
     "box": re.compile(r"□"),
+    # 填空式条款的空标点/空单位（霸王花式模板："标准是 ；""定金 元"）：
+    # 易错点——PDF 排版抽取也会在正常句子里带出"空格+标点/单位"，故仅在"未填写文本"
+    # 场景参与判定（见 _looks_filled），已填写合同里这两类一律忽略
     "void_punct": re.compile(r"[\u4e00-\u9fff%][：:]?[\s\u3000]{1,3}[。；,，．]"),
     "void_unit": re.compile(r"[ \u3000](?:%|元|日内|天内|项|种方式|方)"),
 }
 
-# 判定为"疑似空白模板"所需的最少占位类别数（≥2 防单处误报：正文里偶尔出现
-# 一处"年 月 日"、单个省略号或个别 □ 不会触发降级；填写完整的合同日期中间
-# 有数字、冒号后是实义内容、正文句号前无空格，上述类别很难凑到两类同时命中）
+# 已填写合同的形态特征：有带数字的年份/年月 + 数字化金额（真实已签合同/正常样本都满足；
+# 真实 PDF 合同常只写"2025 年"（项目名/期限），故年份单独出现也算已填写）
+_FILLED_DATE_RE = re.compile(r"\d{4}\s*年|年\s*\d{1,2}\s*月")
+_FILLED_AMOUNT_RE = re.compile(r"\d[\d,]{2,}(?:\.\d+)?\s*(?:元|万元)")
+# 仅在"未填写文本"里算证据的类别（PDF 排版空格产物，见上）
+_ARTIFACT_CATEGORIES = {"void_punct", "void_unit"}
+
+# 签名/签署栏上下文：这些栏位的日期空白只说明"未写签署日期"，不能据此把整份
+# 合同判为空白模板（真实合同走查 2026-09-10：已签合同的署名页日期栏曾误报）
+_SIGNATURE_CONTEXT_RE = re.compile(r"签订(?:时间|地点|日期)|盖章|（章）|\(章\)|签约|双方签字")
+
+# 判定为"疑似空白模板"：① 占位类别 ≥2（防单处偶发）且 ② 至少一类属"强证据"。
+# 强证据 = 真空白值域（amount / amount_cap / party / fill / blank）；
+# 易错点：date 空白在已签合同的署名页/页脚也常见（"年 月 日"处），只能计数、不能定罪；
+# box、dot（选项框/点线）在真实合同里同样常见，也只能作旁证。
 _BLANK_SUSPECT_MIN_CATEGORIES = 2
+_BLANK_STRONG_CATEGORIES = {"amount", "amount_cap", "party", "fill", "blank"}
 # 出 evidence 摘录时优先"看得出是哪个栏位"的类别；纯空白/点线/选框摘出来
 # 不像话，只参与计数、不抢摘录位
 _SNIPPET_CATEGORIES = ("date", "amount", "amount_cap", "party", "fill")
@@ -499,21 +555,41 @@ _SNIPPET_CATEGORIES = ("date", "amount", "amount_cap", "party", "fill")
 
 def _blank_markers(text: str) -> tuple[set[str], str]:
     """扫原文找占位痕迹，返回 (命中的类别集合, 首段占位原文摘录)。"""
+    filled = len(_FILLED_DATE_RE.findall(text)) > 0 and bool(_FILLED_AMOUNT_RE.search(text))
     found: set[str] = set()
     snippet = ""
     for category, pattern in _BLANK_PATTERN_RE.items():
-        match = pattern.search(text)
-        if match:
+        # 这种情况是：文本看起来已填写完整 → 忽略排版空格类假信号
+        if filled and category in _ARTIFACT_CATEGORIES:
+            continue
+        for match in pattern.finditer(text):
+            # 这种情况是：日期空白出现在署名/签订栏 → 只是未写签署日期，不算整份空白
+            if category == "date" and _SIGNATURE_CONTEXT_RE.search(
+                text[max(match.start() - 24, 0) : match.end() + 8]
+            ):
+                continue
             found.add(category)
             if not snippet and category in _SNIPPET_CATEGORIES:
                 snippet = match.group(0).strip()[:80]
+            break
     return found, snippet
 
 
 def is_blank_template_suspect(text: str) -> bool:
-    """原文是否像空白/未定稿模板：命中的占位类别 ≥ 2 视为疑似。"""
+    """原文是否像空白/未定稿模板。
+
+    分流口径（真实合同走查 2026-09-10）：
+    - 已填写文本（有数字化年月+金额）：占位类别 ≥2 且含"真空白值域"强证据才算，
+      防"署名栏日期空白 + 排版空格"把已签合同误判成模板；
+    - 未填写文本（模板/半填）：沿用占位类别 ≥2 的原口径，保证 GF 填空式、
+      下划线式、点线式各类官方模板仍能识别。
+    """
     found, _ = _blank_markers(text or "")
-    return len(found) >= _BLANK_SUSPECT_MIN_CATEGORIES
+    if len(found) < _BLANK_SUSPECT_MIN_CATEGORIES:
+        return False
+    filled = len(_FILLED_DATE_RE.findall(text or "")) > 0 and bool(_FILLED_AMOUNT_RE.search(text or ""))
+    # 分支：已填写文本 → 必须命中"真空白值域"强证据；未填写文本 → 原口径放行
+    return bool(found & _BLANK_STRONG_CATEGORIES) if filled else True
 
 
 def annotate_template_risks(risks: list[RiskItem], text: str) -> list[RiskItem]:
@@ -550,6 +626,88 @@ def annotate_template_risks(risks: list[RiskItem], text: str) -> list[RiskItem]:
             policy_ref=None,
         )
     )
+    return out
+
+
+# ---- 开放式条款语境标注（真实合同走查 2026-09-10）----
+
+# "按实/按月结算"类语境：合同不写固定总额是常态（月结、账期、按订单、框架协议）
+_OPEN_AMOUNT_RE = re.compile(
+    r"按实结算|据实结算|实报实销|按订单|按月结算|按月结|月结|每月结算|月度结算|结算周期|账期"
+    r"|按实际发生|按批次结算|框架(?:协议|合同)|按需下单|对账后付款"
+    r"|每月|每个月|按季|按季度|对账|对帐|结算单|结算上月|按供货批次"
+)
+# "无固定到期日"类语境：有效期按"N 年"表述或写明长期/无固定期限
+_OPEN_TERM_RE = re.compile(
+    r"(?:有效期|合同期限|服务期限|合作期限)[^。\n]{0,16}?(?:暂定|暂为|为)?\s*[0-9零一二三四五六七八九十]+\s*年"
+    r"|长期有效|无固定期限|自动续期"
+)
+# "签字/盖章之日起生效"句式：生效规则明确，但正文未写具体签署日期
+_SIGNING_EFFECT_RE = re.compile(r"(?:签字|盖章|签名)[^。\n]{0,12}生效")
+# 日期栏空白：出现"年 月 日"三连但中间没有数字（签署栏/期限栏未填），
+# 真实合同走查 2026-09-10：已签合同正文只留空白签署日期栏，抽取拿不到日期就判 high
+_DATE_BLANK_RE = re.compile(r"(?<!\d)\s*年[ ＿_\u3000]{0,6}月[ ＿_\u3000]{0,6}日")
+
+
+def annotate_open_ended_risks(risks: list[RiskItem], text: str) -> list[RiskItem]:
+    """把"开放式条款"语境下的缺必填 high 降为 medium（保留风险并写明提示）。
+
+    背景：真实合同常见"按实结算/月结/账期"（无固定总额）与"有效期 N 年/长期"
+    （无具体到期日）、以及"签字盖章之日起生效"但未写签署日期——抽取拿不到对应
+    字段就判 high 会误停闸口。这里按文本语境降级为提示级（不阻断审批），
+    并在 suggestion 里显式写明"已降为提示级"，避免静默降级造成误导（呼应 D23 不静默）。
+    返回新列表，不修改入参。
+    """
+    if not text:
+        return risks
+    amount_open = _OPEN_AMOUNT_RE.search(text) is not None
+    term_open = _OPEN_TERM_RE.search(text) is not None
+    signing_effect = _SIGNING_EFFECT_RE.search(text) is not None
+    date_blank = _DATE_BLANK_RE.search(text) is not None
+    # 分支：三种语境都没有 → 原样返回（不是开放式合同，缺字段照常 high）
+    if not (amount_open or term_open or signing_effect or date_blank):
+        return risks
+    out: list[RiskItem] = []
+    for risk in risks:
+        # 分支：仅处理"缺必填"的 high，其余风险（含已有 medium）原样保留
+        if risk.risk_type == "missing_required_field" and risk.severity == Severity.high:
+            if risk.field == "total_amount" and amount_open:
+                out.append(
+                    risk.model_copy(
+                        update={
+                            "severity": Severity.medium,
+                            "suggestion": risk.suggestion
+                            + " 正文按实/按月结算、未列明合同总额：本条已降为提示级（不阻断审批），"
+                            "请人工确认结算上限或补充金额条款。",
+                        }
+                    )
+                )
+                continue
+            if risk.field == "expiry_date" and (term_open or date_blank):
+                out.append(
+                    risk.model_copy(
+                        update={
+                            "severity": Severity.medium,
+                            "suggestion": risk.suggestion
+                            + " 正文未写具体到期日（空白日期栏或只写'有效期 N 年/长期'）："
+                            "本条已降为提示级（不阻断审批），请人工确认起止日期。",
+                        }
+                    )
+                )
+                continue
+            if risk.field == "effective_date" and (signing_effect or date_blank):
+                out.append(
+                    risk.model_copy(
+                        update={
+                            "severity": Severity.medium,
+                            "suggestion": risk.suggestion
+                            + " 正文未写具体签署日期（签字盖章生效 / 空白日期栏）：本条已降为"
+                            "提示级（不阻断审批），请人工确认签署/生效日期。",
+                        }
+                    )
+                )
+                continue
+        out.append(risk)
     return out
 
 
@@ -609,8 +767,9 @@ _INVOICE_RE = re.compile(r"发票|开票|凭票|先票后款|票到")
 
 # P-08 履约担保信号词：出现任意一个即视为有担保安排（范围卡口径：保证/保函/保证金/质保金）
 _BOND_RE = re.compile(r"履约保证|履约保函|履约担保|银行保函|保证金|质保金")
-# 预付信号：P-08 的另一触发条件（含预付期次即查，哪怕总额不足 100 万）
-_PREPAY_RE = re.compile(r"预付|备料款|启动款")
+# 预付信号：P-08 的另一触发条件（含预付期次即查，哪怕总额不足 100 万）；
+# 与 P-01 口径一致，"首付款"也计入预付款
+_PREPAY_RE = re.compile(r"预付|首付|备料款|启动款")
 
 # 转包限制句信号：命中即视为已限制转包/分包（覆盖"不得转包""转包须经甲方同意"
 # "未经甲方书面同意不得转委托"三种真实写法）

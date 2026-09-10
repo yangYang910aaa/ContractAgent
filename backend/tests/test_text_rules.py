@@ -80,6 +80,12 @@ def test_bond_missing_with_prepay_fires() -> None:
     assert _types(text)["performance_bond_missing"] == Severity.medium.value
 
 
+def test_bond_gate_covers_first_payment_wording() -> None:
+    """P-08 的预付触发与 P-01 口径一致："首付款"同样计入（真实合同走查修复）。"""
+    text = "合同总价款为 500,000 元。甲方支付首付款 100,000 元，余款验收后付清。"
+    assert _types(text)["performance_bond_missing"] == Severity.medium.value
+
+
 def test_bond_missing_with_big_total_fires() -> None:
     """总额 100 万以上（无预付）也无担保 → medium（金额门槛生效）。"""
     assert _types("合同总价款为人民币（大写）壹佰万元整（小写：1,000,000 元）。")[

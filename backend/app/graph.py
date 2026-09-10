@@ -18,15 +18,21 @@ from langgraph.types import Command, interrupt
 from backend.app.parser import extract_text
 from backend.app.pipeline import enrich_policy_hits, infer_effective_from_signature
 from backend.app.reviewer import BlindReviewOutput, blind_review, merge_review
-from backend.app.rules import annotate_template_risks, evaluate, grade_report, text_rules
+from backend.app.rules import (
+    annotate_open_ended_risks,
+    annotate_template_risks,
+    evaluate,
+    grade_report,
+    text_rules,
+)
 from backend.app.schemas import ContractModel, RiskItem
 from backend.app.store import ThreadStore
 
 
 class ReviewState(TypedDict, total=False):
-    """图状态：全部字段可 JSON 序列化（MemorySaver 存储/checkpoint 需要）。
+    """图状态：全部字段可 JSON 序列化(MemorySaver 存储/checkpoint 需要)。
 
-    约定：extracted/risks 存 json dict 而非 pydantic 对象，节点用前
+    约定: extracted/risks 存 json dict 而非 pydantic 对象，节点用前
     model_validate 还原——避免 pydantic 模型直接过序列化层的坑。
     """
 
@@ -47,11 +53,12 @@ class ReviewState(TypedDict, total=False):
 
 def _risks_from_dicts(risks: list[dict]) -> list[RiskItem]:
     """state 里的风险 json → RiskItem 列表( rules/评级/检索都用模型形态)"""
+    #把risks里的每个元素都交给pydantic模型, 返回校验后的RiskItem列表
     return [RiskItem.model_validate(r) for r in risks]
 
 
 def _build_gate_payload(state: ReviewState) -> dict:
-    """gate 中断载荷：把高风险摘要交给人工审批页/CLI 展示。"""
+    """构造人工审批的载荷: 从state里筛出severity为high的风险项,组装成给审批人看的摘要"""
     high = [r for r in state.get("risks", []) if r.get("severity") == "high"]
     return {
         "ask": "检测到高风险项，请审批：approve=放行 / reject=打回 / edited=修改字段后重审",
@@ -72,12 +79,7 @@ def _build_gate_payload(state: ReviewState) -> dict:
 
 
 def _parse_approval(answer: Any) -> dict:
-    """人工审批原始回答 → ApprovalRecord 形状的 dict。
-
-    兼容两种形态: CLI/路由传 {action,note,patches}；已序列化的
-    ApprovalRecord dict (reviewer_note/created_at)也能解析。action 缺省
-    视为 approved (安全默认：放行也留痕)。
-    """
+    """解析人工审批输入: 把各种形态的人工回答统一成{action,reviewer_note,patches}的格式"""
     if isinstance(answer, dict):
         action = answer.get("action") or answer.get("reviewer_action") or "approved"
         note = answer.get("note") or answer.get("reviewer_note") or ""
@@ -104,9 +106,8 @@ def build_review_graph(
 
     extractor: text -> ContractModel (默认 extract_contract 真 LLM)  
     retriever: query -> PolicyHit 列表 (默认 pipeline.enrich 的默认检索)。
-    reviewer: text -> BlindReviewOutput（双审盲审复核器；默认 blind_review 真 LLM）。
-    checkpointer: MemorySaver 等；不传也能跑，但 interrupt/HITL 必须配
-    checkpointer (LangGraph 硬约束，见 docs/问题与踩坑记录.md)。
+    reviewer: text -> BlindReviewOutput(双审盲审复核器；默认 blind_review 真 LLM)。
+    checkpointer: MemorySaver 等；不传也能跑，但 interrupt/HITL 必须配checkpointer 
     返回 compiled graph。
     """
     from backend.app.extractor import extract_contract  # 延迟导入：防循环
@@ -141,7 +142,12 @@ def build_review_graph(
         """
         model = ContractModel.model_validate(state["extracted"])
         text = state.get("text") or ""
-        risks = annotate_template_risks(evaluate(model) + text_rules(text, model.contract_kind), text)
+        risks = annotate_template_risks(
+            annotate_open_ended_risks(
+                evaluate(model) + text_rules(text, model.contract_kind), text
+            ),
+            text,
+        )
         return {"risks": [r.model_dump(mode="json") for r in risks], "rerun": False}
 
     def review_node(state: ReviewState) -> dict:

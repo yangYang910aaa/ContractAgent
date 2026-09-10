@@ -21,6 +21,7 @@ from backend.app.extractor import extract_contract
 from backend.app.parser import extract_text
 from backend.app.policy_rag import PolicyHit, load_policy_full, retrieve_policies
 from backend.app.rules import (
+    annotate_open_ended_risks,
     annotate_template_risks,
     evaluate,
     grade_report,
@@ -157,10 +158,11 @@ def run_review(path: str | Path, review_mode: str = "single") -> dict:
             "review": None,
             "error": f"抽取失败：{exc}",
         }
-    # 先跑规则引擎（字段级 evaluate + 文本级 text_rules），再叠加模板检测；
-    # text_rules 与 annotate_template_risks 同层，文本级检查不依赖抽取字段
+    # 先跑规则引擎（字段级 evaluate + 文本级 text_rules），再叠加开放式条款/模板标注；
+    # 文本级检查不依赖抽取字段，两个 annotate 只做"降级 + 附提示"，不改判定口径
     risks = annotate_template_risks(
-        evaluate(extracted) + text_rules(text, extracted.contract_kind), text
+        annotate_open_ended_risks(evaluate(extracted) + text_rules(text, extracted.contract_kind), text),
+        text,
     )
     review: dict | None = None
     # 这种情况是：双审模式 → 盲审复核并与主审合并（合并后的新增 high 也参与检索引用）

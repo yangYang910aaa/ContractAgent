@@ -361,7 +361,8 @@ def test_amount_mismatch_with_unreliable_total_is_medium() -> None:
     model = _with(
         extraction_meta=meta,
         payment_schedule=[
-            _term("首付款", "1679900", 50.0),
+            # 期次名不含预付类关键词：本用例只验"金额不一致降级"，避免叠加 P-01
+            _term("第一期", "1679900", 50.0),
             _term("尾款", "335980", 10.0),
         ],
     )
@@ -399,3 +400,132 @@ def test_penalty_daily_quote_still_high() -> None:
     }
     model = _with(penalty_rate=2.0, extraction_meta=meta)
     assert "penalty_rate_too_high" in _risk_types(model)
+
+
+def test_percent_misparsed_into_term_amount_downgrades_to_medium() -> None:
+    """真实合同走查（2026-09-10）：只写比例时抽取把 70/30 填进金额字段，
+    不得当成"期次加总 ≠ 总额"的 high 误停闸 → 降 medium 提示人工核对。"""
+    model = _with(
+        total_amount=Decimal("1600000"),
+        # 期次名不含"预付"，避免叠加 P-01 预付款畸高 high 干扰本用例
+        payment_schedule=[_term("第一期", "70", 70.0), _term("第二期", "30", 30.0)],
+    )
+    amounts = [r for r in evaluate(model) if r.risk_type == "amount_inconsistency"]
+    assert amounts and amounts[0].severity == Severity.medium
+    assert "疑似" in amounts[0].evidence
+    assert grade_report(evaluate(model)) == Grade.conditional_pass
+
+
+def test_plain_small_amount_without_percent_still_doubtful() -> None:
+    """金额与比例不同值但量级不合常理（总额 480 万、期次 70 元）同样按疑似处理。"""
+    model = _with(
+        total_amount=Decimal("4815000"),
+        payment_schedule=[_term("首付款", "70", None), _term("尾款", "30", None)],
+    )
+    amounts = [r for r in evaluate(model) if r.risk_type == "amount_inconsistency"]
+    assert amounts and amounts[0].severity == Severity.medium
+
+
+def test_normal_and_real_defect_amount_consistency_unchanged() -> None:
+    """护栏不吞真缺陷：正常样本零风险；分项 110 万 ≠ 总额 100 万 仍判 high。"""
+    assert "amount_inconsistency" not in _risk_types(_normal())
+    model = _with(
+        total_amount=Decimal("1000000"),
+        payment_schedule=[
+            _term("预付款", "200000", 20.0),
+            _term("第二批", "500000", 50.0),
+            _term("第三批", "400000", 40.0),
+        ],
+    )
+    amounts = [r for r in evaluate(model) if r.risk_type == "amount_inconsistency"]
+    assert amounts and amounts[0].severity == Severity.high
+
+
+def test_first_payment_named_shoufu_counts_as_prepayment() -> None:
+    """"首付款"按 P-01 第二条计入预付款（真实合同走查 2026-09-10 漏判修复）。"""
+    model = _with(
+        total_amount=Decimal("4815000"),
+        payment_schedule=[_term("首付款", "3370500", 70.0), _term("尾款", "1444500", 30.0)],
+    )
+    prepay = [r for r in evaluate(model) if r.risk_type == "prepayment_ratio_high"]
+    assert prepay and prepay[0].severity == Severity.high
+    # 名称只有"进度款/验收款"的期次不能被当预付款
+    model2 = _with(
+        payment_schedule=[_term("进度款", "200000", 20.0), _term("验收款", "800000", 80.0)],
+    )
+    assert "prepayment_ratio_high" not in _risk_types(model2)
+
+
+# ---- 开放式条款语境（真实合同走查 2026-09-10）----
+
+
+def test_open_ended_amount_downgrades_missing_total_with_explicit_notice() -> None:
+    """月结/按实结算合同无总额：缺必填 high → medium，且建议里显式写明"已降为提示级"。"""
+    from backend.app.rules import annotate_open_ended_risks
+
+    model = _with(total_amount=None, expiry_date=None)
+    text = "双方每月结算一次，每月30日前结清当月货款。"
+    risks = annotate_open_ended_risks(evaluate(model), text)
+    total = next(r for r in risks if r.field == "total_amount")
+    assert total.severity == Severity.medium
+    assert "已降为提示级" in total.suggestion
+    # 其它缺必填（到期日；文本无"有效期 N 年"语境）不受影响，仍是 high
+    assert next(r for r in risks if r.field == "expiry_date").severity == Severity.high
+
+
+def test_open_ended_term_and_signing_downgrade_with_notice() -> None:
+    """有效期"N 年"/签字盖章生效无日期：对应缺必填降 medium 并附明确提示。"""
+    from backend.app.rules import annotate_open_ended_risks
+
+    model = _with(effective_date=None, expiry_date=None)
+    text = "本合同自双方签字盖章之日起生效，有效期暂定为4年。"
+    risks = annotate_open_ended_risks(evaluate(model), text)
+    by_field = {r.field: r for r in risks if r.risk_type == "missing_required_field"}
+    assert by_field["effective_date"].severity == Severity.medium
+    assert by_field["expiry_date"].severity == Severity.medium
+    assert "已降为提示级" in by_field["effective_date"].suggestion
+    assert "已降为提示级" in by_field["expiry_date"].suggestion
+
+
+def test_open_ended_annotation_keeps_normal_missing_high() -> None:
+    """普通合同（无按实结算/无固定期限/无签字盖章生效句式）的缺必填保持 high。"""
+    from backend.app.rules import annotate_open_ended_risks
+
+    model = _with(total_amount=None)
+    risks = annotate_open_ended_risks(evaluate(model), "甲方应于2026年12月31日前交付货物。")
+    assert next(r for r in risks if r.field == "total_amount").severity == Severity.high
+
+
+# ---- 空白模板检测精化（真实合同走查 2026-09-10）----
+
+
+def test_filled_contract_with_signature_date_blank_not_template() -> None:
+    """已签合同仅署名页/页脚日期空白 + 排版空格 → 不得判"疑似空白模板"。"""
+    from backend.app.rules import is_blank_template_suspect
+
+    signed = (
+        "软件开发合同（2025 年升级改造）\n"
+        "合同金额：人民币壹佰陆拾万元整（￥1600000 元整）。\n"
+        "甲方：              乙方：\n"
+        "权利义务由双方承担 。\n"
+        "合同签订地点：\n   年  月   日\n第 14 页 共 14\n"
+    )
+    assert is_blank_template_suspect(signed) is False
+
+
+def test_unfilled_gf_style_templates_still_detected() -> None:
+    """未填写文本仍按原口径识别：点线+选框式、纯空格填空式（防误伤官方模板）。"""
+    from backend.app.rules import is_blank_template_suspect
+
+    gf_style = (
+        "甲方（出卖人）:………… … …\n"
+        "联系电话 :……………………………… … …\n"
+        "证件类型 : 身份证□\u3000居住证□\u3000护照□\n"
+    )
+    space_fill_style = (
+        "甲方（采购方）：              \n"
+        "项目名称：                            \n"
+        "有效期限：    年  月  日至    年  月   日\n"
+    )
+    assert is_blank_template_suspect(gf_style) is True
+    assert is_blank_template_suspect(space_fill_style) is True
