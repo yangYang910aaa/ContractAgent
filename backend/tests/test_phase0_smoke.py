@@ -1,5 +1,6 @@
 """Phase 0 冒烟测试：目录/政策文档/合成合同可读且生成可复现。"""
 
+import re
 from pathlib import Path
 
 from backend.app.config import BASE_DIR
@@ -13,14 +14,15 @@ def test_policy_docs_exist_and_readable() -> None:
     assert len(files) >= 5, "政策文档应至少 5 条"
     for f in files:
         text = f.read_text(encoding="utf-8")
-        assert "P-0" in text, f"{f.name} 缺少政策编号"
+        # 政策编号形如 P-01 / P-10（批2 后进入两位数编号）
+        assert re.search(r"P-\d+", text), f"{f.name} 缺少政策编号"
         assert len(text) > 80, f"{f.name} 内容过短"
 
 
 def test_sample_contracts_generated() -> None:
     files = sorted(OUTPUT_DIR.glob("sample_*.md"))
-    # 批1（2026-09-09）后 15 份：企业 01~05 + 校服 06/07 + 技术开发 08/09 + 新样本 10~15
-    assert len(files) == 15, "应生成 15 份合成合同"
+    # 批1 后 15 份（01~15）；批2（2026-09-10）新增数据类 16~20 → 共 20 份
+    assert len(files) == 20, "应生成 20 份合成合同"
     for f in files:
         text = f.read_text(encoding="utf-8")
         assert "甲方" in text and "乙方" in text

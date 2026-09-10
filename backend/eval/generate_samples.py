@@ -447,6 +447,262 @@ NEW_SPECS: list = [
 ]
 
 
+# ---- 数据服务式（批2：数据与个人信息合规）样本：第X条骨架 + 数据条款开关 ----
+
+
+@dataclass
+class DataSampleSpec:
+    """数据服务/个人信息处理类合成合同规格（批2，2026-09-10）。
+
+    骨架参考用户收集的真实合同结构（档案数字化 / 平台开发 / 数字化运维），内容全部
+    合成（真实主体与信息不入库）。数据类条款用开关控制，用于构造 P-10~P-12 的缺陷：
+    - data_protect_clause=False → 缺个人信息保护义务（personal_info_clause_missing）
+    - processing_terms=False → 委托处理要件不全（data_processing_terms_missing）
+    - cross_border=True → 约定数据出境且不写合规路径（data_cross_border_unclear, high）
+    - deletion_and_breach=False → 无删除/事件通知（data_deletion_missing）
+    """
+
+    sample_id: str  # 样本编号（sample_16~20）
+    filename: str  # 输出文件名（含缺陷特征）
+    contract_no: str  # 合同编号
+    title: str  # 合同标题
+    buyer: str  # 甲方（委托方/采购方）
+    supplier: str  # 乙方（服务方）
+    signature_date: str  # 签署日期（中文文本）
+    expiry_date: str  # 到期日（中文文本，正文写明具体日期）
+    total_amount: str = "1,500,000"  # 合同总额（元，字符串保留千分位）
+    currency: str = "人民币"  # 币种
+    payment_terms: list = field(default_factory=list)  # [(名称, 金额, 比例)]
+    penalty_daily_percent: float = 0.05  # 违约金日利率（%）
+    liability_cap_percent: float = 100.0  # 责任上限（占总额 %）
+    warranty_months: int = 24  # 质保/维护期（月）
+    confidentiality_months: int = 24  # 保密期（月）
+    # 批2 数据条款开关（默认全部合规，缺陷样本按需关闭/改写）
+    data_protect_clause: bool = True  # False=缺个人信息保护义务
+    processing_terms: bool = True  # False=委托处理要件不全
+    cross_border: bool = False  # True=约定数据出境（无合规路径 → high）
+    deletion_and_breach: bool = True  # False=无删除/事件通知
+    note: str = ""  # 缺陷说明（写进生成清单）
+
+
+DATA_SPECS: list[DataSampleSpec] = [
+    # sample_16：正常对照（数据条款齐全：保护义务/处理要件/境内处理/删除与事件）
+    DataSampleSpec(
+        sample_id="sample_16",
+        filename="sample_16_档案数字化服务合同_正常.md",
+        contract_no="HT-2026-DS-0122",
+        title="档案数字化加工服务合同",
+        buyer="晨光数据服务有限公司",
+        supplier="博文档案信息技术有限公司",
+        signature_date="2026年9月1日",
+        expiry_date="2027年8月31日",
+        payment_terms=[("预付款", "300,000", 20), ("验收合格后支付", "1,200,000", 80)],
+        note="批2 正常对照：个人信息保护义务/处理要件/删除与事件条款齐全，应零风险 pass。",
+    ),
+    # sample_17：缺陷 = 缺个人信息保护义务条款（其余数据要件仍在）
+    DataSampleSpec(
+        sample_id="sample_17",
+        filename="sample_17_客户数据标注服务合同_缺个人信息保护.md",
+        contract_no="HT-2026-DS-0123",
+        title="客户数据标注服务合同",
+        buyer="星辰智造科技有限公司",
+        supplier="数联智能科技有限公司",
+        signature_date="2026年9月2日",
+        expiry_date="2027年9月1日",
+        payment_terms=[("预付款", "300,000", 20), ("验收合格后支付", "1,200,000", 80)],
+        data_protect_clause=False,  # 缺陷：未约定个人信息保护义务（P-10）
+        note="缺陷：涉及用户信息处理但无个人信息保护义务条款，P-10 应报 medium。",
+    ),
+    # sample_18：缺陷 = 委托处理要件不全（目的/期限/方式/种类/删除均缺失）
+    DataSampleSpec(
+        sample_id="sample_18",
+        filename="sample_18_运维数据服务合同_委托处理要件不全.md",
+        contract_no="HT-2026-DS-0124",
+        title="信息系统运维与数据服务合同",
+        buyer="云启信息技术有限公司",
+        supplier="联创运维服务有限公司",
+        signature_date="2026年9月3日",
+        expiry_date="2027年9月2日",
+        payment_terms=[("预付款", "300,000", 20), ("验收合格后支付", "1,200,000", 80)],
+        processing_terms=False,  # 缺陷：委托处理要件不完整（P-10）
+        note="缺陷：数据条款只写笼统一句，缺处理目的/期限/方式/种类/删除义务，P-10 应报 medium。",
+    ),
+    # sample_19：缺陷 = 约定数据出境但无合规路径（high，批2 唯一闸口验证点）
+    DataSampleSpec(
+        sample_id="sample_19",
+        filename="sample_19_跨境数据平台服务合同_出境无合规路径.md",
+        contract_no="HT-2026-DS-0125",
+        title="跨境数据平台建设与运营服务合同",
+        buyer="华辰智造科技有限公司",
+        supplier="环球数智科技有限公司",
+        signature_date="2026年9月4日",
+        expiry_date="2028年9月3日",
+        payment_terms=[("预付款", "450,000", 30), ("验收合格后支付", "1,050,000", 70)],
+        cross_border=True,  # 缺陷：数据出境且无安全评估/标准合同/认证（P-11 high）
+        note="缺陷：约定用户数据出境至境外服务器，未写任何合规路径，P-11 应报 high。",
+    ),
+    # sample_20：缺陷 = 无删除/返还义务、无安全事件通知义务
+    DataSampleSpec(
+        sample_id="sample_20",
+        filename="sample_20_平台用户数据服务合同_无删除与事件条款.md",
+        contract_no="HT-2026-DS-0126",
+        title="平台用户数据运营服务合同",
+        buyer="启明电子商务有限公司",
+        supplier="海纳数据服务有限公司",
+        signature_date="2026年9月5日",
+        expiry_date="2027年9月4日",
+        payment_terms=[("预付款", "300,000", 20), ("验收合格后支付", "1,200,000", 80)],
+        deletion_and_breach=False,  # 缺陷：无删除/返还与安全事件通知（P-12）
+        note="缺陷：未约定数据删除/返还，也未约定泄露等安全事件告知义务，P-12 应报 medium。",
+    ),
+]
+
+
+def render_data_service_contract(spec: DataSampleSpec) -> str:
+    """渲染数据服务式正文（第X条骨架），数据条款按 spec 开关生成/删除。"""
+    parts: list[str] = [
+        f"# {spec.title}",
+        "",
+        f"合同编号：{spec.contract_no}",
+        "",
+        f"甲方（委托方）：{spec.buyer}",
+        f"乙方（服务方）：{spec.supplier}",
+        "",
+    ]
+    # 数据条款正文（条件渲染；缺陷样本按开关改写成模糊句/删除）
+    if spec.processing_terms:
+        processing_lines = [
+            "1、处理目的：为完成本合同约定的数据加工与系统服务，处理甲方提供的用户信息与业务数据；",
+            "2、处理期限：自本合同生效之日起至服务完成之日止；",
+            "3、处理方式：在甲方授权的系统与权限范围内进行加工、标注、迁移与运维；",
+            "4、信息种类：用户姓名、联系方式、账号标识等业务所需信息；",
+            "5、保护措施：采用加密存储、访问权限最小化与操作留痕等安全措施；",
+            # 删除/返还要件（deletion_and_breach=False 时一并去掉，制造 P-12 缺陷）
+            *(
+                ["6、删除与返还：服务结束或合同终止后，乙方应删除或返还全部数据与个人信息。"]
+                if spec.deletion_and_breach
+                else []
+            ),
+        ]
+    else:
+        # 缺陷：只写笼统一句，处理目的/期限/方式/种类/删除义务均缺失
+        processing_lines = ["双方在履约过程中按法律规定处理相关数据。"]
+    data_clauses: list[tuple[str, list[str]]] = [
+        (
+            "数据与个人信息处理",
+            processing_lines,
+        )
+    ]
+    # 个人信息保护义务条款（缺陷样本整节删除）
+    if spec.data_protect_clause:
+        data_clauses.append(
+            (
+                "个人信息保护义务",
+                [
+                    "1、乙方应履行个人信息保护与数据安全义务，不得超出约定目的使用数据；",
+                    "2、未经甲方书面同意，乙方不得向任何第三方提供、出售或公开披露个人信息。",
+                ],
+            )
+        )
+    # 数据出境条款：缺陷样本写"出境至境外服务器"且不写合规路径
+    if spec.cross_border:
+        data_clauses.append(
+            (
+                "数据出境安排",
+                ["本项目部分用户数据将传输至乙方位于境外的服务器进行集中处理与备份。"],
+            )
+        )
+    else:
+        data_clauses.append(
+            (
+                "数据存储地点",
+                ["本项目全部数据与个人信息均在中华人民共和国境内存储与处理，不涉及出境。"],
+            )
+        )
+    # 数据安全事件与善后（缺陷样本整节删除）
+    if spec.deletion_and_breach:
+        data_clauses.append(
+            (
+                # 标题避免"数据安全"字样：否则会命中 P-10 的保护义务信号、掩盖缺保护义务缺陷
+                "泄露告知与数据善后",
+                [
+                    "1、发生数据泄露、篡改或丢失的，乙方应在 24 小时内书面告知甲方并采取补救措施；",
+                    "2、合同终止或服务完成后，乙方应按甲方要求删除或返还全部数据与个人信息。",
+                ],
+            )
+        )
+
+    clauses: list[tuple[str, list[str]]] = [
+        (
+            "项目内容与服务范围",
+            [
+                "1、乙方为甲方提供数据加工、系统建设与运行维护服务，具体范围以附件《服务需求说明书》为准。",
+                "2、服务过程中乙方将接触甲方用户信息等个人信息，双方按本合同数据条款执行。",
+            ],
+        ),
+        *data_clauses,
+        (
+            "交付与验收",
+            [
+                "1、乙方应于本合同生效后 90 日内完成交付并提交验收申请。",
+                "2、甲方按《服务需求说明书》及验收标准组织验收，验收应于 2026 年 12 月 31 日前完成。",
+            ],
+        ),
+        (
+            "转委托",
+            ["乙方未经甲方书面同意，不得将本项目关键工作转委托给第三方。"],
+        ),
+        (
+            "保密要求",
+            [
+                "1、双方对因履行本合同而知悉的对方商业秘密与数据负有保密义务。",
+                f"2、保密期限自本合同终止之日起 {spec.confidentiality_months} 个月。",
+            ],
+        ),
+        (
+            "技术成果与知识产权",
+            ["乙方根据甲方需求定制开发成果的知识产权归甲方所有。"],
+        ),
+        (
+            "费用及支付方式",
+            [
+                f"1、本项目服务费总额为人民币（大写）壹佰伍拾万元整（小写：{spec.total_amount} 元），币种为{spec.currency}。",
+                "2、乙方应在甲方每次付款前向甲方开具等额增值税专用发票。",
+                "3、分期支付：",
+                *[f"（{i}）{name}：{amount} 元，占总额 {percent}%；" for i, (name, amount, percent) in zip("一二三四五", spec.payment_terms)],
+                "4、为担保本合同履行，乙方应在本合同签订后 10 日内向甲方提供合同总价款 10% 的银行保函作为履约担保。",
+            ],
+        ),
+        (
+            "违约责任",
+            [
+                f"1、乙方逾期交付的，每逾期一日按合同总价款的 {spec.penalty_daily_percent:g}% 向甲方支付违约金。",
+                f"2、乙方对甲方承担的赔偿责任总额以合同总价款的 {spec.liability_cap_percent:g}% 为上限。",
+            ],
+        ),
+        (
+            "合同期限与终止",
+            [
+                f"本合同自 {spec.signature_date} 签署并生效，有效期至 {spec.expiry_date}。",
+                "任何一方提前终止本合同的，应提前 30 日书面通知对方。",
+            ],
+        ),
+        (
+            "争议解决与适用法律",
+            ["本合同适用中华人民共和国法律；争议提交甲方所在地人民法院诉讼解决。"],
+        ),
+        (
+            "其他约定",
+            ["本合同一式两份，双方各执一份，自双方签字盖章之日起生效。"],
+        ),
+    ]
+    for idx, (title, lines) in enumerate(clauses, start=1):
+        parts.append(f"第{_cn_ordinal(idx)}条 {title}")
+        parts.extend(lines)
+        parts.append("")
+    return "\n".join(parts).rstrip() + "\n"
+
+
 def _warranty_text(months: int) -> str:
     """质保月数 → 正文写法：整年按「N 年」写（贴真实合同），其余按「N 个月」。"""
     # 分支：12 的整数倍（且非 0）→ 按年写；其余（含 6 个月缺陷）按月写
@@ -1033,7 +1289,7 @@ def render_contract(spec: SampleSpec) -> str:
 from backend.eval.format_render import _cjk_font_path, render_docx, render_pdf  # noqa: F401
 
 
-ALL_SPECS: list = [*SPECS, *UNIFORM_SPECS, *TECH_SPECS, *NEW_SPECS]  # 01~09 旧 + 10~15 批1 新样本
+ALL_SPECS: list = [*SPECS, *UNIFORM_SPECS, *TECH_SPECS, *NEW_SPECS, *DATA_SPECS]  # 01~09 旧 + 10~15 批1 + 16~20 批2
 
 
 def _body_for(spec) -> str:
@@ -1045,6 +1301,9 @@ def _body_for(spec) -> str:
     if isinstance(spec, UniformSampleSpec):
         return render_uniform_contract(spec)
     # 分支 3：企业式 spec → 原有「第X条」正文
+    # 分支 4：数据服务式 spec（批2）→ 数据条款骨架正文
+    if isinstance(spec, DataSampleSpec):
+        return render_data_service_contract(spec)
     return render_contract(spec)
 
 

@@ -184,3 +184,55 @@ def test_all_four_fire_on_bare_big_prepay_contract() -> None:
     assert all(r.policy_ref in ("P-06", "P-07", "P-08", "P-09") for r in risks)
     assert all(r.label for r in risks)  # 每条都有中文展示名
     assert all(r.evidence for r in risks)  # 每条都带原文证据
+
+
+# ---- 批2：数据与个人信息合规（P-10~P-12，含触发前置门）----
+
+
+def test_data_rules_skipped_when_no_personal_info() -> None:
+    """触发前置门：不涉及个人信息/用户数据的合同不跑数据类规则（防误伤）。"""
+    text = "甲方采购电子元件一批，货款 500,000 元，验收合格后支付。"
+    kinds = {r.risk_type for r in text_rules(text, "enterprise_goods")}
+    assert not any(k.startswith("data_") or k.startswith("personal_") for k in kinds)
+
+
+def test_personal_info_clause_missing_fires() -> None:
+    """涉及用户信息处理却无个人信息/数据保护义务条款 → medium（P-10）。"""
+    text = (
+        "乙方为甲方提供数据加工服务，处理甲方用户信息。"
+        "处理目的：完成数据加工；处理期限：服务期内；处理方式：系统加工；"
+        "信息种类：用户账号信息；保护措施：加密存储；服务结束后删除或返还全部数据。"
+    )
+    kinds = _types(text)
+    assert kinds["personal_info_clause_missing"] == Severity.medium.value
+    # 要件齐全(≥3) → 不报处理要件缺失
+    assert "data_processing_terms_missing" not in kinds
+
+
+def test_data_processing_terms_missing_fires_when_vague() -> None:
+    """只写笼统一句、缺处理要件 → data_processing_terms_missing medium（P-10）。"""
+    text = "乙方处理甲方用户信息，双方按法律规定处理相关数据，并履行个人信息保护义务。"
+    assert _types(text)["data_processing_terms_missing"] == Severity.medium.value
+
+
+def test_cross_border_missing_path_fires_high_but_negative_statement_clean() -> None:
+    """约定数据出境且无合规路径 → high；"不涉及出境"的合规声明不算（易错点）。"""
+    defect = (
+        "乙方处理甲方用户信息，履行个人信息保护义务。"
+        "本项目部分用户数据将传输至乙方位于境外的服务器进行处理。"
+    )
+    assert _types(defect)["data_cross_border_unclear"] == Severity.high.value
+    clean = (
+        "乙方处理甲方用户信息，履行个人信息保护义务。"
+        "本项目全部数据与个人信息均在中华人民共和国境内存储与处理，不涉及出境。"
+    )
+    assert "data_cross_border_unclear" not in _types(clean)
+
+
+def test_data_deletion_missing_fires_when_both_absent() -> None:
+    """既无删除/返还义务也无泄露告知义务 → data_deletion_missing medium（P-12）。"""
+    text = (
+        "乙方处理甲方用户信息，履行个人信息保护义务。"
+        "处理目的：数据加工；处理期限：服务期内；处理方式：系统加工。"
+    )
+    assert _types(text)["data_deletion_missing"] == Severity.medium.value
