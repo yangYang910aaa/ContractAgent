@@ -295,7 +295,14 @@ def test_double_reviewer_addition_gates_and_survives_resume() -> None:
         reviewer=fake_reviewer,
         review_mode="double",
     )
-    state = runner.start("clean.md", text="第一条 正常合同正文")
+    # 桩文本需含验收与转包限制句（P-06/P-09 文本级规则），否则主审多 medium 而非 pass
+    state = runner.start(
+        "clean.md",
+        text=(
+            "第一条 交付与验收：甲方组织验收，验收标准以双方确认的技术规范为准。\n"
+            "乙方不得将本合同项下义务转包或分包。"
+        ),
+    )
     tid = runner.last_thread_id
     # 主审 pass 但复核新增 high → 图应停在 gate 等人工
     assert runner.store.get(tid).status == "gate"
@@ -340,7 +347,13 @@ def test_single_mode_report_has_no_review_section() -> None:
         retriever=_fake_retriever,
         review_mode="single",
     )
-    state = runner.start("clean.md", text="第一条 正常合同正文")
+    state = runner.start(
+        "clean.md",
+        text=(
+            "第一条 交付与验收：甲方组织验收，验收标准以双方确认的技术规范为准。\n"
+            "乙方不得将本合同项下义务转包或分包。"
+        ),
+    )
     assert state["report"]["grade"] == "pass"
     assert state["report"].get("review") is None
 
@@ -357,6 +370,12 @@ def test_double_reviewer_failure_falls_back_to_main() -> None:
         reviewer=boom,
         review_mode="double",
     )
-    state = runner.start("clean.md", text="第一条 正常合同正文")
+    state = runner.start(
+        "clean.md",
+        text=(
+            "第一条 交付与验收：甲方组织验收，验收标准以双方确认的技术规范为准。\n"
+            "乙方不得将本合同项下义务转包或分包。"
+        ),
+    )
     assert state["report"]["grade"] == "pass"
     assert "盲审失败" in state["report"]["review"]["error"]

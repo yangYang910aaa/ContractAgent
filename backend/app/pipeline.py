@@ -25,6 +25,7 @@ from backend.app.rules import (
     evaluate,
     grade_report,
     infer_effective_from_signature,
+    text_rules,
 )
 from backend.app.schemas import ContractModel, RiskItem
 
@@ -156,8 +157,11 @@ def run_review(path: str | Path, review_mode: str = "single") -> dict:
             "review": None,
             "error": f"抽取失败：{exc}",
         }
-    # 先跑规则引擎, 再叠加模版检测
-    risks = annotate_template_risks(evaluate(extracted), text)
+    # 先跑规则引擎（字段级 evaluate + 文本级 text_rules），再叠加模板检测；
+    # text_rules 与 annotate_template_risks 同层，文本级检查不依赖抽取字段
+    risks = annotate_template_risks(
+        evaluate(extracted) + text_rules(text, extracted.contract_kind), text
+    )
     review: dict | None = None
     # 这种情况是：双审模式 → 盲审复核并与主审合并（合并后的新增 high 也参与检索引用）
     if review_mode == "double":

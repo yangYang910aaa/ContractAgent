@@ -69,7 +69,15 @@ def _runner(model: ContractModel) -> tuple[ReviewRunner, FakeRetriever]:
 def test_normal_contract_passes_without_gate() -> None:
     """无缺陷合同应一路到底：done + pass + 无审批记录、无闸口。"""
     runner, retriever = _runner(_normal_model())
-    state = runner.start("sample_01.md", text="第一条 无缺陷正文")
+    # 桩文本需含验收与转包限制句：批1 文本级规则（P-06/P-09）下，缺验收安排或
+    # 未限制转包都会判 medium，不再是零风险 pass
+    state = runner.start(
+        "sample_01.md",
+        text=(
+            "第一条 交付与验收：甲方组织验收，验收标准以双方确认的技术规范为准。\n"
+            "乙方不得将本合同项下义务转包或分包。"
+        ),
+    )
     assert runner.store.get(runner.last_thread_id).status == "done"
     assert state["report"]["grade"] == "pass"
     assert state["report"]["approval"] is None

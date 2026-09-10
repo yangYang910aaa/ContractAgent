@@ -17,14 +17,30 @@ def _entry(**kwargs):
     return GtEntry(**defaults)
 
 
-def test_field_gt_covers_all_nine_samples_and_matches_corpus() -> None:
-    """字段 GT 恰好覆盖 9 份 sample（与语料一一对应，防新增样本漏登记）。"""
-    assert len(EXPECTED_FIELDS) == 9
+def test_field_gt_covers_field_gt_samples_and_matches_corpus() -> None:
+    """字段 GT 与语料一一对应：覆盖未豁免的 sample；豁免样本须在 GT 显式声明 field_gt=false。"""
+    import json
+
     from backend.app.config import BASE_DIR
 
     corpus = sorted((BASE_DIR / "data" / "contracts").glob("sample_*.md"))
     corpus_names = {p.name for p in corpus}
-    assert set(EXPECTED_FIELDS) == corpus_names, "field_gt 与 data/contracts sample 文件必须一一对应"
+    gt = json.loads(
+        (BASE_DIR / "data/合同模板/合同变体/out/ground_truth.json").read_text(encoding="utf-8")
+    )
+    # 语料中未显式豁免字段尺子的 sample 才需要字段 GT（批1 新样本为条款级缺陷，不判字段）
+    field_gt_files = {
+        e["file"]
+        for e in gt["files"]
+        if e["set"] == "samples" and e.get("field_gt", True) is not False
+    }
+    assert field_gt_files <= corpus_names, "GT 引用了不在语料里的 sample 文件"
+    assert set(EXPECTED_FIELDS) == field_gt_files, "field_gt 与 GT 登记的字段判分 sample 必须一一对应"
+    exempt = corpus_names - field_gt_files
+    assert exempt, "至少应保留一份字段判分 sample（回归护栏）"
+    # 豁免样本必须在 GT 里有条目（防"文件在语料但没登记"静默漏评测）
+    gt_sample_files = {e["file"] for e in gt["files"] if e["set"] == "samples"}
+    assert corpus_names == gt_sample_files, "语料 sample 文件与 GT sample 条目必须一一对应"
 
 
 def test_field_gt_keys_match_judged_field_set() -> None:

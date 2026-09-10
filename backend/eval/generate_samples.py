@@ -61,6 +61,13 @@ class SampleSpec:
     ip_ownership: str = "定制成果知识产权归甲方（采购方）所有"  # IP 权属表述
     governing_law: str = "中华人民共和国法律"  # 适用法律
     note: str = ""  # 缺陷说明（写进生成清单）
+    # 批1（P-06~P-09）合规章节开关：企业骨架默认写全，缺陷样本按需关掉对应章节。
+    # 背景：横向政策扩类后"完整正常合同"必须含 验收安排/发票约定/履约担保/转包限制，
+    # 旧样本正文没有这些条款会新增 medium 误报，重渲染为"新政策口径下完整"形态。
+    acceptance_clause: bool = True  # False=删除交付与验收整节（P-06 缺陷：缺验收安排）
+    invoice_clause: bool = True  # False=付款方式节不写开票句（P-07 缺陷：缺发票约定）
+    performance_bond_clause: bool = True  # False=不写履约担保节（P-08 缺陷：大额/预付缺担保）
+    subcontract_clause: str = "restrict"  # restrict=不得转包 / waiver=任意转包免责(P-09 high) / none=不写
 
 
 SPECS: list[SampleSpec] = [
@@ -274,6 +281,10 @@ class TechServiceSampleSpec:
     liability_cap_percent: float = 100.0  # 责任上限（占开发费总额 %）：100=合规
     ip_to_supplier: bool = False  # True=成果 IP 归乙方（构造缺陷）；False=归甲方（正常）
     note: str = ""  # 缺陷说明（写进生成清单）
+    # 批1（P-07/P-08）合规章节开关：tech 骨架固定 14 条，开票/保函句并入费用条款内
+    # （不新增条款，保持既有 parser 测试"第X条 1..14"锚点不变）
+    invoice_clause: bool = True  # False=费用条款不写开票句（P-07 缺陷）
+    bond_clause: bool = True  # False=费用条款不写履约保函句（P-08 缺陷，大额 120 万）
 
 
 TECH_SPECS: list[TechServiceSampleSpec] = [
@@ -308,6 +319,130 @@ TECH_SPECS: list[TechServiceSampleSpec] = [
         liability_cap_percent=100.0,
         ip_to_supplier=True,  # 缺陷②：成果 IP 归乙方，权属不在甲方（P-05 medium）
         note="缺陷：保密期 60 个月超过 36 个月上限；定制成果知识产权归乙方，应 fail 命中 P-04/P-05。",
+    ),
+]
+
+
+# ---- 横向批1 新样本（sample_10~15，2026-09-09，P-06~P-09 条款级缺陷 + 正常对照）----
+# 与 01~05 企业骨架同源渲染，只是多出 P-06~P-09 合规章节开关：缺陷=关掉/改写对应章节，
+# 正常对照=全部写全（新政策口径下的"完整正常合同"，供评测零风险对照）。
+# 独立成 NEW_SPECS 而不并入 SPECS/TECH_SPECS：field_gt 只覆盖既有 9 份 sample
+# （批1 四类缺陷均为条款级、无新增抽取字段，字段尺子不扩，见范围卡第四节）。
+
+
+NEW_SPECS: list = [
+    # sample_10：缺陷 = 缺验收安排（整节删除，质保起算点改交付之日，全文无"验收"字样）
+    SampleSpec(
+        sample_id="sample_10",
+        filename="sample_10_精密零部件采购合同_缺验收安排.md",
+        contract_no="HT-2026-0110",
+        title="精密零部件采购合同",
+        buyer="星辰智造科技有限公司",
+        supplier="锐锋精密机械有限公司",
+        signature_date="2026年8月5日",
+        effective_date="2026年8月5日",
+        expiry_date="2027年8月4日",
+        total_amount="900,000",
+        payment_terms=[
+            ("预付款", "180,000", 20),
+            ("到货后 30 日内支付", "720,000", 80),
+        ],
+        acceptance_clause=False,  # 缺陷：无任何验收安排（P-06）
+        note="缺陷：合同无交付验收安排（无验收标准/期限条款），P-06 应报 acceptance_unclear medium。",
+    ),
+    # sample_11：缺陷 = 缺发票约定（有付款安排，全文无发票/开票字样）
+    SampleSpec(
+        sample_id="sample_11",
+        filename="sample_11_实验室仪器采购合同_缺发票约定.md",
+        contract_no="HT-2026-0111",
+        title="实验室仪器采购合同",
+        buyer="晨光数据服务有限公司",
+        supplier="科仪实验设备有限公司",
+        signature_date="2026年8月12日",
+        effective_date="2026年8月12日",
+        expiry_date="2027年2月11日",
+        total_amount="800,000",
+        payment_terms=[
+            ("预付款", "160,000", 20),
+            ("到货验收后支付", "640,000", 80),
+        ],
+        invoice_clause=False,  # 缺陷：付款安排无开票约定（P-07）
+        note="缺陷：约定了付款期次但全文无发票开具约定，P-07 应报 invoice_unclear medium。",
+    ),
+    # sample_12：缺陷 = 大额+预付但缺履约担保（保函节删除）
+    SampleSpec(
+        sample_id="sample_12",
+        filename="sample_12_工业原料采购合同_缺履约担保.md",
+        contract_no="HT-2026-0112",
+        title="工业原料年度采购合同",
+        buyer="星辰智造科技有限公司",
+        supplier="宏远材料科技有限公司",
+        signature_date="2026年8月20日",
+        effective_date="2026年8月20日",
+        expiry_date="2027年8月19日",
+        total_amount="2,000,000",
+        payment_terms=[
+            ("预付款", "400,000", 20),
+            ("到货验收后支付", "1,600,000", 80),
+        ],
+        performance_bond_clause=False,  # 缺陷：总额 200 万且含预付，无履约担保（P-08）
+        note="缺陷：合同总额 200 万且含 20% 预付款，却无履约保函/保证金，P-08 应报 medium。",
+    ),
+    # sample_13：缺陷 = 转包免责（high，批1 唯一 high：改写成任意转包且甲方无权追责）
+    SampleSpec(
+        sample_id="sample_13",
+        filename="sample_13_定制机床采购合同_转包免责.md",
+        contract_no="HT-2026-0113",
+        title="定制数控机床采购合同",
+        buyer="华辰智造科技有限公司",
+        supplier="重工机床集团股份有限公司",
+        signature_date="2026年8月28日",
+        effective_date="2026年8月28日",
+        expiry_date="2028年8月27日",
+        total_amount="1,200,000",
+        payment_terms=[
+            ("预付款", "240,000", 20),
+            ("到货验收后支付", "960,000", 80),
+        ],
+        subcontract_clause="waiver",  # 缺陷：任意转包免责（P-09 high）
+        note="缺陷：条款允许任意转包且甲方无权追责，P-09 应报 subcontract_unrestricted high。",
+    ),
+    # sample_14：企业式正常对照（P-06~P-09 合规章节全部写全，应零风险 pass）
+    SampleSpec(
+        sample_id="sample_14",
+        filename="sample_14_车间自动化设备采购合同_正常.md",
+        contract_no="HT-2026-0114",
+        title="车间自动化设备采购合同",
+        buyer="晨光数据服务有限公司",
+        supplier="联创自动化装备有限公司",
+        signature_date="2026年9月1日",
+        effective_date="2026年9月1日",
+        expiry_date="2027年8月31日",
+        total_amount="1,500,000",
+        payment_terms=[
+            ("预付款", "300,000", 20),
+            ("到货验收后支付", "1,200,000", 80),
+        ],
+        note="正常对照：验收/发票/履约担保/转包限制齐全，应零风险 pass。",
+    ),
+    # sample_15：技术式正常对照（费用条款含开票句 + 履约保函句，应零风险 pass）
+    TechServiceSampleSpec(
+        sample_id="sample_15",
+        filename="sample_15_数据中台技术开发合同_正常.md",
+        contract_no="HT-2026-TD-0121",
+        buyer="华辰智造科技有限公司",
+        supplier="云启信息技术有限公司",
+        signature_date="2026年8月10日",
+        expiry_date="2028年2月9日",
+        title="技术开发（委托）合同",
+        warranty_months=24,  # 免费维护 2 年（高于 12 个月下限，正常）
+        penalty_daily_percent=0.05,
+        confidentiality_months=24,
+        liability_cap_percent=100.0,
+        ip_to_supplier=False,
+        invoice_clause=True,  # 费用条款含先票后款句（P-07）
+        bond_clause=True,  # 费用条款含履约保函句（P-08，120 万 ≥ 100 万）
+        note="技术正常对照：IP 归甲方/保密 24 月/履约保函/发票约定齐全，应零风险 pass。",
     ),
 ]
 
@@ -431,6 +566,20 @@ def render_tech_service_contract(spec: TechServiceSampleSpec) -> str:
                 "（一）合同签订生效后10日内支付360,000元，占总额30%；",
                 "（二）中期评审通过后支付480,000元，占总额40%；",
                 "（三）项目验收合格后支付360,000元，占总额30%。",
+                *(
+                    # 开票义务（P-07）：先票后款，并入费用条款不新增条款序号
+                    ["4、乙方应在甲方每次付款前向甲方开具等额增值税专用发票。"]
+                    if spec.invoice_clause
+                    else []
+                ),
+                *(
+                    # 履约保函（P-08）：tech 骨架总额固定 120 万（≥100 万）需担保安排；
+                    # 用保函而非保证金，避免在付款期次外引入资金流干扰抽取与金额一致性
+                    ["5、为担保本合同履行，乙方应在本合同签订后10日内向甲方提供技术开发费总额"
+                     "10%的银行保函作为履约担保。"]
+                    if spec.bond_clause
+                    else []
+                ),
             ],
         ),
         (
@@ -702,7 +851,14 @@ def _cn_upper_amount(amount: str) -> str:
 
 def _payment_lines(spec: SampleSpec) -> list[str]:
     """付款方式正文行：期次自带（一）（二）中文序号，正文段落不再加工程编号。"""
-    lines = [f"双方约定按如下期次支付合同价款（币种：{spec.currency}）："]
+    lines = [
+        f"双方约定按如下期次支付合同价款（币种：{spec.currency}）：",
+        *(
+            [f"乙方应在甲方每次付款前向甲方开具等额增值税专用发票（先票后款）。"]
+            if spec.invoice_clause
+            else []
+        ),
+    ]
     cn_ordinals = ["一", "二", "三", "四", "五"]
     for idx, (name, amount, _) in enumerate(spec.payment_terms):
         lines.append(f"（{cn_ordinals[idx]}）{name}：{_money(amount)}；")
@@ -743,6 +899,21 @@ def _confidentiality_lines(spec: SampleSpec) -> list[str]:
     )
 
 
+def _subcontract_lines(mode: str) -> list[str]:
+    """转包/分包条款正文：restrict=限制转包（合规）/ waiver=任意转包免责（P-09 high 缺陷）。"""
+    # 分支：转包免责 → 示范 high 缺陷（评测闸口验证点）
+    if mode == "waiver":
+        return [
+            "乙方可将本合同项下的全部或部分供货义务任意转包给第三方，无需征得甲方同意；"
+            "因转包产生的交付与质量问题与甲方无关。"
+        ]
+    # 分支：合规限制句（默认；mode=none 时调用方整节不渲染）
+    return [
+        "未经甲方书面同意，乙方不得将本合同项下的全部或部分义务转包、分包给任何第三方；"
+        "经甲方同意的，乙方仍应对第三方的交付与质量向甲方承担全部责任。"
+    ]
+
+
 def render_contract(spec: SampleSpec) -> str:
     """按条款动态编号渲染一份合同正文（缺保密条款时整节不渲染、条款顺延）。"""
     cn_numbers = [
@@ -761,22 +932,42 @@ def render_contract(spec: SampleSpec) -> str:
             ],
         ),
         ("付款方式", _payment_lines(spec)),
-        (
-            "交付与验收",
-            [
-                "乙方应于本合同生效后 45 日内完成交付。",
-                "甲方应在收到货物后 10 个工作日内组织验收，验收合格标准以双方确认的技术规范为准。",
-            ],
-        ),
+    ]
+    # 分支：缺验收安排缺陷（sample_10）→ 整节删除；正常合同保留标准+期限齐全的验收节
+    if spec.acceptance_clause:
+        sections.append(
+            (
+                "交付与验收",
+                [
+                    "乙方应于本合同生效后 45 日内完成交付。",
+                    "甲方应在收到货物后 10 个工作日内组织验收，验收合格标准以双方确认的技术规范为准。",
+                ],
+            )
+        )
+    # 质量保证节（缺验收安排时质保起算点不能写"验收合格之日"，会残留验收字样，改用交付之日）
+    sections.append(
         (
             "质量保证",
             [
-                f"乙方对所供货物提供自验收合格之日起 {spec.warranty_months} 个月的质保期。",
+                f"乙方对所供货物提供自{('交付之日' if not spec.acceptance_clause else '验收合格之日')}"
+                f"起 {spec.warranty_months} 个月的质保期。",
                 "质保期内出现质量问题，乙方应在 7 日内免费维修或更换。",
             ],
-        ),
-        ("违约责任", _penalty_lines(spec)),
-    ]
+        )
+    )
+    # 分支：履约担保节（P-08）——默认渲染；sample_12 缺陷关掉（大额/预付无担保）
+    if spec.performance_bond_clause:
+        sections.append(
+            (
+            "履约担保",
+            [
+                # 履约担保以银行保函形式写（不占用付款期次/资金流，金额一致性规则不受影响）
+                "乙方应在本合同签订后 10 日内向甲方提供合同总价款 10% 的银行保函作为履约担保；"
+                "履约完毕且无违约情形的，该保函在合同义务履行完毕后自动解除。",
+            ],
+            )
+        )
+    sections.append(("违约责任", _penalty_lines(spec)))
     # 分支：需要保密条款才把该节加入，否则条款顺延（贴近真实"缺失"合同）
     if spec.confidentiality_clause:
         sections.append(("保密条款", _confidentiality_lines(spec)))
@@ -789,6 +980,13 @@ def render_contract(spec: SampleSpec) -> str:
                     "乙方保证交付物不侵犯任何第三方知识产权，因此产生的索赔由乙方承担。",
                 ],
             ),
+        ]
+    )
+    # 分支：mode=waiver/none 时整节改写或删除（缺转包限制/转包免责缺陷由调用方控制）
+    if spec.subcontract_clause != "none":
+        sections.append(("转包与分包", _subcontract_lines(spec.subcontract_clause)))
+    sections.extend(
+        [
             (
                 "合同期限与终止",
                 [
@@ -835,7 +1033,7 @@ def render_contract(spec: SampleSpec) -> str:
 from backend.eval.format_render import _cjk_font_path, render_docx, render_pdf  # noqa: F401
 
 
-ALL_SPECS: list = [*SPECS, *UNIFORM_SPECS, *TECH_SPECS]  # 企业(01~05) + 校服(06/07) + 技术开发(08/09)
+ALL_SPECS: list = [*SPECS, *UNIFORM_SPECS, *TECH_SPECS, *NEW_SPECS]  # 01~09 旧 + 10~15 批1 新样本
 
 
 def _body_for(spec) -> str:
@@ -851,7 +1049,7 @@ def _body_for(spec) -> str:
 
 
 def main() -> None:
-    """把全部 spec（企业 01~05 + 校服 06/07 + 技术开发 08/09）渲染成 md/docx/pdf 落盘。"""
+    """把全部 spec（企业/校服/技术开发 + 批1 新样本 10~15）渲染成 md/docx/pdf 落盘。"""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     manifest: list[str] = []
     for spec in ALL_SPECS:

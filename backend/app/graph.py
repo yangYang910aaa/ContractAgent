@@ -18,7 +18,7 @@ from langgraph.types import Command, interrupt
 from backend.app.parser import extract_text
 from backend.app.pipeline import enrich_policy_hits, infer_effective_from_signature
 from backend.app.reviewer import BlindReviewOutput, blind_review, merge_review
-from backend.app.rules import annotate_template_risks, evaluate, grade_report
+from backend.app.rules import annotate_template_risks, evaluate, grade_report, text_rules
 from backend.app.schemas import ContractModel, RiskItem
 from backend.app.store import ThreadStore
 
@@ -137,9 +137,11 @@ def build_review_graph(
 
         空白模板检测依赖原文（state.text）——模板占位多时缺必填降 medium，
         不再整批误停闸口（见 rules.annotate_template_risks）。
+        文本级条款检查（text_rules，P-06~P-09）与 annotate 同层接线。
         """
         model = ContractModel.model_validate(state["extracted"])
-        risks = annotate_template_risks(evaluate(model), state.get("text") or "")
+        text = state.get("text") or ""
+        risks = annotate_template_risks(evaluate(model) + text_rules(text, model.contract_kind), text)
         return {"risks": [r.model_dump(mode="json") for r in risks], "rerun": False}
 
     def review_node(state: ReviewState) -> dict:

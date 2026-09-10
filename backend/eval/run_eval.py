@@ -78,6 +78,7 @@ class GtEntry:
     expected_grade: str | None  # pass/conditional_pass/fail; None=不判评级
     expected_types: dict[str, str] = field(default_factory=dict)  # {risk_type: severity}
     judge: bool = True  # False=只观察不判分(如真实合同 tech_01)
+    field_gt: bool = True  # False=sample 明确豁免字段尺子（批1 新样本为条款级缺陷，不判字段）
     why: str = ""  # 期望依据(人工说明, 供走查)
     path: Path | None = None  # 解析后的文件绝对路径(load_gt 后填充)
     expected_fields: dict = field(default_factory=dict)  # 字段级期望(仅 sample 有, field_gt 提供)
@@ -105,6 +106,7 @@ def _load_json(path: Path) -> list[GtEntry]:
             expected_grade=item.get("expected_grade"),
             expected_types=dict(item.get("expected_types") or {}),
             judge=bool(item.get("judge", True)),
+            field_gt=bool(item.get("field_gt", True)),
             why=item.get("why", ""),
         )
         out.append(entry)
@@ -654,7 +656,12 @@ def main(argv: list[str] | None = None) -> int:
             if not any(e.file == key for e in entries):
                 problems.append(f"字段 GT 无对应语料: {key}")
         for e in entries:
-            if e.set_ == "samples" and e.file not in EXPECTED_FIELDS:
+            # 分支: GT 显式声明 field_gt=false 的新样本（批1 条款级缺陷）豁免字段登记
+            if (
+                e.set_ == "samples"
+                and e.field_gt
+                and e.file not in EXPECTED_FIELDS
+            ):
                 problems.append(f"{e.file}: 缺字段 GT(未在 field_gt 登记)")
     if args.check:
         return 0 if not problems else 2

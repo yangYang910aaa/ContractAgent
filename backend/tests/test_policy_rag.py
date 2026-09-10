@@ -48,10 +48,11 @@ def test_memory_store_insert_and_search() -> None:
 def test_ingest_policies_into_memory() -> None:
     store = MemoryStore(embedding_model=FakeEmbeddings())
     index_policies(store=store)
-    # 纵向分条后：5 个文件各含"文件头 + N 个第X条"检索单元（总数远大于 5）
+    # 纵向分条后：9 个文件各含"文件头 + N 个第X条"检索单元（总数远大于文件数）
     assert store.doc_count > 5
     refs = {d.policy_ref for d in store.docs}
-    assert refs == {f"P-0{i}" for i in range(1, 6)}
+    # 横向扩类批1（P-06~P-09，2026-09-09）后共 9 份政策
+    assert refs == {f"P-0{i}" for i in range(1, 10)}
     # 每个政策编号都应同时有"文件头/适用范围"与"第X条"两类单元（细粒度检索的前提）
     for ref in sorted(refs):
         same = [d for d in store.docs if d.policy_ref == ref]
