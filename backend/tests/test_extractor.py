@@ -117,6 +117,13 @@ def test_kind_normalized_by_contract_form() -> None:
         text="技术开发（委托）合同\n乙方负责系统集成与软件开发交付。",
     )
     assert model3.contract_kind == "tech_service"
+    # 政采/校服文本可能含"供货"字样，但 gov 判定不得被校正（审计发现：否则会按企业
+    # 基线误报责任上限/保密/IP 缺失）
+    model4 = build_contract_model(
+        {"contract_kind": "gov_goods"},
+        text="学生校服采购合同\n乙方按供货清单分批供货，政府采购项目按示范文本执行。",
+    )
+    assert model4.contract_kind == "gov_goods"
 
 
 # ---- LLM 原始输出 → ContractModel ----

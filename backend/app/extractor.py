@@ -151,10 +151,12 @@ _TECH_FORM_KEYWORDS = (
 def _normalize_kind(kind: str | None, text: str) -> str | None:
     """按正文形态校正品类：企业货物/服务强信号（代理销售/供货/维修等）优先于 tech。
 
-    判定口径：kind 非空、正文含企业形态强信号且不含 tech 强信号 → 改判 enterprise_goods；
-    其余情况保持模型/关键词判据结果不变（只在"明显矛盾"时纠正，避免过度干预）。
+    判定口径：**仅当模型判成 tech_service 时**才做校正（正文含企业形态强信号且不含
+    tech 强信号 → 改判 enterprise_goods）；gov/agri/enterprise 一律保持不动。
+    易错点：政采/校服文本也常出现"供货"字样，若无条件校正会把 gov 判成 enterprise，
+    进而按企业基线（责任上限/保密/IP/法律）误报一堆 medium（2026-09-10 审计发现）。
     """
-    if not kind or not text:
+    if kind != "tech_service" or not text:
         return kind
     # 分支：正文含企业货物/服务强信号且无 tech 强信号 → 纠正为 enterprise_goods
     if any(kw in text for kw in _ENTERPRISE_FORM_KEYWORDS) and not any(
