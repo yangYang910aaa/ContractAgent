@@ -15,7 +15,7 @@ from backend.eval.generate_samples import NEW_SPECS, _body_for
 from backend.app.parser import extract_text
 
 SAMPLES_DIR = BASE_DIR / "data" / "contracts"
-GT_PATH = BASE_DIR / "data/合同模板/合同变体/out/ground_truth.json"
+GT_PATH = BASE_DIR / "data/素材/合同变体/out/ground_truth.json"
 
 # sample_10~15 品类（与 generate_samples 定义一致）
 _KINDS = {f"sample_{i:02d}": "enterprise_goods" for i in range(10, 15)}

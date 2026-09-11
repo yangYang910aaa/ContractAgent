@@ -9,7 +9,7 @@
 成本口径：默认 single × runs=1，每份 1~2 次 chat 调用（付款期次双读各 +1）。
 扫描件默认整批跳过（纯图片 PDF 留给第 5 步 OCR，用 --include-scans 才纳入）。
 
-合规：素材目录 data/真实合同素材/ 已 gitignore，产物 JSON 写 backend/eval/output/
+合规：素材目录 data/素材/ 已 gitignore，产物 JSON 写 backend/eval/output/
 （同样不入库）；脚本里不写任何真实合同文件名，选子集只在命令行给 --only。
 
 用法：
@@ -32,8 +32,8 @@ from backend.app.parser import extract_text, split_clauses
 from backend.app.pipeline import run_review
 from backend.eval.run_eval import _to_jsonable
 
-# 真实合同素材目录（本地、已 gitignore；默认整目录扫描，选子集用 --only）
-DEFAULT_DIR = BASE_DIR / "data/真实合同素材"
+# 真实合同目录（本地、已 gitignore；含 电子版/ 与 扫描件/ 两个子目录，递归扫描）
+DEFAULT_DIR = BASE_DIR / "data/素材/真实合同"
 DEFAULT_OUT = BASE_DIR / "backend/eval/output"
 
 # 默认排除的素材：扫描件是纯图片 PDF（文本层近 0 字），走第 5 步 OCR 单独评测
@@ -52,9 +52,10 @@ def discover(base: Path, only: list[str], exclude: list[str], include_scans: boo
     # 这种情况是：显式要求纳入扫描件 → 不再按"扫描件"前缀排除
     if include_scans:
         ex = [e for e in ex if e not in DEFAULT_EXCLUDE]
+    # 递归扫描：真实合同放在"电子版/扫描件"两个子目录里（2026-09-11 素材目录合并后）
     files = [
         p
-        for p in sorted(base.iterdir())
+        for p in sorted(base.rglob("*"))
         if p.is_file() and not any(e in p.name for e in ex)
     ]
     # 这种情况是：给了 --only → 只保留命中任一子串的文件（不做空手道匹配）

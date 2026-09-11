@@ -1,6 +1,6 @@
 """扫描件 OCR → 抽取 的离线评分（第 5 步，本地工具，可入库）。
 
-用途：拿人工核过的扫描件真值（data/真实合同素材/ocr_gt.json）对比一次跑批产物里
+用途：拿人工核过的扫描件真值（data/素材/ocr/ocr_gt.json）对比一次跑批产物里
 的抽取字段，量化"OCR 出来的文本能不能被正确抽取"——这样"支持扫描件"才是有数字的
 结论，而不是口头承诺。
 
@@ -24,7 +24,7 @@ from pathlib import Path
 
 from backend.app.config import BASE_DIR
 
-DEFAULT_GT = BASE_DIR / "data/真实合同素材/ocr_gt.json"
+DEFAULT_GT = BASE_DIR / "data/素材/ocr/ocr_gt.json"
 DEFAULT_OUT = BASE_DIR / "backend/eval/output"
 # 跑批产物默认目录（取最新的 generalization_*.json 当输入）
 RUN_DIR = DEFAULT_OUT

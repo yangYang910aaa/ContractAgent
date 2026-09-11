@@ -48,7 +48,7 @@ from backend.app.rules import RISK_LABELS
 from backend.eval.field_gt import EXPECTED_FIELDS, FIELD_GROUPS
 
 # 语料根目录与 GT 默认位置(均为本地数据, 不入库; D21 口径只服务回归/评测)
-VARIANTS_DIR = BASE_DIR / "data/合同模板/合同变体/out"
+VARIANTS_DIR = BASE_DIR / "data/素材/合同变体/out"
 SAMPLES_DIR = BASE_DIR / "data/contracts"
 DEFAULT_GT = VARIANTS_DIR / "ground_truth.json"
 DEFAULT_OUT = BASE_DIR / "backend/eval/output"

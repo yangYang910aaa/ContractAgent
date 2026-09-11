@@ -26,7 +26,7 @@ def test_field_gt_covers_field_gt_samples_and_matches_corpus() -> None:
     corpus = sorted((BASE_DIR / "data" / "contracts").glob("sample_*.md"))
     corpus_names = {p.name for p in corpus}
     gt = json.loads(
-        (BASE_DIR / "data/合同模板/合同变体/out/ground_truth.json").read_text(encoding="utf-8")
+        (BASE_DIR / "data/素材/合同变体/out/ground_truth.json").read_text(encoding="utf-8")
     )
     # 语料中未显式豁免字段尺子的 sample 才需要字段 GT（批1 新样本为条款级缺陷，不判字段）
     field_gt_files = {
