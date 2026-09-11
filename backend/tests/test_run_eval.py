@@ -9,6 +9,7 @@ from backend.app.config import BASE_DIR
 from backend.eval.run_eval import (
     DEFAULT_GT,
     _collapse,
+    _llm_summary,
     _load_json,
     _resolve,
     _run_level_metrics,
@@ -102,3 +103,24 @@ def test_collapse_mean_and_range() -> None:
     assert col["mean"] == 0.9
     assert (col["min"], col["max"]) == (0.8, 1.0)
     assert _collapse([None, None]) is None
+
+
+def test_llm_summary_counts_calls_and_stages() -> None:
+    """调用成本汇总：总次数/每份均值/耗时/分阶段都按"每次全语料跑一遍"折叠。"""
+    run_metrics = [
+        {1: {"llm_calls": 2, "llm_seconds": 3.0, "llm_stages": {"extract": 2}}},
+        {1: {"llm_calls": 3, "llm_seconds": 4.0, "llm_stages": {"extract": 2, "review": 1}}},
+    ]
+    col = _llm_summary(run_metrics)
+    assert col is not None
+    assert col["calls_total"]["mean"] == 5
+    assert col["calls_per_file"]["mean"] == 2.5
+    assert col["seconds_total"]["mean"] == 7.0
+    assert col["stages_total"]["extract"]["mean"] == 4
+    assert col["stages_total"]["review"]["mean"] == 1
+
+
+def test_llm_summary_none_without_data() -> None:
+    """旧产物/未接入计数时返回 None（打印与产物都跳过，不影响四项主指标）。"""
+    assert _llm_summary([]) is None
+    assert _llm_summary([{1: {"llm_calls": 0}}]) is None

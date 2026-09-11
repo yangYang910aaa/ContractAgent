@@ -22,6 +22,8 @@
   TP/FP/FN 后宏平均(类型未在任何期望/预测出现则跳过);
 - 评级准确率: expected_grade == 实测 grade。
 每份文件跑 N 次, 头部指标取 N 次(每次=全语料一遍)的均值与 [min,max] 波动区间。
+评测二期增列 LLM 调用成本(metrics.llm_calls): 每次全语料跑一遍的调用总次数/每份
+均值/耗时/分阶段次数, 与四项主指标并列落产物, 供 PRD 成本口径回填。
 judge=false 的样本(tech_01 真实合同, P-03 口径未定)只记录观察、不判分。
 产物(JSON + 人读摘要)默认写 backend/eval/output/(gitignore, 不入库)。
 
@@ -148,11 +150,15 @@ def _validate(entries: list[GtEntry], quiet: bool = False) -> list[str]:
 def _observed(entry: GtEntry, report: dict) -> dict:
     """单次 run_review 报告 → 判分所需观测(grade/high 类型集合/错误)。"""
     risks = report.get("risks") or []
+    llm = report.get("llm") or {}
     return {
         "grade": report.get("grade"),
         "high_types": {r["risk_type"] for r in risks if r.get("severity") == Severity.high.value},
         "error": report.get("error"),
         "fields": _fields_observed(entry, report),  # 字段级判定（无 GT 的文件为 None）
+        "llm_calls": int(llm.get("calls") or 0),  # 本次审查的 chat 调用次数（成本口径）
+        "llm_seconds": float(llm.get("seconds") or 0.0),  # 调用累计耗时（秒）
+        "llm_stages": dict(llm.get("stages") or {}),  # 阶段名 → 次数（extract/review）
     }
 
 
@@ -359,6 +365,55 @@ def _collapse(values: list[float | None]) -> dict | None:
     }
 
 
+def _llm_summary(run_metrics: list[dict]) -> dict | None:
+    """按"每次全语料跑一遍"汇总 LLM 调用成本: 总次数/每份均值/耗时/分阶段次数。
+
+    run_metrics: 每份判分文件一个 {run_no: state}；state 由 _observed 带出
+    llm_calls/llm_seconds/llm_stages。返回 None = 这次跑批没有计数数据（旧产物），
+    打印与产物都跳过该段（向后兼容，不影响四项主指标）。
+    """
+    if not run_metrics:
+        return None
+    run_count = len(run_metrics[0])
+    totals: list[int] = []
+    per_file: list[float] = []
+    seconds: list[float] = []
+    stage_runs: dict[str, list[int]] = {}
+    for run_no in range(1, run_count + 1):
+        states = [run_metrics[i][run_no] for i in range(len(run_metrics))]
+        total = sum(s.get("llm_calls", 0) for s in states)
+        totals.append(total)
+        per_file.append(round(total / len(states), 2))
+        seconds.append(round(sum(s.get("llm_seconds", 0.0) for s in states), 2))
+        # 分阶段次数也按"每次运行"求和：double 相对 single 应只多 review 一档
+        stages = {k for s in states for k in (s.get("llm_stages") or {})}
+        for stage in stages:
+            bucket = stage_runs.setdefault(stage, [0] * run_count)
+            bucket[run_no - 1] = sum((s.get("llm_stages") or {}).get(stage, 0) for s in states)
+    # 计数全为 0（如全部走了旧 report）→ 视为无数据，不打印误导性的 0
+    if not any(totals):
+        return None
+    return {
+        "calls_total": _collapse(totals),
+        "calls_per_file": _collapse(per_file),
+        "seconds_total": _collapse(seconds),
+        "stages_total": {k: _collapse(v) for k, v in sorted(stage_runs.items())},
+    }
+
+
+def _print_llm_section(col: dict | None) -> None:
+    """打印调用成本段（无计数数据时静默跳过）。"""
+    if not col:
+        return
+    ct, cp, st = col["calls_total"], col["calls_per_file"], col["seconds_total"]
+    print("\n===== LLM 调用成本(每次=全语料跑一遍) =====")
+    print(f"调用总次数: mean={ct['mean']} 波动=[{ct['min']},{ct['max']}] runs={ct['runs']}")
+    print(f"每份均值: mean={cp['mean']}")
+    print(f"调用耗时合计(秒): mean={st['mean']} 波动=[{st['min']},{st['max']}]")
+    for stage, c in col["stages_total"].items():
+        print(f"  {stage}: mean={c['mean']}")
+
+
 def _to_jsonable(value):
     """递归把结果里的 set 转排序列表(JSON 不认 set; 排序保证输出稳定)。
 
@@ -464,6 +519,11 @@ def _aggregate(
         if col:
             print(f"{name}: mean={col['mean']} 波动=[{col['min']},{col['max']}] "
                   f"runs={col['runs']}")
+    # 成本口径(评测二期)：调用次数/耗时；与四项主指标并列落产物(键 metrics.llm_calls)
+    llm_col = _llm_summary(run_metrics)
+    _print_llm_section(llm_col)
+    if llm_col:
+        metrics["llm_calls"] = llm_col
     print("\n===== 类型级明细(合并 N 次运行) =====")
     merged_per_type: dict[str, dict] = {}
     for run_metric in headline.values():

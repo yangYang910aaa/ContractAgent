@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from backend.app.llm import get_chat_model
 from backend.app.schemas import ContractModel, Evidence, PaymentTerm
+from backend.app.usage import STAGE_EXTRACT, llm_call
 
 # 置信度低于该值 → needs_human_review=True（前端标黄，归入"需人工确认"）
 CONFIDENCE_REVIEW_THRESHOLD = 0.7
@@ -432,7 +433,9 @@ DOUBLE_READ_FIELDS: tuple[str, ...] = ("payment_schedule",)
 def _single_read(structured, text: str) -> ContractModel:
     """调一次结构化抽取并归一化（漂移输出兜底；异常上抛由调用方决定是否吞）。"""
     try:
-        result = structured.invoke([("system", _system_message()), ("human", text)])
+        # 计价埋点：包住 invoke；开了双读时本函数会被调两次 → 自动计两次
+        with llm_call(STAGE_EXTRACT):
+            result = structured.invoke([("system", _system_message()), ("human", text)])
     except Exception as exc:
         raw = _recover_completion(exc)
         # 这种情况是：解析失败但报错里带原始 completion → 归一化兜底后照常返回

@@ -29,6 +29,7 @@ from backend.app.parser import Clause, split_clauses
 from backend.app.policy_rag import IndexDoc, load_policies
 from backend.app.rules import RISK_LABELS
 from backend.app.schemas import RiskItem, Severity
+from backend.app.usage import STAGE_REVIEW, llm_call
 
 # 复核清单上限：防 LLM 发散把整份合同逐条报一遍
 REVIEW_MAX_FINDINGS = 8
@@ -377,7 +378,9 @@ def blind_review(
 
     structured = model.with_structured_output(BlindReviewSchema, method="json_mode")
     try:
-        result = structured.invoke([("system", system), ("human", human)])
+        # 计价埋点：包住 invoke；双审每份只这一次复核调用
+        with llm_call(STAGE_REVIEW):
+            result = structured.invoke([("system", system), ("human", human)])
     except Exception as exc:
         # 这种情况是：解析失败但报错里带原始 completion → 归一化兜底后照常复核
         raw = _recover_completion(exc)

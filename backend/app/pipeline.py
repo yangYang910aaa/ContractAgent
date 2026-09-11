@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from backend.app.config import BASE_DIR
-from backend.app.extractor import extract_contract
+from backend.app.extractor import DOUBLE_READ_FIELDS, extract_contract
 from backend.app.parser import extract_text
 from backend.app.policy_rag import PolicyHit, load_policy_full, retrieve_policies
 from backend.app.rules import (
@@ -29,6 +29,7 @@ from backend.app.rules import (
     text_rules,
 )
 from backend.app.schemas import ContractModel, RiskItem
+from backend.app.usage import track_usage
 
 DEFAULT_SAMPLES = sorted((BASE_DIR / "data" / "contracts").glob("*.md"))
 
@@ -116,10 +117,13 @@ def build_report(
     risks: list[RiskItem],
     policy_hits: list[dict],
     review: dict | None = None,
+    llm: dict | None = None,
 ) -> dict:
     """把流水线各环节结果组装成报告 dict(JSON 可直接序列化)。
 
     review 为双审(review_mode=double)的合并结果段；单审传 None,报告里为 null。
+    llm 为本次审查的 LLM 调用计数段(评测二期)；不传为 null,旧调用方(如 graph
+    服务端链路)不受影响。
     """
     report = {
         "contract_file": contract_file,  #来源文件路径
@@ -129,50 +133,69 @@ def build_report(
         "extracted": extracted.model_dump(mode="json"),
     }
     report["review"] = review
+    report["llm"] = llm
     return report
 
 
-def run_review(path: str | Path, review_mode: str = "single") -> dict:
+def run_review(
+    path: str | Path,
+    review_mode: str = "single",
+    llm=None,
+    double_read: bool = True,
+    retriever=None,
+) -> dict:
     """完整跑一份合同：取文本 → 抽取 → 规则 → 政策检索 → 报告。
 
     review_mode: single=仅主审规则（默认）/ double=主审规则 + 独立盲审复核。
+    llm: 可注入假模型（离线单测验证调用计数、受控评测用）；不传走默认 chat 模型。
+    double_read: 付款期次双读开关（关掉每份省 1 次 LLM 调用；省钱跑批/对照用）。
+    retriever: 政策检索函数注入（离线跑批不连 Milvus；不传走默认向量+BM25 混合检索）。
     抽取环节异常不中断批处理：报告带 error 字段，便于 CLI 批量跑时定位坏文件。
     """
     path = Path(path)
     #parser 取全文
     text = extract_text(path)
-    try:
-        #LLM 结构化抽取
-        extracted = extract_contract(text=text)
-        # 合同写"自签字盖章之日起生效"时回填 签字日期
-        extracted = infer_effective_from_signature(extracted, text)
-    except Exception as exc:  # LLM/接口异常（如格式不支持、超时）
-        extracted = ContractModel()
-        risks: list[RiskItem] = []
-        return {
-            "contract_file": str(path),
-            "grade": None,
-            "risks": [],
-            "policy_hits": [],
-            "extracted": extracted.model_dump(),
-            "review": None,
-            "error": f"抽取失败：{exc}",
-        }
-    # 先跑规则引擎（字段级 evaluate + 文本级 text_rules），再叠加开放式条款/模板标注；
-    # 文本级检查不依赖抽取字段，两个 annotate 只做"降级 + 附提示"，不改判定口径
-    risks = annotate_template_risks(
-        annotate_open_ended_risks(evaluate(extracted) + text_rules(text, extracted.contract_kind), text),
-        text,
-    )
-    review: dict | None = None
-    # 这种情况是：双审模式 → 盲审复核并与主审合并（合并后的新增 high 也参与检索引用）
-    if review_mode == "double":
-        from backend.app.reviewer import double_review  # 延迟导入：双审才拉 reviewer 链
+    # 计价区间只覆盖 LLM 环节：parser/规则/检索是纯本地，不进成本口径
+    with track_usage() as usage:
+        try:
+            #LLM 结构化抽取（double_read 开时含付款期次第二读）
+            extracted = extract_contract(
+                llm=llm,
+                text=text,
+                double_read_fields=DOUBLE_READ_FIELDS if double_read else (),
+            )
+            # 合同写"自签字盖章之日起生效"时回填 签字日期
+            extracted = infer_effective_from_signature(extracted, text)
+        except Exception as exc:  # LLM/接口异常（如格式不支持、超时）
+            extracted = ContractModel()
+            return {
+                "contract_file": str(path),
+                "grade": None,
+                "risks": [],
+                "policy_hits": [],
+                "extracted": extracted.model_dump(),
+                "review": None,
+                # 抽取失败也可能已发出调用（限流/超时），成本口径照实带出
+                "llm": usage.to_dict(),
+                "error": f"抽取失败：{exc}",
+            }
+        # 先跑规则引擎（字段级 evaluate + 文本级 text_rules），再叠加开放式条款/模板标注；
+        # 文本级检查不依赖抽取字段，两个 annotate 只做"降级 + 附提示"，不改判定口径
+        risks = annotate_template_risks(
+            annotate_open_ended_risks(evaluate(extracted) + text_rules(text, extracted.contract_kind), text),
+            text,
+        )
+        review: dict | None = None
+        # 这种情况是：双审模式 → 盲审复核并与主审合并（合并后的新增 high 也参与检索引用）
+        if review_mode == "double":
+            from backend.app.reviewer import double_review  # 延迟导入：双审才拉 reviewer 链
 
-        risks, review = double_review(risks, text)
-    # 政策引用基于最终风险清单检索（复核新增项也带政策依据，report 才可溯源）
-    policy_hits = enrich_policy_hits(risks)
-    return build_report(str(path), extracted, risks, policy_hits, review=review)
+            risks, review = double_review(risks, text, llm=llm, retriever=retriever)
+        # 政策引用基于最终风险清单检索（复核新增项也带政策依据，report 才可溯源）
+        policy_hits = enrich_policy_hits(risks, retriever=retriever)
+        return build_report(
+            str(path), extracted, risks, policy_hits, review=review, llm=usage.to_dict()
+        )
 
 
 def _summary_line(report: dict) -> str:
