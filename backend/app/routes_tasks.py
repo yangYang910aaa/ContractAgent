@@ -24,8 +24,8 @@ from backend.app.tasks import TaskManager
 
 router = APIRouter(prefix="/api", tags=["tasks"])
 
-# 上传白名单：文本型合同（扫描件无文字层，服务端 parser 会明确报错）
-ALLOWED_SUFFIXES = {".pdf", ".docx", ".md", ".txt"}
+# 上传白名单：文本型合同 + 图片型输入（扫描件 PDF/相机拍照件/截图件，走 OCR 通路）
+ALLOWED_SUFFIXES = {".pdf", ".docx", ".md", ".txt", ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 UPLOAD_DIR = BASE_DIR / "data" / "uploads"
 CONTRACTS_DIR = BASE_DIR / "data" / "contracts"
 
@@ -35,6 +35,13 @@ _MEDIA_TYPES = {
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".md": "text/markdown; charset=utf-8",
     ".txt": "text/plain; charset=utf-8",
+    # 图片件原文件下载/内嵌展示用（扫描件多为 image/jpeg）
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".bmp": "image/bmp",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
 }
 
 
@@ -205,7 +212,10 @@ async def upload_task(
     suffix = Path(file.filename or "").suffix.lower()
     # 分支：后缀不在白名单 → 400 明确提示（防任意文件写入）
     if suffix not in ALLOWED_SUFFIXES:
-        raise HTTPException(status_code=400, detail=f"不支持 {suffix or '空'} 格式，请上传 PDF/Word/文本")
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持 {suffix or '空'} 格式，请上传 PDF/Word/文本/图片",
+        )
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
     # 两段式登记：先建任务拿 thread_id（落盘文件名用），再补 source 并入队——

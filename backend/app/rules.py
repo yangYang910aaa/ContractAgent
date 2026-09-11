@@ -25,31 +25,31 @@ LIABILITY_CAP_MIN_PERCENT: dict[str, float] = {
 CONFIDENTIALITY_MAX_MONTHS = 36  # P-04：保密期不超过 36 个月
 PENALTY_DAILY_MAX_PERCENT = 1.0  # 违约金日利率上限
 AMOUNT_TOLERANCE_RATIO = Decimal("0.01")  # 分项加总 vs 总额允许偏差 1%
-# 预付款期次的名称关键词：P-01 第二条明文把"以'首付款'名义在交付或验收前支付的部分"
-# 计入预付款，备料款/启动款同理（真实合同走查 2026-09-10：70% "首付款"曾被漏判）
+# 计入预付款，备料款/启动款同理
 _PREPAY_NAME_KEYWORDS = ("预付", "首付", "备料款", "启动款")
 
 # 风险类型机器码 → 中文展示名（risk_type 是评测/接口对齐的编码，展示永远走
 # 中文 label；新增风险类型时必须在此登记，否则界面会裸显机器码）
 RISK_LABELS: dict[str, str] = {
-    "missing_required_field": "缺失必填字段",
-    "date_logic_effective_before_signature": "生效日早于签署日",
-    "date_logic_expiry_not_after_effective": "到期日不晚于生效日",
-    "amount_inconsistency": "付款金额不一致",
-    "prepayment_ratio_high": "预付款比例过高",
-    "warranty_too_short": "质保期不足",
-    "liability_cap_unclear": "责任上限未明确",
-    "liability_cap_too_low": "责任上限过低",
-    # 批3 修正（D36）：判据是"保密期字段没抽到"，正文可能已写保密义务——
-    # 展示名放宽为"条款或期限"，具体是哪种由 _refine_confidentiality_wording 按正文改写建议
-    "confidentiality_missing": "缺少保密条款或未约定期限",
-    "confidentiality_too_long": "保密期过长",
-    "penalty_rate_too_high": "违约金比例畸高",
-    "ip_ownership_missing": "未约定知识产权归属",
-    "ip_ownership_unclear": "知识产权归属不清",
-    "governing_law_missing": "缺少适用法律约定",
-    "blank_template_suspected": "疑似空白模板",
+#字段级规则:evaluate()函数,依赖抽取出来的字段。这类规则先拿到ContractModel,再对字段进行逻辑判断。   
+    "missing_required_field": "缺失必填字段", #high/medium
+    "date_logic_effective_before_signature": "生效日早于签署日", #medium
+    "date_logic_expiry_not_after_effective": "到期日不晚于生效日", #medium
+    "amount_inconsistency": "付款金额不一致", #付款期次加总≠总额（偏差 > 1%）,high/medium
+    "prepayment_ratio_high": "预付款比例过高", #>30%,high,P-01
+    "warranty_too_short": "质保期不足", # <12个月, high,P-02
+    "liability_cap_unclear": "责任上限未明确", #medium,P-03
+    "liability_cap_too_low": "责任上限过低", #责任上限<品类底线(企业50%,技术开发30%),high,P-03
+    "confidentiality_missing": "缺少保密条款或未约定期限", #medium,P-04
+    "confidentiality_too_long": "保密期过长",  #>36个月,high,P-04
+    "penalty_rate_too_high": "违约金比例畸高", #日利率>1%,high,P-03
+    "ip_ownership_missing": "未约定知识产权归属", #medium,P-05
+    "ip_ownership_unclear": "知识产权归属不清", #medium,P-05
+    "governing_law_missing": "缺少适用法律约定", #medium,P-05
+
+#文本级规则:text_rules()函数,直接扫原文,不依赖抽取字段。用正则直接在合同原文找关键词。
     "acceptance_unclear": "验收标准或期限不明确",
+    "blank_template_suspected": "疑似空白模板",  
     "invoice_unclear": "发票开具约定缺失",
     "performance_bond_missing": "履约担保缺失",
     "subcontract_unrestricted": "转包/分包未作限制",
@@ -57,7 +57,6 @@ RISK_LABELS: dict[str, str] = {
     "data_processing_terms_missing": "委托处理要件不完整",
     "data_cross_border_unclear": "数据出境缺少合规路径",
     "data_deletion_missing": "未约定数据删除与泄露通知",
-    # 批3（P-13/P-14）：保密例外与违约金基数/上限
     "confidentiality_no_exception": "保密条款缺少例外",
     "penalty_basis_unclear": "违约金基数不明",
     "penalty_cap_missing": "违约金无上限",
@@ -655,12 +654,18 @@ _OPEN_AMOUNT_RE = re.compile(
     r"|随行就市|随市定价|保底价|浮动价|按质论价|按质计价|计量过磅|过磅|按等级|等级差价"
 )
 # "签字/盖章之日起生效"句式：生效规则明确，但正文未写具体签署日期
-_SIGNING_EFFECT_RE = re.compile(r"(?:签字|盖章|签名)[^。\n]{0,12}生效")
+# 窗口 20 字（原 12）：真实扫描件常见长修饰——"…签字并分别加盖各自单位公章之日起生效"
+# （绿化养护补充协议，OCR 走查 2026-09-11），窗口太窄会漏判、把缺生效日判成 high
+# 易错点：字符类不能排除 \n——OCR/PDF 文本每行硬换行，排除换行会让长句永远匹配不到；
+# 改用"允许换行但不许跨句"的写法（(?!。) 逐字否定）；窗口取 40 是因为扫描件文本里
+# 还夹着"--- 第 N 页 ---"页标记（它会把一句话从中间截开，占掉 ~17 字）
+_NO_PERIOD = r"(?:(?!。)[\s\S])"
+_SIGNING_EFFECT_RE = re.compile(rf"(?:签字|盖章|签名){_NO_PERIOD}{{0,40}}生效")
 # 生效日以"签订之日"为准的写法（真实合同走查 2026-09-10：服务/开发类合同常只写
 # "自合同签订之日起"，不写具体日期，抽取拿不到生效日）
 _EFFECTIVE_FROM_SIGN_RE = re.compile(
     r"签订之日起|合同签订之日|自.{0,12}(?:签署|签订|签字|盖章).{0,10}(?:之日|当日起)"
-    r"|(?:签署|签字|盖章).{0,10}生效|(?:签署|签字|盖章).{0,10}成立"
+    rf"|(?:签署|签字|盖章){_NO_PERIOD}{{0,40}}生效|(?:签署|签字|盖章){_NO_PERIOD}{{0,40}}成立"
 )
 # 具体的结束日期写法（"至 2025 年 12 月 31 日"）：有却抽不到才提示人工核对，
 # 没有具体结束日期（以验收/履行完毕为界）→ 属开放式期限，降提示级
@@ -792,7 +797,7 @@ def infer_effective_from_signature(model: ContractModel, text: str) -> ContractM
     # 覆盖三种真实措辞: 校服"双方签字盖章之日起生效", 农副"双方签名(盖章)
     # 之日起成立并生效", 科技部"经签约各方签字盖章后生效".
     if not re.search(
-        r"(?:签字|签名)\s*[（(]?盖章?[）)]?\s*之?日?起?(?:成立并)?生效"
+        r"(?:签字|签名)(?:(?!。)[\s\S]){0,20}(?:之日|当日起)?(?:成立并)?生效"
         r"|经?(?:签约各方|双方).{0,6}(?:签字|签名).{0,4}后生效",
         text or "",
     ):

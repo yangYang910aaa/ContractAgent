@@ -19,6 +19,9 @@ jieba>=0.42
 pytest>=8
 # 生成 PDF 合成样本用（格式真实、内容合成）
 reportlab>=4
+# 扫描件/图片 OCR 通路（第 5 步）：pymupdf 渲染 PDF 页面 + rapidocr 中文识别（纯本地，无 API）
+pymupdf>=1.24
+rapidocr-onnxruntime>=1.2
 # Postgres 持久化（任务登记簿 + LangGraph checkpointer；langgraph 1.2.x 配套 3.x）
 psycopg[binary]>=3.2
 psycopg-pool>=3.2

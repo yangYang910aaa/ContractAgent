@@ -91,7 +91,7 @@ async function uploadAll() {
 
     <!-- 上传入口：整卡可点，已选文件后显示列表 -->
     <label class="drop card">
-      <input type="file" accept=".pdf,.docx,.md,.txt" multiple @change="onPick" />
+      <input type="file" accept=".pdf,.docx,.md,.txt,.jpg,.jpeg,.png,.bmp,.tif,.tiff" multiple @change="onPick" />
       <span class="drop-main">{{ picked.length ? `已选 ${picked.length} 份` : '点击选择合同文件（可多选）' }}</span>
       <span class="drop-sub mono-num">pdf / docx / md / txt · 文本型即可</span>
     </label>

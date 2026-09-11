@@ -14,6 +14,17 @@ _CLAUSE_HEADER_RE = re.compile(r"(?m)^\s*(第[0-9一二三四五六七八九十�
 # 章节头：行首的「一、标题」（校服/政采示范文本常用），中文序号支持到「十五、」以上
 _CHAPTER_HEADER_RE = re.compile(r"(?m)^\s*([一二三四五六七八九十]+、[^\n]*)")
 
+# ---- 扫描件/图片 OCR 通路（第 5 步）----
+# 图片后缀：相机拍照件、截图件与"图片装进 PDF"的扫描件同属无文本层输入
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+# 文本层字数阈值：真实扫描件用 pypdf 只能抽出 2~18 字（页码/零散数字），
+# 低于该阈值即判定为图片型 PDF；正常电子版合同动辄上千字，不会误触发
+PDF_OCR_MIN_CHARS = 40
+# 渲染倍率：2 倍（约 144dpi）——实测关键字段可读且 3~17s/页，再高收益有限、耗时翻倍
+OCR_RENDER_SCALE = 2
+# OCR 引擎单例（首次调用建模型约 1s；None=尚未初始化）
+_OCR_ENGINE = None
+
 
 @dataclass
 class Clause:
@@ -24,21 +35,29 @@ class Clause:
     text: str  # 含条款头的全文
 
 
-def extract_text(path: str | Path) -> str:
-    """读取 PDF / Word / 文本文件为全文(PDF 扫描件暂不支持)"""
-    
+def extract_text(path: str | Path, ocr: bool = True) -> str:
+    """读取 PDF / Word / 文本 / 图片文件为全文（图片型 PDF 与图片走 OCR，见 _ocr_* 注释）。
+
+    ocr=False 时只走文本层（离线评测/对照用）：扫描件会返回空文本而不是触发 OCR。
+    """
     path = Path(path)
     suffix = path.suffix.lower()
     # 分支 1：纯文本类（.txt/.md）→ UTF-8 直读全文
     if suffix in {".txt", ".md", ".markdown"}:
         return path.read_text(encoding="utf-8", errors="replace")
-    # 分支 2：PDF → pypdf 逐页抽取文本（扫描件无文本层，不在此范围）
+    # 分支 2：PDF → 先取文本层；文本层为空（图片型 PDF/扫描件）→ 走 OCR 通路
     if suffix == ".pdf":
-        # 延迟导入：只在真遇到 PDF 时拉 pypdf，避免拖慢纯文本路径
-        from pypdf import PdfReader
-
-        reader = PdfReader(str(path))
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
+        text = _pdf_text_layer(path)
+        # 这种情况是：文本层字数低于阈值 → 判定为扫描件（真实扫描件只抽出 2~18 字）
+        if ocr and len(text.strip()) < PDF_OCR_MIN_CHARS:
+            ocr_text = _ocr_pdf(path)
+            # 分支：OCR 也没读出内容（如纯空白页）→ 保留文本层结果，不返回误导性的空串
+            if ocr_text.strip():
+                return ocr_text
+        return text
+    # 分支 3：图片文件（.jpg/.png…）→ 直接 OCR（相机拍照件/截图件）
+    if suffix in IMAGE_SUFFIXES:
+        return _ocr_image_file(path) if ocr else ""
     # 分支 3：Word → python-docx 按段落取文本
     if suffix == ".docx":
         from docx import Document  # 延迟导入，同 pypdf
@@ -59,16 +78,76 @@ def extract_text(path: str | Path) -> str:
                 for row in table.rows:
                     parts.append(" | ".join(cell.text.strip() for cell in row.cells))
         return "\n".join(part for part in parts if part)
-    # 分支 4：其他后缀 → 明确报不支持，提示可上传格式
-    raise ValueError(f"暂不支持 {suffix} 格式，请上传 PDF / Word / 文本文件")
+    # 分支 5：其他后缀 → 明确报不支持，提示可上传格式
+    raise ValueError(f"暂不支持 {suffix} 格式，请上传 PDF / Word / 文本 / 图片文件")
+
+
+def _pdf_text_layer(path: Path) -> str:
+    """pypdf 取 PDF 文本层（图片型 PDF 只能抽到零散数字/页码，属预期）。"""
+    # 延迟导入：只在真遇到 PDF 时拉 pypdf，避免拖慢纯文本路径
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(path))
+    return "\n".join(page.extract_text() or "" for page in reader.pages)
+
+
+def _ocr_engine():
+    """惰性初始化 RapidOCR 引擎（首次约 1s 建模型；缺依赖时给可执行的报错）。
+
+    易错点：rapidocr/onnxruntime 体积大，只在真遇到扫描件时才导入，否则拖慢服务启动。
+    """
+    global _OCR_ENGINE
+    if _OCR_ENGINE is None:
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+        except ImportError as exc:  # 依赖未装（部署环境可能只跑文本件）
+            raise ValueError(
+                "扫描件/图片需要 OCR 依赖，请先安装：pip install pymupdf rapidocr-onnxruntime"
+            ) from exc
+        _OCR_ENGINE = RapidOCR()
+    return _OCR_ENGINE
+
+
+def _ocr_image_bytes(image: bytes) -> list[str]:
+    """对一张图片跑 OCR，按阅读顺序返回文本行（低置信度行一并保留，宁全勿缺）。
+
+    口径：不过滤低分行的原因——盖章/手写导致的低分里常含关键信息（日期、金额），
+    过滤反而丢线索；质量问题由评测环节用"低置信页清单"暴露，不在这里静默丢弃。
+    """
+    result, _ = _ocr_engine()(image)
+    return [item[1] for item in (result or []) if len(item) >= 2 and item[1]]
+
+
+def _ocr_pdf(path: Path) -> str:
+    """图片型 PDF → 逐页渲染成图片再 OCR，拼接时插入"--- 第 N 页 ---"便于人工核对。
+
+    渲染倍率取 2（约 144dpi）：实测 3~17s/页、关键字段（甲乙方/金额/日期）可读；
+    再高倍率识别率提升有限但耗时翻倍。
+    """
+    import pymupdf  # 延迟导入：只有扫描件才需要
+
+    doc = pymupdf.open(str(path))
+    pages: list[str] = []
+    for index in range(doc.page_count):
+        pix = doc[index].get_pixmap(matrix=pymupdf.Matrix(OCR_RENDER_SCALE, OCR_RENDER_SCALE))
+        lines = _ocr_image_bytes(pix.tobytes("png"))
+        body = "\n".join(lines) or "（本页无可识别文字）"
+        pages.append(f"--- 第 {index + 1} 页 ---\n{body}")
+    doc.close()
+    return "\n".join(pages)
+
+
+def _ocr_image_file(path: Path) -> str:
+    """图片文件（.jpg/.png…）直接 OCR；不渲染、不加页标记（单页无页码意义）。"""
+    return "\n".join(_ocr_image_bytes(path.read_bytes()))
 
 
 def split_clauses(text: str) -> list[Clause]:
     """按条款/章节边界把全文切成块。
 
-    双模式判定：优先「第X条」（企业/GF 式）；没有第X条但有「一、二、三」章节头
-    （校服/政采式）→ 按章节切；两者都没有 → 返回空列表（调用方走句子兜底）。
-    易错点：章节文本里的子条（1、2、3 / （一）（二））必须留在所在章节内，
+    双模式判定: 优先「第X条」(企业/GF 式); 没有第X条但有「一、二、三」章节头
+    (校服/政采式)→ 按章节切；两者都没有 → 返回空列表(调用方走句子兜底)。
+    易错点: 章节文本里的子条(1、2、3 / （一）（二）)须留在所在章节内，
     不能当成新的顶级边界——所以这里只认「一、」行首章节头。
     """
     if not text or not text.strip():
