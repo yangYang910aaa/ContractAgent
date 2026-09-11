@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import time
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -97,11 +98,11 @@ def evaluate(gt_path: Path, run_path: Path) -> dict:
     gt = json.loads(gt_path.read_text(encoding="utf-8"))
     run = json.loads(run_path.read_text(encoding="utf-8"))
     # 产物按文件名索引：GT/产物都按文件名字符串对齐
-    by_file = {item["file"]: item for item in run.get("files", [])}
+    items = run.get("files", [])
     rows: list[dict] = []
     counters = {"ok": 0, "wrong": 0, "missing": 0}
     for entry in gt.get("files", []):
-        observed = by_file.get(entry["file"])
+        observed = _find_run_item(entry["file"], items)
         if observed is None:
             rows.append({"file": entry["file"], "error": "产物里没有该文件（未跑或文件名不符）", "fields": {}})
             continue
@@ -132,6 +133,22 @@ def evaluate(gt_path: Path, run_path: Path) -> dict:
         "field_accuracy": round(counters["ok"] / total, 4) if total else None,
         "files": rows,
     }
+
+
+def _find_run_item(gt_file: str, items: list[dict]) -> dict | None:
+    """在产物里找 GT 对应的那份：先精确比文件名，找不到再按关键词包含比。
+
+    为什么要兜底（2026-09-11 素材重命名）：尺子按文件名对齐，改名后旧产物就对不上，
+    报"产物里没有该文件"而不是给分数。这里把 "扫描件_04_医用设备.pdf" 这类名字
+    去掉前缀与序号后取关键词（"医用设备"）做包含匹配，改名/换批次都不再影响复算。
+    """
+    exact = next((i for i in items if i.get("file") == gt_file), None)
+    if exact is not None:
+        return exact
+    core = re.sub(r"^(?:扫描件_)?\d+_", "", Path(gt_file).stem)
+    if not core:
+        return None
+    return next((i for i in items if core in (i.get("file") or "")), None)
 
 
 def main(argv: list[str] | None = None) -> int:
