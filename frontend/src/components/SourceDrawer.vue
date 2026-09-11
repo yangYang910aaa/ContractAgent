@@ -22,6 +22,9 @@ interface DrawerRisk {
   severity?: string | null
   clause_ref?: string
   evidence?: string
+  // 原文摘录（后端定位 pass 填）：evidence 常是规则生成的说明句，正文里搜不到；
+  // 定位与句内高亮优先用它（2026-09-11 走查修复）
+  evidence_quote?: string
 }
 
 /** 一个条款块的命中信息：命中的风险 + 可高亮的证据摘录。 */
@@ -49,7 +52,37 @@ const askDownload = ref(false)
 const docxBox = ref<HTMLElement | null>(null) // docx 原文件渲染挂载点
 const docxBusy = ref(false) // docx 渲染中（loading 文案）
 const docxError = ref('') // docx 拉取/渲染失败原因
+const docxClamped = ref(0) // 因源文件缩进异常而被夹回的段落数（>0 时给用户一句说明）
 let timer: number | undefined
+
+// 缩进容错阈值（pt）：超过 2 英寸的缩进在 A4 页面里没有正常用途，判为源文件坏样式。
+// 背景（2026-09-11 启动自查）：真实素材里有一份 docx 的 w:ind left/firstLine 达 22 英寸，
+// docx-preview 原样渲染会把行首字符顶出可视区，看起来像"掉字"。
+const INDENT_MAX_PT = 144
+
+/** 把渲染结果里离谱的缩进夹回 0，返回被修正的属性个数（0=无需修正）。 */
+function clampAbsurdIndents(root: HTMLElement): number {
+  let fixed = 0
+  const nodes = root.querySelectorAll<HTMLElement>('p, div, li, td, th')
+  for (const el of Array.from(nodes)) {
+    for (const prop of ['text-indent', 'margin-left', 'padding-left'] as const) {
+      const raw = el.style.getPropertyValue(prop).trim()
+      if (!raw) continue
+      // 只处理带单位的长度值；auto / % 等交给浏览器自己算
+      const m = /^(-?[\d.]+)(pt|px|in|cm)$/.exec(raw)
+      if (!m) continue
+      const value = Number(m[1])
+      // 统一折算成 pt 再比较，避免单位不同导致漏判
+      const pt =
+        m[2] === 'pt' ? value : m[2] === 'px' ? value * 0.75 : m[2] === 'in' ? value * 72 : value * 28.35
+      if (pt > INDENT_MAX_PT) {
+        el.style.setProperty(prop, '0')
+        fixed += 1
+      }
+    }
+  }
+  return fixed
+}
 
 const isPdf = computed(() => doc.value?.suffix === '.pdf')
 const isDocx = computed(() => doc.value?.suffix === '.docx')
@@ -65,17 +98,21 @@ const blockHits = computed<BlockHit[]>(() => {
   return d.blocks.map((b) => {
     const hits = risks.filter((r) => {
       const clause = (r.clause_ref ?? '').trim()
-      const ev = (r.evidence ?? '').trim()
+      // 优先用原文摘录匹配（说明句在正文里搜不到，会让命中块与句内高亮都失效）
+      const ev = (r.evidence_quote || r.evidence || '').trim()
       if (clause) {
         if (b.ref === clause) return true
         if (b.title.includes(clause) || clause.includes(b.title)) return true
       }
-      return Boolean(ev && b.text.includes(ev))
+      if (ev && b.text.includes(ev)) return true
+      // 容忍 PDF 抽取的空格/换行差异：折叠空白再比一次
+      return Boolean(ev && b.text.replace(/\s+/g, '').includes(ev.replace(/\s+/g, '')))
     })
     // 证据句去重、超长截断（只标引用核心片段）；gate 载荷无 severity → 按 high 处理
     const markers: { text: string; sev: string }[] = []
     for (const r of hits) {
-      const ev = (r.evidence ?? '').trim()
+      // 句内高亮同样优先用原文摘录（说明句在正文里定位不到，会白标）
+      const ev = (r.evidence_quote || r.evidence || '').trim()
       const sev = r.severity === 'medium' ? 'medium' : 'high'
       if (ev.length >= 8) {
         const text = ev.length > 200 ? ev.slice(0, 200) : ev
@@ -304,7 +341,11 @@ function findBlock(clause: string, blocks: SourceBlock[]): number {
   const exact = blocks.findIndex((b) => b.ref === clause)
   if (exact >= 0) return exact
   const c = clause.trim()
-  return blocks.findIndex((b) => b.title.includes(c) || c.includes(b.title))
+  const byTitle = blocks.findIndex((b) => b.title.includes(c) || c.includes(b.title))
+  if (byTitle >= 0) return byTitle
+  // 条款号是子条（如 "5.2"）时标题里没有它，但块正文里通常写着（"5.2付款方式"）
+  // → 再按块正文找一次（2026-09-11 走查：此前落到"纯文本"兜底且不高亮）
+  return blocks.findIndex((b) => b.text.includes(c))
 }
 
 /** 按证据原文找所在条款块：中风险项无 clause_ref 时用摘录回指（先精确比，
@@ -318,13 +359,14 @@ function findBlockByEvidence(evidence: string, blocks: SourceBlock[]): number {
   return blocks.findIndex((b) => b.text.replace(/\s+/g, '').includes(flat))
 }
 
-/** 滚动到目标块并闪一下背景（证据定位的轻量反馈，不打断阅读）。 */
+/** 滚动到目标块并**保持**高亮：高亮是"定位到这儿"的锚，闪一下就没会让人以为没定位成功
+ *  （2026-09-11 走查：用户反馈蓝色区域出现一秒就消失）。下次定位时自动清掉上一处。 */
 function flashTo(index: number) {
   const el = document.getElementById(`src-block-${index}`)
   if (!el) return
+  document.querySelectorAll('.block.flash').forEach((node) => node.classList.remove('flash'))
   el.scrollIntoView({ behavior: 'smooth', block: 'start' })
   el.classList.add('flash')
-  window.setTimeout(() => el.classList.remove('flash'), 1400)
 }
 
 /** 纯文本兜底定位：按片段在全文中的位置估滚（无条文结构时仍能跳个大概）。 */
@@ -405,6 +447,8 @@ async function renderDocx() {
     const blob = await resp.blob()
     // styleContainer 传同一容器：样式随内容一起注入，作用域不冲突
     await renderAsync(blob, el, el, { className: 'docx' })
+    // 渲染后再做一次缩进容错（源文件坏样式会让行首被顶出可视区）
+    docxClamped.value = clampAbsurdIndents(el)
   } catch (err) {
     docxError.value = err instanceof Error ? err.message : 'Word 渲染失败'
   } finally {
@@ -521,6 +565,9 @@ onUnmounted(() => {
       >
         <p v-if="docxBusy" class="docx-state pulse">正在渲染 Word 原文件…</p>
         <p v-else-if="docxError" class="docx-state docx-err">{{ docxError }}</p>
+        <p v-else-if="docxClamped > 0" class="docx-state">
+          源文件缩进异常（超 2 英寸），已按容错方式排版，行首不再被顶出可视区。
+        </p>
         <div ref="docxBox" class="docx-frame"></div>
       </div>
 

@@ -125,6 +125,8 @@ def test_subcontract_restricted_clean() -> None:
         "乙方不得将本合同项下义务转包或分包。",
         "未经甲方书面同意，乙方不得将本项目关键开发工作转委托给第三方。",
         "乙方转包须经甲方书面批准。",
+        # 官方示范文本的勾选式作答（科技部：是否可转委托 →（2）否 ☑）
+        "7.1 开发方是否可以将部分开发工作转委托给第三方：（1）是 □ （2）否 ☑",
     ):
         assert "subcontract_unrestricted" not in _types(text)
 

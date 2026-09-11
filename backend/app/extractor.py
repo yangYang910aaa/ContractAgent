@@ -356,8 +356,11 @@ _PARTY_ALIAS_RES: dict[str, re.Pattern] = {
 # 掩码/占位串不是真实名称：电煤合同"供方:*******（中标供应商）"必须跳过，
 # 空白模板的"甲方：＿＿＿"同理（否则会把下划线当公司名写进报告）
 _PARTY_MASK_RE = re.compile(r"^[*＊_＿•·\s]+$")
-# 自指称谓不是名称：条款里"甲方：乙方应…"这类句式后半句会被正则误抓
-_PARTY_SELF_RE = re.compile(r"^(?:甲方|乙方|买方|卖方|供方|需方|双方|三方)$")
+# 自指称谓不是名称：条款里"甲方：乙方应…"这类句式后半句会被正则误抓；
+# 允许带括号注记（真实模板写"甲方（需方）："，模型会把整串标签当人名抄回来）
+_PARTY_PLACEHOLDER_RE = re.compile(
+    r"^(?:甲方|乙方|买方|卖方|供方|需方|双方|三方)(?:[（(][^）)]{0,12}[）)])?$"
+)
 # 栏位标签词不是名称：真实合同常写"卖方："后换行接"签订时间："，正则会把下一行的
 # 栏位标签当成公司名（小麦合同实测把"签订时间"填进了 supplier）——按标签词拦截
 _PARTY_LABEL_RE = re.compile(
@@ -373,6 +376,18 @@ _PARTY_ORG_SUFFIX_RE = re.compile(
 )
 
 
+def _is_placeholder_party(value: str) -> bool:
+    """值是否只是栏位标签或掩码（"甲方（需方）""乙方""*******"），而不是真实主体名。
+
+    背景（2026-09-11 启动自查）：空白/半填模板的栏位没填，模型会把"甲方（需方）"整串
+    抄成甲方名称，报告里就出现"甲方（采购方）：甲方（需方）"这种把标签当值的结果。
+    """
+    text = value.strip().replace(" ", "").replace("\u3000", "")
+    if not text:
+        return True
+    return bool(_PARTY_MASK_RE.match(text) or _PARTY_PLACEHOLDER_RE.match(text))
+
+
 def _party_fallback(field: str, text: str) -> tuple[str | None, str]:
     """字段缺失时按原文称谓补一个值，返回 (名称, 命中原句)；找不到返回 (None, "")。
 
@@ -384,8 +399,8 @@ def _party_fallback(field: str, text: str) -> tuple[str | None, str]:
         return None, ""
     for m in pattern.finditer(text):
         value = m.group(1).strip()
-        # 分支 1：掩码/占位 → 不是名称，继续往后找
-        if _PARTY_MASK_RE.match(value) or _PARTY_SELF_RE.match(value):
+        # 分支 1：掩码/占位标签 → 不是名称，继续往后找
+        if _is_placeholder_party(value):
             continue
         # 分支 2：连一个汉字/字母/数字都没有（纯标点）→ 跳过
         if not re.search(r"[\u4e00-\u9fffA-Za-z0-9]", value):
@@ -405,8 +420,13 @@ def _fill_missing_parties(model: ContractModel, text: str) -> ContractModel:
     updates: dict = {}
     meta = dict(model.extraction_meta)
     for field in ("buyer", "supplier"):
-        # 分支：模型已抽到 → 不动（兜底只补空，不做二次判断）
-        if getattr(model, field):
+        value = getattr(model, field)
+        # 分支 1：模型抽到的是栏位标签/掩码（半填模板常见）→ 视为未填，置空
+        if value and _is_placeholder_party(value):
+            updates[field] = None
+            value = None
+        # 分支 2：已有真实值 → 不动（兜底只补空，不做二次判断）
+        if value:
             continue
         value, quote = _party_fallback(field, text)
         if not value:

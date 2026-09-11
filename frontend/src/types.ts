@@ -19,6 +19,8 @@ export interface GateHighRisk {
   policy_ref?: string | null
   suggestion?: string
   origin?: 'rules' | 'review' | null // 风险来源：review=盲审复核补抓（审批页标注）
+  // 原文摘录（后端定位 pass 填）：evidence 是规则说明句时，用它做原文定位/高亮
+  evidence_quote?: string
 }
 
 /** 闸口载荷：ask 是给审批人看的引导文案。 */
@@ -26,6 +28,8 @@ export interface GatePayload {
   ask?: string
   grade?: string
   high_risks: GateHighRisk[]
+  // 双审复核结论：闸口阶段报告未生成，靠它让审批人看到盲审发现（2026-09-11）
+  review?: ReviewSection | null
 }
 
 /** 一条风险：字段与 rules 的 RiskItem 对齐，evidence 是原文摘录。 */
@@ -35,6 +39,7 @@ export interface RiskItem {
   severity: Severity
   clause_ref?: string
   evidence?: string
+  evidence_quote?: string // 原文摘录（定位/高亮优先用它；evidence 可能是规则说明句）
   policy_ref?: string | null
   suggestion?: string
   field?: string | null // 关联的 ContractModel 字段名（前端高亮预留）
@@ -114,6 +119,8 @@ export interface TaskSummary {
 export interface TaskList {
   tasks: TaskSummary[]
   concurrency?: number
+  // 源文件已丢失、被服务端隐藏的历史任务数（前端提示一行，不做静默吞掉）
+  hidden_stale?: number
 }
 
 /** 任务详情：gate 时才有 gate_payload；done 时才有 report。 */

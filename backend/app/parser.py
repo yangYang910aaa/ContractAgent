@@ -1,6 +1,9 @@
 """合同解析与切分。
 
 职责：文件 → 全文文本；全文 → 按「第X条」切条款(条款成块不截断,超长条款带条款头续切,无条文结构退回句子级通用切分)。
+docx文件走python-docx解析,按文档顺序抽段落+表格
+pdf文件走pypdf逐页抽取文本；**文本层为空的图片型 PDF（扫描件）与图片文件走 OCR**
+（pymupdf 渲染 + rapidocr，依赖可选、惰性导入，见 _ocr_pdf/_ocr_image_file）。
 """
 
 from __future__ import annotations
@@ -123,6 +126,8 @@ def _ocr_pdf(path: Path) -> str:
 
     渲染倍率取 2（约 144dpi）：实测 3~17s/页、关键字段（甲乙方/金额/日期）可读；
     再高倍率识别率提升有限但耗时翻倍。
+    页级并行**不可取**（2026-09-11 实测）：onnxruntime 单次推理已吃满多核，3 页并发反而
+    比串行慢（19 页 68.5s vs 43.5s，1.6 倍劣化）——多页并发只是抢核，故保持串行。
     """
     import pymupdf  # 延迟导入：只有扫描件才需要
 
@@ -191,7 +196,7 @@ def _sentence_units(text: str) -> list[str]:
 
 
 def _pack_chunks(units: list[str], max_chars: int) -> list[str]:
-    """句子级贪心打包：单块尽量不超过 max_chars；单句超长时硬切兜底。"""
+    """句子级贪心打包：单块尽量不超过 max_chars; 单句超长时硬切兜底。"""
     chunks: list[str] = []
     cur = ""
     for unit in units:
@@ -202,16 +207,19 @@ def _pack_chunks(units: list[str], max_chars: int) -> list[str]:
                 cur = ""
             chunks.append(unit[:max_chars])
             unit = unit[max_chars:]
+        #装得下 -> 继续装
         if len(cur) + len(unit) <= max_chars or not cur:
             cur += unit
+        # 装不下 -> 封箱,开新箱 
         else:
             chunks.append(cur)
             cur = unit
+        # 最后一个箱子也要封上
     if cur:
         chunks.append(cur)
     return chunks
 
-
+#最终切分策略
 def chunk_for_index(text: str, max_chars: int = 600) -> list[Clause]:
     """把全文切成入库检索块：
     - 有条款结构：每个条款一块；超长条款正文续切，续块带条款头保证独立可读；

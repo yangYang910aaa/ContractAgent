@@ -13,6 +13,7 @@ const emit = defineEmits<{ open: [threadId: string] }>()
 
 const tasks = ref<TaskSummary[]>([])
 const concurrency = ref(1) // 服务端并发上限（/api/tasks 返回；缺省按 1 处理）
+const hiddenStale = ref(0) // 源文件已丢失而被服务端隐藏的历史任务数（>0 时提示一行）
 const error = ref('')
 const filter = ref<'all' | TaskStatus>('all')
 const query = ref('') // 按文件名/任务号搜索
@@ -123,6 +124,7 @@ async function load() {
       tasks.value.some((t) => t.thread_id === id),
     )
     concurrency.value = res.concurrency ?? 1
+    hiddenStale.value = res.hidden_stale ?? 0
     lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
     error.value = ''
   } catch (err) {
@@ -263,6 +265,10 @@ onUnmounted(() => {
     <p class="sysline muted">
       并发上限 {{ concurrency }} · 排队 {{ counts.pending }} · 审查中 {{ counts.processing }}
       <template v-if="lastUpdated"> · 更新于 {{ lastUpdated }}</template>
+    </p>
+    <!-- 源文件已丢失的历史任务被服务端隐藏：明说一句，避免"任务凭空消失"的困惑 -->
+    <p v-if="hiddenStale > 0" class="sysline muted">
+      另有 {{ hiddenStale }} 条历史任务的源文件已丢失，未在此展示（原文无法复核）；如需清理可在数据库或删除接口处理。
     </p>
 
     <!-- 按文件名/任务号搜索：重复上传多份时快速定位 -->

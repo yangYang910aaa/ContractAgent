@@ -3,11 +3,18 @@
 覆盖: PgThreadStore CRUD/jsonb/排序/启动恢复(mark_interrupted), 以及
 核心价值点——闸口任务在"换一个连接/进程"后仍能恢复审批(LangGraph 检查点落库)。
 内存路径(默认)由既有 test_tasks/test_routes/test_graph 覆盖, 不依赖数据库。
+
+隔离口径(2026-09-11 启动自查后修): 每个用例在**临时 schema** 里建表读写, 跑完即 drop——
+此前直接连生产库并 clear(), 每跑一次测试就往真实任务表塞一条 sample.md、还会清掉
+用户的历史任务(实测把队列里的真实任务记录删了)。现在 search_path 只指向临时 schema,
+public 里的 contract_tasks 一行不动。
 """
 
+import uuid
 from datetime import date
 from decimal import Decimal
 
+import psycopg
 import pytest
 
 from backend.app.config import settings
@@ -24,11 +31,21 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture()
 def pg() -> PgPersistence:
-    """每个测试独立建连(顺带幂等建表), 收尾释放连接池。"""
-    persistence = PgPersistence()
-    persistence.store.clear()  # 共享同一张表: 每用例前清空, 防跨用例数据残留
-    yield persistence
-    persistence.close()
+    """每个用例一个独立 schema: 建 → 用 → 收尾 drop, 绝不触碰 public 里的生产数据。"""
+    base = settings.database_url
+    schema = "ca_test_" + uuid.uuid4().hex[:8]
+    with psycopg.connect(base, autocommit=True) as conn:
+        conn.execute(f'CREATE SCHEMA "{schema}"')
+    # 易错点：search_path 必须只含测试 schema——若留 public，CREATE TABLE IF NOT EXISTS
+    # 会命中 public 里已有同名表，测试的 DELETE 就会打在生产表上
+    separator = "&" if "?" in base else "?"
+    persistence = PgPersistence(database_url=f"{base}{separator}options=-csearch_path%3D{schema}")
+    try:
+        yield persistence
+    finally:
+        persistence.close()
+        with psycopg.connect(base, autocommit=True) as conn:
+            conn.execute(f'DROP SCHEMA "{schema}" CASCADE')
 
 
 def _gate_model() -> ContractModel:

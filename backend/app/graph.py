@@ -60,6 +60,7 @@ def _risks_from_dicts(risks: list[dict]) -> list[RiskItem]:
 def _build_gate_payload(state: ReviewState) -> dict:
     """构造人工审批的载荷: 从state里筛出severity为high的风险项,组装成给审批人看的摘要"""
     high = [r for r in state.get("risks", []) if r.get("severity") == "high"]
+    review = state.get("review") or None
     return {
         "ask": "检测到高风险项，请审批：approve=放行 / reject=打回 / edited=修改字段后重审",
         "grade": state.get("grade"),
@@ -69,12 +70,17 @@ def _build_gate_payload(state: ReviewState) -> dict:
                 "label": r.get("label") or r.get("risk_type"),
                 "clause_ref": r.get("clause_ref", ""),
                 "evidence": (r.get("evidence") or "")[:120],
+                # 原文摘录：审批页"原文定位"用它滚动/高亮（evidence 常是规则说明句，正文里搜不到）
+                "evidence_quote": (r.get("evidence_quote") or "")[:200],
                 "policy_ref": r.get("policy_ref"),
                 "suggestion": r.get("suggestion", ""),
                 "origin": r.get("origin"),  # rules/review：让审批页看出哪条是复核补抓
             }
             for r in high
         ],
+        # 双审时把复核结论一并带进闸口载荷：审批人在放行/打回前就能看到"复核新增了什么、
+        # 哪些只提示"（2026-09-11 走查：此前 gate 阶段完全看不到盲审结果，属于展示缺口）
+        "review": review,
     }
 
 
@@ -136,9 +142,8 @@ def build_review_graph(
     def rules_node(state: ReviewState) -> dict:
         """确定性规则审查：抽取结果 → 风险清单；重审循环也回到这里。
 
-        空白模板检测依赖原文（state.text）——模板占位多时缺必填降 medium，
+        空白模板检测依赖原文(state.text)——模板占位多时缺必填降 medium,
         不再整批误停闸口（见 rules.annotate_template_risks）。
-        文本级条款检查（text_rules，P-06~P-09）与 annotate 同层接线。
         """
         model = ContractModel.model_validate(state["extracted"])
         text = state.get("text") or ""
@@ -298,7 +303,8 @@ def build_review_graph(
 
 
 class ReviewRunner:
-    """审核运行器: graph + checkpointer + 任务登记簿，封装开始/续跑。
+    """将langgraph的compiled graph包装为审核运行器。
+    审核运行器: graph + checkpointer + 任务登记簿，封装开始/续跑。
 
     默认全内存(MemorySaver + ThreadStore, 测试/无库兜底); 服务入口在
     DATABASE_URL 配置时注入 Postgres 持久化的 store/checkpointer(store_pg.py),

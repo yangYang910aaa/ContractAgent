@@ -20,6 +20,20 @@ export const RISK_LABELS: Record<string, string> = {
   ip_ownership_unclear: '知识产权归属不清',
   governing_law_missing: '缺少适用法律约定',
   blank_template_suspected: '疑似空白模板',
+  // 横向批1（P-06~P-09）
+  acceptance_unclear: '验收标准或期限不明确',
+  invoice_unclear: '发票开具约定缺失',
+  performance_bond_missing: '履约担保缺失',
+  subcontract_unrestricted: '转包/分包未作限制',
+  // 横向批2（P-10~P-12）数据与个人信息合规
+  personal_info_clause_missing: '未约定个人信息保护义务',
+  data_processing_terms_missing: '委托处理要件不完整',
+  data_cross_border_unclear: '数据出境缺少合规路径',
+  data_deletion_missing: '未约定数据删除与泄露通知',
+  // 横向批3（P-13~P-14）保密例外与违约金口径
+  confidentiality_no_exception: '保密条款缺少例外',
+  penalty_basis_unclear: '违约金基数不明',
+  penalty_cap_missing: '违约金无上限',
 }
 
 /** ContractModel 字段 key → 中文名（建议文案里出现字段名时用中文）。 */

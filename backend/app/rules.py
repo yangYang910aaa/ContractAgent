@@ -48,18 +48,20 @@ RISK_LABELS: dict[str, str] = {
     "governing_law_missing": "缺少适用法律约定", #medium,P-05
 
 #文本级规则:text_rules()函数,直接扫原文,不依赖抽取字段。用正则直接在合同原文找关键词。
-    "acceptance_unclear": "验收标准或期限不明确",
-    "blank_template_suspected": "疑似空白模板",  
-    "invoice_unclear": "发票开具约定缺失",
-    "performance_bond_missing": "履约担保缺失",
-    "subcontract_unrestricted": "转包/分包未作限制",
-    "personal_info_clause_missing": "未约定个人信息保护义务",
-    "data_processing_terms_missing": "委托处理要件不完整",
-    "data_cross_border_unclear": "数据出境缺少合规路径",
-    "data_deletion_missing": "未约定数据删除与泄露通知",
+    "acceptance_unclear": "验收标准或期限不明确", #medium, P-06
+    "invoice_unclear": "发票开具约定缺失", #medium, P-07
+    "performance_bond_missing": "履约担保缺失", #大额(>=100w)或含预付的合同缺履约担保medium, P-08
+    "subcontract_unrestricted": "转包/分包未作限制",#未限制转包=medium;"任意转包且甲方无权追责"=high, P-09
+    "personal_info_clause_missing": "未约定个人信息保护义务", #medium, P-10
+    "data_processing_terms_missing": "委托处理要件不完整", #(目的、期限、方式、种类、措施、删除)命中<3项。medium, P-10
+    "data_cross_border_unclear": "数据出境缺少合规路径",#(安全评估/标准合同/认证) high P-11
+    "data_deletion_missing": "未约定数据删除与泄露通知",#medium, P-12
     "confidentiality_no_exception": "保密条款缺少例外",
     "penalty_basis_unclear": "违约金基数不明",
     "penalty_cap_missing": "违约金无上限",
+
+#特殊标注:预警提示，需要人工审核
+    "blank_template_suspected": "疑似空白模板",  
 }
 
 # ContractModel 字段 key → 中文名：用于建议文案/UI 展示,与前端 labels 对齐；
@@ -89,7 +91,7 @@ HIGH_IF_MISSING = ("total_amount", "effective_date", "expiry_date")
 
 # 品类应含条款基线：某字段只在基线内才做"缺失 → medium"检查。
 # 背景：政采校服类天然不写责任上限/保密/IP/适用法律；农副类有保密与适用法律但无责任
-# 上限/IP——没有品类感知会把"品类正常的省略"误报成风险（易错点）。
+# 上限/IP——没有品类感知会把"品类正常的省略"误报成风险。
 # None（历史数据/未分类）按 enterprise_goods 全量处理，向后兼容。
 KIND_BASELINE: dict[str, set[str]] = {
     "enterprise_goods": {"liability_cap", "confidentiality_months", "ip_ownership", "governing_law"},
@@ -120,11 +122,11 @@ def _clause_ref(model: ContractModel, field: str) -> str:
 
 def _mk(
     model: ContractModel,
-    risk_type: str,  # 风险类型编码（评测 ground truth 按此对齐）
+    risk_type: str,  # 风险类型编码
     severity: Severity,  # 风险等级
     field: str,  # 关联 ContractModel 字段名
     suggestion: str,  # 整改建议文案
-    policy_ref: str | None = None,  # 对应政策编号（P-01..P-05）
+    policy_ref: str | None = None,  # 对应政策编号（P-01..）
     evidence: str | None = None,  # 覆盖默认原文证据（金额类"计算型证据"用）
 ) -> RiskItem:
     """RiskItem 小工厂：统一拼证据与条款引用，避免每处规则重复写。
@@ -233,8 +235,7 @@ def _check_dates(model: ContractModel) -> list[RiskItem]:
 
 
 def _term_amount_implausible(term: PaymentTerm, total: Decimal) -> bool:
-    """期次金额是否疑似"把百分比抽进了金额字段"（真实合同走查暴露，2026-09-10）。
-
+    """期次金额是否疑似"把百分比抽进了金额字段"
     背景：合同只写比例（如"预付款（70%）"）时，抽取会把 70 填进 amount；
     金额一致性照算就得到"期次加总 70 元 ≠ 总额 480 万"的假 high 误停闸。
     判定（宁缺毋滥，只拦明显不合常理的形态）：
@@ -693,6 +694,9 @@ def annotate_open_ended_risks(risks: list[RiskItem], text: str) -> list[RiskItem
     # 批3 修正（D36）：保密期没抽到 ≠ 缺保密条款——先按正文语境把文案改准。
     # 放在开放式降级之前、且不受下方早退分支影响（三类开放式语境都没有时也要修）
     risks = _refine_confidentiality_wording(risks, text)
+    # 缺必填的原文定位（2026-09-11 走查）：字段没抽到 → evidence 天然为空，
+    # 这里按字段类型补"该去哪找"的锚点，让风险卡始终能定位原文
+    risks = _annotate_missing_locators(risks, text)
     amount_open = _OPEN_AMOUNT_RE.search(text) is not None
     signing_effect = _SIGNING_EFFECT_RE.search(text) is not None
     date_blank = _DATE_BLANK_RE.search(text) is not None
@@ -743,6 +747,108 @@ def annotate_open_ended_risks(risks: list[RiskItem], text: str) -> list[RiskItem
                         }
                     )
                 )
+                continue
+        out.append(risk)
+    return out
+
+
+def _sentence_quote(text: str, pos: int, max_chars: int = 120) -> str:
+    """取 pos 所在**整句**的摘录（前后切到句读边界），供原文定位/高亮用。
+
+    背景（2026-09-11 走查）：原来用固定宽度的 _text_excerpt，摘录常从半句中间开始
+    （"…求与标准的与本服务项目有关的所有费用…"），前端高亮范围看着像"一大块"。
+    这里按最近的分句标点取整句，再折叠空白、限长。
+    """
+    # 只用句读做边界，**不含换行**——PDF/OCR 文本每行硬换行，含换行会把句子切碎
+    # （实测 "5.2付款方式" 后面紧跟换行，摘录就只剩标题两个字）
+    separators = "。；;"
+    start = max((text.rfind(ch, 0, pos) for ch in separators), default=-1) + 1
+    ends = [text.find(ch, pos) for ch in separators]
+    ends = [e for e in ends if e != -1]
+    end = (min(ends) + 1) if ends else len(text)
+    quote = re.sub(r"\s+", "", text[start:end])
+    return quote[:max_chars]
+
+
+def _locate_missing_field(text: str, field: str | None) -> tuple[str, str]:
+    """缺必填字段的"原文该去哪找"：返回 (clause_ref, evidence 摘录)。
+
+    背景（2026-09-11 走查）：字段没抽到时 evidence 天然为空，风险卡上就没有"原文定位"，
+    用户不知道去哪里补——而缺必填恰恰最需要指路。这里按字段类型在正文里找最可能写该
+    字段的句子（如 总额→"合同总价款/合同金额"、币种→"人民币/币种"、到期日→"有效期/期限"），
+    把它当定位锚点。找不到锚点则返回空（宁缺毋滥，不硬编造位置）。
+    """
+    anchors = _MISSING_FIELD_ANCHORS.get(field or "")
+    if not anchors:
+        return "", ""
+    # 分支：本字段的关键词一个都没出现（如合同通篇只写"价格条款"没写"人民币/币种"）
+    # → 退回到"同类字段"的锚点（币种缺失该补在金额条款，不是没地方可指）
+    fallback = _MISSING_FIELD_FALLBACK.get(field or "")
+    if fallback and not any(re.search(k, text) for k in anchors):
+        anchors = _MISSING_FIELD_ANCHORS.get(fallback, anchors)
+    for keyword in anchors:
+        match = re.search(keyword, text)
+        if match:
+            return _clause_ref_at(text, match.start()), _sentence_quote(text, match.start())
+    return "", ""
+
+
+# 缺必填字段 → 正文锚点关键词（按"先具体后笼统"排序，避免"金额"把无关句子捞出来）
+_MISSING_FIELD_ANCHORS: dict[str, tuple[str, ...]] = {
+    "total_amount": ("合同总价款", "合同总价", "合同金额", "合同价款", "总金额", "金额为", "货款"),
+    "currency": ("币种", "人民币", "合同总价款", "合同金额"),
+    "signature_date": ("签订时间", "签署日期", "签订日期", "签字盖章"),
+    "effective_date": ("之日起生效", "生效条件", "签署并生效", "生效"),
+    # 易错点：别用裸"合同期"——"履行合同期间"这类表述会误命中（实测指到了权利义务条款）
+    "expiry_date": ("有效期", "合同期限", "服务期限", "合作期限", "保修期", "工期"),
+    "buyer": ("甲方", "需方", "买方", "采购人", "委托人", "发包人"),
+    "supplier": ("乙方", "供方", "卖方", "承包人", "供应商", "监理人"),
+    "payment_schedule": ("付款", "支付方式", "结算", "价款支付"),
+    "penalty_rate": ("违约金", "违约责任", "逾期"),
+    "liability_cap": ("赔偿责任", "责任限额", "为上限"),
+    "warranty_months": ("质保", "保修", "质量保证期"),
+    "confidentiality_months": ("保密",),
+    "termination_notice_days": ("解除", "终止", "提前通知"),
+    "ip_ownership": ("知识产权", "成果归属"),
+    "governing_law": ("适用法律", "中华人民共和国法律", "争议解决"),
+    "contract_kind": ("合同",),
+}
+# 同类字段回落：本字段关键词全无时，指向"该字段本该写在哪儿"的同类锚点
+_MISSING_FIELD_FALLBACK: dict[str, str] = {
+    "currency": "total_amount",
+    "payment_schedule": "total_amount",
+}
+
+
+def _annotate_missing_locators(risks: list[RiskItem], text: str) -> list[RiskItem]:
+    """给风险补"原文定位"：缺必填补 evidence（说明即摘录），其余补 evidence_quote。
+
+    两类处理的区别（2026-09-11 走查修复）：
+    - 缺必填：evidence 本就是空的，直接把定位到的原句当 evidence（卡片上就是"原文定位"）；
+    - 字段类规则（预付款/质保/违约金…）：evidence 是规则生成的说明句（"预付款比例 70%"），
+      正文里搜不到，故另存 evidence_quote 供前端滚动/高亮，说明文案保持不变。
+    """
+    if not text:
+        return risks
+    out: list[RiskItem] = []
+    for risk in risks:
+        # 分支：只处理"缺必填"且当前没有定位信息的条目
+        if risk.risk_type == "missing_required_field" and not risk.evidence:
+            ref, evidence = _locate_missing_field(text, risk.field)
+            if evidence:
+                out.append(risk.model_copy(update={"clause_ref": ref, "evidence": evidence}))
+                continue
+            out.append(risk)
+            continue
+        # 分支：说明句本身就在正文里（条款类规则常直接抄原文）→ 直接当摘录用
+        if not risk.evidence_quote and risk.evidence and risk.evidence in text:
+            out.append(risk.model_copy(update={"evidence_quote": risk.evidence}))
+            continue
+        # 分支：说明句不在正文里 → 按字段锚点找一句真正的原文当摘录
+        if not risk.evidence_quote:
+            _, quote = _locate_missing_field(text, risk.field)
+            if quote:
+                out.append(risk.model_copy(update={"evidence_quote": quote}))
                 continue
         out.append(risk)
     return out
@@ -845,6 +951,10 @@ _SUBCONTRACT_RESTRICT_RE = re.compile(
     r"|未经(?:甲方|采购方|委托方).{0,20}(?:同意|许可|批准).{0,16}(?:转包|分包|转委托)"
     r"|(?:转包|分包|转委托).{0,16}(?:须|需|应)经(?:甲方|采购方|委托方).{0,12}(?:书面)?(?:同意|批准|许可)"
     r"|禁止(?:转包|分包)"
+    # 官方示范文本常见"勾选式作答"：（2）否 ☑ 表示不允许转委托（科技部/政采采购文本）
+    # 易错点：PDF 抽取会把选项折行，必须用 [\s\S] 跨行匹配，不能用 [^。\n]
+    r"|(?:转包|分包|转委托)[\s\S]{0,80}?[（(]?2[）)]?\s*否\s*[☑√✓×]"
+    r"|是否[\s\S]{0,30}?(?:转包|分包|转委托)[\s\S]{0,80}?否\s*[☑√✓×]"
 )
 # 转包免责（high）信号：明确允许任意转包且甲方无权追责——比"未限制"更严重，直接 high。
 # 易错点：禁止裸匹配"甲方无权/不得…"（正常合同也有"甲方不得泄露保密信息"类表述），

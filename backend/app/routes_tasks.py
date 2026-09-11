@@ -131,6 +131,9 @@ class TaskListOut(BaseModel):
 
     tasks: list[TaskSummaryOut]
     concurrency: int
+    # 源文件已丢失、被隐藏的历史任务数（早期联调留下的记录）：前端提示一行，
+    # 免得用户以为任务凭空消失（2026-09-11 启动自查）
+    hidden_stale: int = 0
 
 
 def _summary(record) -> TaskSummaryOut:
@@ -171,7 +174,30 @@ def _source_kind(source: str) -> str:
 
     判断依据: 登记路径是否落在 data/contracts 下. 由 get_task_source 调用.
     """
-    return "sample" if str(Path(source).resolve()).startswith(str(CONTRACTS_DIR.resolve())) else "upload"
+    return "sample" if str(_source_path(source).resolve()).startswith(str(CONTRACTS_DIR.resolve())) else "upload"
+
+
+def _source_path(source: str) -> Path:
+    """任务源文件路径：绝对路径直接用；相对路径（历史遗留记录）按仓库根解析。
+
+    易错点：早期联调留下的记录 source 是"sample.md"这种相对路径，直接用
+    Path(source).is_file() 会相对进程工作目录判断，导致文件存在与否判错。
+    """
+    path = Path(source)
+    return path if path.is_absolute() else (BASE_DIR / path)
+
+
+def _is_stale(record) -> bool:
+    """源文件已丢失的终态任务：原文复核不了、点开也是空的，列表里不必展示。
+
+    只隐藏 done/error（历史结论）；pending/processing/gate 一律保留——在跑的或待审批的
+    任务即使文件丢了也要让用户看见，便于定位问题。
+    """
+    return (
+        record.status in ("done", "error")
+        and bool(record.source)
+        and not _source_path(record.source).is_file()
+    )
 
 
 def _clause_blocks(text: str) -> list[dict]:
@@ -193,7 +219,7 @@ def _validated_mode(review_mode: str) -> str:
     """审查模式入参校验：只认 single/double（parallel 未实现，拒绝防误解）。"""
     # 这种情况是：前端/调用方传了没实现的模式 → 400 明确提示
     if review_mode not in ("single", "double"):
-        raise HTTPException(status_code=400, detail=f"不支持的审查模式：{review_mode}（仅 single/double）")
+        raise HTTPException(status_code=400, detail=f"不支持的审查模式：{review_mode}(目前仅 single/double)")
     return review_mode
 
 
@@ -232,10 +258,19 @@ async def upload_task(
 
 @router.get("/tasks", response_model=TaskListOut)
 def list_tasks(manager: TaskManager = Depends(get_manager)) -> dict:
-    """列全部任务摘要与当前并发数(队列页轮询用)."""
+    """列任务摘要与当前并发数(队列页轮询用)；源文件已丢失的历史任务默认隐藏。
+
+    隐藏口径见 _is_stale（只隐藏 done/error，进行中与待审批一律保留），
+    隐藏条数随响应带回 hidden_stale，前端提示一行而不是静默吞掉。
+    """
     records = manager.runner.store.list_records()
+    visible = [r for r in records if not _is_stale(r)]
     # worker_count 用 getattr 兜底：测试注入的假 manager 可能缺该属性，默认 1
-    return {"tasks": [_summary(r) for r in records], "concurrency": getattr(manager, "worker_count", 1)}
+    return {
+        "tasks": [_summary(r) for r in visible],
+        "concurrency": getattr(manager, "worker_count", 1),
+        "hidden_stale": len(records) - len(visible),
+    }
 
 
 @router.delete("/tasks/{thread_id}")
@@ -342,7 +377,7 @@ def get_task_source(
         "name": (record.name or Path(record.source).name) if (record.name or record.source) else "",
         "suffix": Path(record.source).suffix.lower() if record.source else "",
         "kind": _source_kind(record.source) if record.source else "upload",
-        "file_available": bool(record.source and Path(record.source).is_file()),
+        "file_available": bool(record.source and _source_path(record.source).is_file()),
         "text": text,
         "blocks": _clause_blocks(text),
     }
@@ -357,9 +392,9 @@ def get_task_file(
     """
     record = manager.runner.store.get(thread_id)
     # 这种情况是：任务不存在或登记路径没落盘文件 → 404（临时文件可能已被清理）
-    if record is None or not record.source or not Path(record.source).is_file():
+    if record is None or not record.source or not _source_path(record.source).is_file():
         raise HTTPException(status_code=404, detail=f"原文件不存在: {thread_id}")
-    path = Path(record.source)
+    path = _source_path(record.source)
     media_type = _MEDIA_TYPES.get(path.suffix.lower())
     return FileResponse(
         path,

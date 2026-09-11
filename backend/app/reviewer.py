@@ -1,17 +1,18 @@
 """双审盲审：独立复核 LLM + 与主审风险合并。
 
 分工（与 extractor 同思路——LLM 调用做薄、确定性逻辑做厚）：
+
 - blind_review: 唯一调 LLM 的地方。复核 LLM 只拿「合同分条原文 + 政策条文」，
-  不拿主审的抽取字段与风险清单（防锚定/self-check 无效），独立列风险清单；
-- normalize_findings: 纯函数，把模型原始输出（可能漂移/超发/编造类型）
+  不拿主审的抽取字段与风险清单,独立列风险清单；
+
+  - normalize_findings: 纯函数，把模型原始输出（可能漂移/超发/编造类型）
   收敛成 ReviewFinding 列表；
-- merge_review: 纯函数，按 D26 diff 口径与主审风险合并：
-    同 type+severity → 一致（不重复并入）；
-    复核报、主审未报且 high → 复核新增(并入 risks 走既有 gate)
-    都报但 severity 不同 → 取高并标注；
+
+  - merge_review: 把主审的结果和复核的结果diff:
+    同类项同等级->一致（不重复并入）
+    复核报、主审未报且 high → 复核新增,
+    都报但 等级不同 → 取高并标注(复核更高则升级主审项)
     复核报 medium/low 或主审已按空白模板降级 → 只记提示不并入（防噪音/防误停闸）。
-  成本: double 每份只多 1 次 LLM 调用(policy 语料当前 5 条，本地直读全量)；
-  纵向分条/语料规模化后应改为逐条检索命中段落——见 _policy_context 注释）。
 """
 
 from __future__ import annotations
@@ -42,12 +43,15 @@ _REVIEW_HIGH_TYPES = {
     "confidentiality_too_long",
     "penalty_rate_too_high",
     "liability_cap_too_low",
+        "penalty_cap_missing",
 }
 # 政策条文的严重级口径说明（写进盲审 prompt，指导模型与 rules 一致地分级）
 _SEVERITY_GUIDE = (
     "severity 只允许 high（复核只列高风险清单；提示级问题由规则引擎负责，不要输出）：\n"
     "- high：确凿的缺陷——政策阈值违超（预付款超 30%、质保不足 12 个月、责任上限低于品类底线、"
     "保密期超 36 个月、违约金日费率畸高）、付款金额与总额明显不一致、核心字段（总额/生效日/到期日）缺失；\n"
+    "- 违约金按日计罚却没有累计上限（且日费率 ≥0.1%）：同样按 high 报，类型用 penalty_cap_missing，"
+    "evidence 要抄含日费率、且看不出上限的原句；\n"
     "- 提示级（规则引擎已按 medium 提示，复核不得输出、更不得升级成 high）："
     "liability_cap_unclear / confidentiality_missing / ip_ownership_missing / "
     "ip_ownership_unclear / governing_law_missing / date_logic_* / "
@@ -146,7 +150,7 @@ def _verify_high(f: ReviewFinding) -> tuple[bool, str]:
     text = f.evidence or ""
     # 分支：类型不在白名单 → 一律不并入（rules 已按自身口径处理这些类型）
     if f.risk_type not in _REVIEW_HIGH_TYPES:
-        return False, "类型不在复核 high 白名单"
+        return False, "该类型不属可并入的高风险类型"
     # 分支：缺核心必填 → 定性判断，正文没有数字可核，放行（空白模板另有护栏）
     if f.risk_type == "missing_required_field":
         return True, ""
@@ -156,43 +160,57 @@ def _verify_high(f: ReviewFinding) -> tuple[bool, str]:
         # 口径闸：P-01 只约束明确写"预付/首付/备料"的期次，普通分期/里程碑付款
         # 不算（与 rules._prepay_ratio 只认名称含"预付"一致，防 tech_03 里程碑误报）
         if not re.search(r"预付|首付|备料", text):
-            return False, "evidence 无预付款/首付款字样（普通分期不适用 P-01）"
+            return False, "原文无预付款/首付款字样（普通分期不适用 P-01）"
         pct = _first_percent(text)
         if pct is not None:
             ok = pct > 30.0
-            return ok, f"evidence 写 {pct:g}%（>30 才合规支持）" if not ok else ""
+            return ok, f"原文写 {pct:g}%（需 >30% 才支持）" if not ok else ""
         nums = _money_numbers(text)
         # 这种情况是：evidence 里同时有预付款与总额两个金额 → 前除后算比例
         if len(nums) >= 2 and nums[0] < nums[1] and nums[0] > 0:
             ratio = float(nums[0] / nums[1] * 100)
-            return ratio > 30.0, f"由 evidence 算出 {ratio:.1f}%（需 >30）"
-        return False, "evidence 无法解析预付款/总额比例"
+            return ratio > 30.0, f"按原文金额算出 {ratio:.1f}%（需 >30%）"
+        return False, "原文无法解析预付款/总额比例"
     # 质保不足 / 保密过长：evidence 里按年/月写的期限折算后与阈值比
     if f.risk_type == "warranty_too_short":
         months = _months_in(text)
         if months is None:
-            return False, "evidence 无质保月数"
-        return months < 12, f"evidence 质保 {months} 个月（需 <12）"
+            return False, "原文无质保月数"
+        return months < 12, f"原文质保 {months} 个月（需 <12 个月）"
     if f.risk_type == "confidentiality_too_long":
         months = _months_in(text)
         if months is None:
-            return False, "evidence 无保密期月数"
-        return months > 36, f"evidence 保密 {months} 个月（需 >36）"
+            return False, "原文无保密期月数"
+        return months > 36, f"原文保密 {months} 个月（需 >36 个月）"
     # 违约金畸高：须"按日"口径且日率 >1%（"每次按 10%"非日费率，规则不适用）
     if f.risk_type == "penalty_rate_too_high":
         pct = _first_percent(text)
         if pct is None:
-            return False, "evidence 无违约金比例"
+            return False, "原文无违约金比例"
         is_daily = bool(re.search(r"日|按天", text))
         not_occurrence = not bool(re.search(r"每次|按次|每笔", text))
         ok = is_daily and not_occurrence and pct > 1.0
-        return ok, f"evidence 日率 {pct:g}%（需按日且 >1）" if not ok else ""
+        return ok, f"原文日费率 {pct:g}%（需按日且 >1%）" if not ok else ""
+    # 违约金无累计上限（批3 P-14）：evidence 要能看出"按日计罚"，且原句附近没有上限表述。
+    # 口径与 rules._check_penalty_cap_missing 对齐：日费率 ≥0.1% 才算失控敞口。
+    if f.risk_type == "penalty_cap_missing":
+        pct = _first_percent(text)
+        is_daily = bool(re.search(r"每(?:日|天)|按日|每逾期一[日天]|每延期一[日天]|每延迟一[日天]", text))
+        has_cap = bool(re.search(r"不超过|最高不超过|累计不超过|上限|封顶", text))
+        if pct is None:
+            return False, "原文无违约金比例"
+        if not is_daily:
+            return False, "原文看不出按日计罚"
+        if has_cap:
+            return False, "原文已写累计上限"
+        ok = pct >= 0.1
+        return ok, f"原文日费率 {pct:g}%（无上限需 ≥0.1%/日）" if not ok else ""
     # 责任上限过低：品类底线 50/30 视品类而定，evidence 无品类信息 → 只认 <30 的铁证
     if f.risk_type == "liability_cap_too_low":
         # 语义闸：责任上限指"赔偿/责任以总额 X% 为限"；违约金总额上限不算
         # （与 extractor 提示/rules 口径一致，防 tech_01"每次 10%+总额 30%"误报）
         if not re.search(r"赔偿|责任", text):
-            return False, "evidence 是违约金类表述，非赔偿责任上限（P-03 口径）"
+            return False, "原文是违约金类表述，非赔偿责任上限（P-03 口径）"
         pct = _first_percent(text)
         if pct is None:
             return False, "evidence 无责任上限比例"

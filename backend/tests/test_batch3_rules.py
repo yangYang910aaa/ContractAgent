@@ -209,6 +209,101 @@ def test_party_alias_fallback_skips_masked_name() -> None:
     assert model.supplier is None
 
 
+def test_label_value_is_not_taken_as_party_name() -> None:
+    """模型把栏位标签当人名抄回来（"甲方（需方）"）→ 视为未填，不能当主体名展示。"""
+    model = build_contract_model(
+        {"buyer": "甲方（需方）", "supplier": "乙方（供方）"},
+        "甲方（需方）：\n乙方（供方）：\n一、合作方式如下。",
+    )
+    assert model.buyer is None
+    assert model.supplier is None
+    # 真实名称不受影响
+    model2 = build_contract_model({"buyer": "某医院"}, "甲方：某医院\n乙方：某公司\n")
+    assert model2.buyer == "某医院"
+
+
+def test_missing_field_gets_text_locator() -> None:
+    """缺必填字段没抽到证据时，也要按字段在正文里补一个"该去哪找"的定位（走查修复）。"""
+    text = (
+        "第二条 合同总价款为人民币 1,000,000 元（币种：人民币）。\n"
+        "第七条 本合同有效期至 2027 年 3 月 9 日。\n"
+    )
+    # 期望值是"定位到的原句里应当出现的关键词"（锚点是先具体后笼统，命中的是"合同总价款"）
+    for field, expect_in in (("total_amount", "总价款"), ("expiry_date", "有效期"), ("currency", "币种")):
+        risks = [
+            RiskItem(
+                risk_type="missing_required_field",
+                label="缺失必填字段",
+                severity=Severity.medium,
+                field=field,
+                evidence="",
+                suggestion="缺失必填字段，请人工确认或补全后再审。",
+            )
+        ]
+        out = annotate_open_ended_risks(risks, text)[0]
+        assert out.evidence, f"{field} 应有原文定位"
+        assert expect_in in out.evidence
+
+
+def test_missing_field_locator_keeps_existing_evidence() -> None:
+    """已经有证据的条目不被覆盖（只补空）。"""
+    risks = [
+        RiskItem(
+            risk_type="missing_required_field",
+            label="缺失必填字段",
+            severity=Severity.medium,
+            field="total_amount",
+            evidence="原有证据句",
+            suggestion="",
+        )
+    ]
+    out = annotate_open_ended_risks(risks, "第二条 合同总价款为人民币 1,000,000 元。")[0]
+    assert out.evidence == "原有证据句"
+
+
+def test_rule_risk_gets_original_quote_for_locating() -> None:
+    """规则说明句在正文里搜不到时，补 evidence_quote（真原文）供前端定位/高亮。"""
+    text = (
+        "第五条 服务费用的支付\n"
+        "5.2付款方式 第一笔-预付款（70%）：合同签订生效后10个工作日内支付预付款；"
+        "第二笔-尾款（30%）：通过最终验收后支付。\n"
+    )
+    risks = [
+        RiskItem(
+            risk_type="prepayment_ratio_high",
+            label="预付款比例过高",
+            severity=Severity.high,
+            field="payment_schedule",
+            evidence="预付款比例 70%",  # 规则生成的说明句，正文里没有
+            suggestion="降至 30% 以内",
+        )
+    ]
+    out = annotate_open_ended_risks(risks, text)[0]
+    assert out.evidence == "预付款比例 70%"  # 说明文案不动
+    assert out.evidence_quote and "预付款" in out.evidence_quote
+    # 摘录必须真的来自原文（前端靠它滚动/高亮）；摘录已折叠空白，故两边都去空白再比
+    import re as _re
+
+    assert _re.sub(r"\s+", "", out.evidence_quote) in _re.sub(r"\s+", "", text)
+
+
+def test_attached_text_used_directly_as_quote() -> None:
+    """条款类风险的 evidence 本来就是原文 → 直接当摘录，不需要另找。"""
+    text = "第七条 保密条款 双方对因履行本合同而知悉的对方商业秘密负有保密义务。"
+    risks = [
+        RiskItem(
+            risk_type="confidentiality_no_exception",
+            label="保密条款缺少例外",
+            severity=Severity.medium,
+            clause_ref="第七条",
+            evidence="不得向任何第三方披露",
+            suggestion="补充例外",
+        )
+    ]
+    out = annotate_open_ended_risks(risks, text)[0]
+    assert out.evidence_quote == "" or out.evidence_quote in text
+
+
 def test_party_alias_fallback_skips_field_label() -> None:
     """栏位标签（签订时间）不是公司名 → 保持 None（小麦合同实测踩过的坑）。"""
     text = "卖方：\n签订时间：2023年5月1日\n买方：某粮油管理所有限公司\n"

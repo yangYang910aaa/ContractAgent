@@ -197,3 +197,25 @@ def test_resume_on_non_gate_raises() -> None:
     runner.start("ok.md", text="正常正文")
     with pytest.raises(ValueError):
         runner.resume(runner.last_thread_id, action="approved")
+def test_gate_payload_carries_review_and_quote() -> None:
+    """闸口载荷带上复核结论与原文摘录：审批人在放行前能看到盲审发现并做原文定位。"""
+    from backend.app.graph import _build_gate_payload
+
+    state = {
+        "risks": [
+            {
+                "risk_type": "prepayment_ratio_high",
+                "severity": "high",
+                "evidence": "预付款比例 70%",
+                "evidence_quote": "第一笔-预付款（70%）：合同签订生效后10个工作日内支付预付款",
+                "origin": "rules",
+            }
+        ],
+        "grade": "fail",
+        "review": {"mode": "double", "stats": {"added": 1, "noted": 0}, "summary": "1 条为复核新增"},
+    }
+    payload = _build_gate_payload(state)
+    assert payload["high_risks"][0]["evidence_quote"].startswith("第一笔-预付款")
+    assert payload["review"]["mode"] == "double"
+    assert payload["review"]["stats"]["added"] == 1
+

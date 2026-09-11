@@ -54,26 +54,34 @@ class ContractModel(BaseModel):
     金额统一为 Decimal(元)；比例统一为百分比数值（如 0.05 = 0.05% 每日）。
     """
 
-    buyer: str | None = None  # 采购方名称
-    # 合同品类：规则按品类判断"应含条款"基线（如校服类天然不含责任上限/保密条款，
-    # 企业采购默认含全）；None 按 enterprise_goods 处理（向后兼容）
-    contract_kind: Literal["enterprise_goods", "gov_goods", "agri_goods", "tech_service"] | None = None
-    supplier: str | None = None  # 供应商名称
-    signature_date: date | None = None  # 合同签订日期
-    effective_date: date | None = None  # 合同生效日期
-    expiry_date: date | None = None  # 合同过期日期
+    #1. 主体与品类:品类默认是企业货物采购,剩下的分别是政府采购,农副产品买卖,技术开发/软件/服务
+    contract_kind: Literal["enterprise_goods", "gov_goods", "agri_goods", "tech_service"] | None = None  # 合同品类
+    buyer: str | None = None  # (甲方)采购方名称
+    supplier: str | None = None  # (乙方)供应商名称
+
+    #2. 日期：生效日不能早于签署日，到期日必须晚于生效日
+    signature_date: date | None = None  # 签署日期
+    effective_date: date | None = None  # 生效日期
+    expiry_date: date | None = None  # 到期日
+
+    #3. 金额与付款:各期加总≈总额(偏差<=1%),预付款<=30%
     total_amount: Decimal | None = None  # 合同总额（元）
     currency: str | None = None  # 合同货币（如 CNY）
-    payment_schedule: list[PaymentTerm] = Field(default_factory=list)
-    penalty_rate: float | None = None  # 逾期违约金：每日百分比（1.5 = 日 1.5%）
-    liability_cap: float | None = None  # 责任上限：占合同总额百分比（100 = 全额）
+    payment_schedule: list[PaymentTerm] = Field(default_factory=list) #付款计划(列表,每期含名字,金额,比例,证据说明)
+
+    #4. 违约与责任:日利率>1%=>略高。 责任上限<品类底线(企业50%/技术30%)=>过低
+    penalty_rate: float | None = None  # 乙方逾期违约金利率：每日百分比（1.5 = 日 1.5%）
+    liability_cap: float | None = None  # 赔偿责任上限：占合同总额百分比（100 = 全额）
+
+    #5. 质保/终止IP/保密/法律
     warranty_months: int | None = None  # 保修期（月）
-    termination_notice_days: int | None = None  # 终止通知期（天）
+    termination_notice_days: int | None = None  # 解约提前通知期（天）
     ip_ownership: str | None = None  # IP 权属（如 "采购方"）
     confidentiality_months: int | None = None  # 保密期（月）
     governing_law: str | None = None  # 适用法律（如 "中国法律"）
 
-    # 字段级证据（extractor 填写，rules/报告引用）
+    #6. 字段级证据（extractor 填写，rules/报告引用）
+    #key=字段名,value=Evidence(quote摘录,clause_ref条款号,confidence置信度,needs_human_review是否需要人工确认)
     extraction_meta: dict[str, Evidence] = Field(default_factory=dict)
 
 
@@ -88,6 +96,10 @@ class RiskItem(BaseModel):
     severity: Severity  # 风险等级（如 high）
     clause_ref: str = ""  # 条款引用
     evidence: str = ""  # 证据说明
+    # 原文摘录（定位/高亮用）：evidence 常是规则生成的说明句（如"预付款比例 70%"），
+    # 在正文里搜不到 → 前端只能落到"纯文本"兜底。这里存一句**真正的原文**，
+    # 由 rules 的定位 pass 填（2026-09-11 走查：点"原文定位"跳纯文本且不高亮）
+    evidence_quote: str = ""
     policy_ref: str | None = None  # 政策引用（如 "政策库检索结果）
     suggestion: str = ""  # 建议
     field: str | None = None  # 关联的 ContractModel 字段名

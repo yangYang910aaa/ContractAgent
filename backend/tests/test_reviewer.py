@@ -379,3 +379,25 @@ def test_double_reviewer_failure_falls_back_to_main() -> None:
     )
     assert state["report"]["grade"] == "pass"
     assert "盲审失败" in state["report"]["review"]["error"]
+def test_verify_high_accepts_penalty_cap_missing() -> None:
+    """批3 新增闸口类型：按日 ≥0.1% 且无上限 → 复核门放行（走查修复：此前漏登记白名单）。"""
+    from backend.app.reviewer import ReviewFinding, Severity, _verify_high
+
+    daily_uncapped = ReviewFinding(
+        risk_type="penalty_cap_missing",
+        severity=Severity.high,
+        evidence="乙方逾期交付工程的，每延期一日，乙方应按照合同总金额的1%承担违约责任。",
+    )
+    ok, why = _verify_high(daily_uncapped)
+    assert ok, why
+
+    # 分情形：写了累计上限 / 不是按日 / 日费率过低 → 都不放行
+    capped = daily_uncapped.model_copy(
+        update={"evidence": "每延期一日按合同总金额的1%承担违约金，累计不超过合同总价的10%。"}
+    )
+    assert _verify_high(capped)[0] is False
+    not_daily = daily_uncapped.model_copy(update={"evidence": "每次违约按合同总金额的1%支付违约金。"})
+    assert _verify_high(not_daily)[0] is False
+    tiny = daily_uncapped.model_copy(update={"evidence": "每延期一日按合同总金额的0.05%承担违约责任。"})
+    assert _verify_high(tiny)[0] is False
+
