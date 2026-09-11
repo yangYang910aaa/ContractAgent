@@ -68,6 +68,11 @@ class SampleSpec:
     invoice_clause: bool = True  # False=付款方式节不写开票句（P-07 缺陷：缺发票约定）
     performance_bond_clause: bool = True  # False=不写履约担保节（P-08 缺陷：大额/预付缺担保）
     subcontract_clause: str = "restrict"  # restrict=不得转包 / waiver=任意转包免责(P-09 high) / none=不写
+    # 批3（P-13/P-14）合规开关：None=保持旧写法（存量样本文本不动，防止基线漂移）；
+    # True=保密条款写明例外；False=绝对禁止式、无例外（sample_21 缺陷）
+    confidentiality_exception: bool | None = None
+    # True=违约金句只写费率不写基数（sample_22 缺陷：基数不明）
+    penalty_basis_unclear: bool = False
 
 
 SPECS: list[SampleSpec] = [
@@ -554,6 +559,84 @@ DATA_SPECS: list[DataSampleSpec] = [
         payment_terms=[("预付款", "300,000", 20), ("验收合格后支付", "1,200,000", 80)],
         deletion_and_breach=False,  # 缺陷：无删除/返还与安全事件通知（P-12）
         note="缺陷：未约定数据删除/返还，也未约定泄露等安全事件告知义务，P-12 应报 medium。",
+    ),
+    # ---- 批3（P-13/P-14）：保密例外、违约金基数与上限 ----
+    # sample_21：缺陷 = 保密条款绝对禁止式、无任何例外（P-13 medium）
+    SampleSpec(
+        sample_id="sample_21",
+        filename="sample_21_精密仪器采购合同_缺保密例外.md",
+        contract_no="HT-2026-0116",
+        title="精密仪器采购合同",
+        buyer="华辰智造科技有限公司",
+        supplier="恒信精密仪器有限公司",
+        signature_date="2026年9月8日",
+        effective_date="2026年9月8日",
+        expiry_date="2027年9月7日",
+        total_amount="960,000",
+        payment_terms=[
+            ("预付款", "192,000", 20),
+            ("验收合格后支付", "768,000", 80),
+        ],
+        confidentiality_exception=False,  # 缺陷：只写"不得向任何第三方披露"，无任何例外
+        note="缺陷：保密条款未留任何例外（法定/监管披露、已公开、书面同意），P-13 应报 medium。",
+    ),
+    # sample_22：缺陷 = 违约金只写费率不写基数（P-14 medium）
+    SampleSpec(
+        sample_id="sample_22",
+        filename="sample_22_包装材料采购合同_违约金基数不明.md",
+        contract_no="HT-2026-0117",
+        title="包装材料采购合同",
+        buyer="启明电子商务有限公司",
+        supplier="通达包装制品有限公司",
+        signature_date="2026年9月9日",
+        effective_date="2026年9月9日",
+        expiry_date="2027年3月8日",
+        total_amount="680,000",
+        payment_terms=[
+            ("预付款", "136,000", 20),
+            ("验收合格后支付", "544,000", 80),
+        ],
+        penalty_basis_unclear=True,  # 缺陷：违约金句只写 0.05%，不写计算基数
+        note="缺陷：违约金只写费率未写基数（按总额还是逾期部分、是否含税），P-14 应报 medium。",
+    ),
+    # sample_23：缺陷 = 按日违约金 0.5% 且全文无累计上限（P-14 high，批3 闸口点）
+    SampleSpec(
+        sample_id="sample_23",
+        filename="sample_23_环保设备采购合同_违约金无上限.md",
+        contract_no="HT-2026-0118",
+        title="环保处理设备采购合同",
+        buyer="晨光数据服务有限公司",
+        supplier="绿源环保装备有限公司",
+        signature_date="2026年9月10日",
+        effective_date="2026年9月10日",
+        expiry_date="2027年9月9日",
+        total_amount="2,400,000",
+        payment_terms=[
+            ("预付款", "480,000", 20),
+            ("验收合格后支付", "1,920,000", 80),
+        ],
+        penalty_daily_percent=0.5,  # 高日费率
+        liability_cap_percent=None,  # 且无责任上限句 → 违约金无任何封顶
+        note="缺陷：按日 0.5% 违约金且无累计上限，P-14 应报 high（长期拖延可超合同总额）。",
+    ),
+    # sample_24：批3 正常对照（保密含例外 + 违约金基数与上限齐全，应零风险 pass）
+    SampleSpec(
+        sample_id="sample_24",
+        filename="sample_24_劳保用品采购合同_正常.md",
+        contract_no="HT-2026-0119",
+        title="劳保用品采购合同",
+        buyer="星辰智造科技有限公司",
+        supplier="安泰劳保用品有限公司",
+        signature_date="2026年9月11日",
+        effective_date="2026年9月11日",
+        expiry_date="2027年9月10日",
+        total_amount="420,000",
+        payment_terms=[
+            ("预付款", "84,000", 20),
+            ("验收合格后支付", "336,000", 80),
+        ],
+        confidentiality_exception=True,  # 正常：保密例外齐全
+        note="正常对照：保密含法定/监管披露例外、违约金基数与上限齐全，应零风险 pass。",
     ),
 ]
 
@@ -1127,11 +1210,18 @@ def _penalty_lines(spec: SampleSpec) -> list[str]:
 
     分支：配置了责任上限 → 渲染上限句；未配置 → 写「按法律规定承担」兜底句，
     避免正文出现空条款。
+    分支：penalty_basis_unclear=True（批3 缺陷）→ 违约金句只写费率不写基数。
     """
-    lines = [
-        f"乙方逾期交付的，每逾期一日按合同总价款的 "
-        f"{spec.penalty_daily_percent:g}% 向甲方支付违约金。"
-    ]
+    # 分支 0：基数不明缺陷（sample_22）→ 句内不出现任何计算基数
+    if spec.penalty_basis_unclear:
+        lines = [
+            f"乙方逾期交付的，每逾期一日按 {spec.penalty_daily_percent:g}% 向甲方支付违约金。"
+        ]
+    else:
+        lines = [
+            f"乙方逾期交付的，每逾期一日按合同总价款的 "
+            f"{spec.penalty_daily_percent:g}% 向甲方支付违约金。"
+        ]
     # 分支 1：有责任上限配置 → 正文写明上限比例
     if spec.liability_cap_percent is not None:
         lines.append(
@@ -1149,6 +1239,21 @@ def _confidentiality_lines(spec: SampleSpec) -> list[str]:
     # 分支：confidentiality_clause=False（如 sample_04）→ 返回空，整节不渲染
     if not spec.confidentiality_clause:
         return []
+    # 分支 1：批3 正常对照 → 写明法定/监管披露、已公开、书面同意等例外
+    if spec.confidentiality_exception is True:
+        return (
+            "双方对因履行本合同而知悉的对方商业秘密负有保密义务；除法律法规要求、"
+            "监管或司法机关要求披露，以及已公开信息、经对方书面同意外，不得向第三方披露。",
+            f"保密期限自本合同终止之日起 {spec.confidentiality_months} 个月。",
+        )
+    # 分支 2：批3 缺陷 sample_21 → 绝对禁止式、无任何例外
+    if spec.confidentiality_exception is False:
+        return (
+            "双方对因履行本合同而知悉的对方商业秘密负有保密义务，"
+            "不得向任何第三方披露、提供或公开。",
+            f"保密期限自本合同终止之日起 {spec.confidentiality_months} 个月。",
+        )
+    # 分支 3：未指定（存量样本）→ 维持旧写法，避免存量语料文本漂移
     return (
         "双方对因履行本合同而知悉的对方商业秘密负有保密义务。",
         f"保密期限自本合同终止之日起 {spec.confidentiality_months} 个月。",

@@ -40,7 +40,9 @@ RISK_LABELS: dict[str, str] = {
     "warranty_too_short": "质保期不足",
     "liability_cap_unclear": "责任上限未明确",
     "liability_cap_too_low": "责任上限过低",
-    "confidentiality_missing": "缺少保密条款",
+    # 批3 修正（D36）：判据是"保密期字段没抽到"，正文可能已写保密义务——
+    # 展示名放宽为"条款或期限"，具体是哪种由 _refine_confidentiality_wording 按正文改写建议
+    "confidentiality_missing": "缺少保密条款或未约定期限",
     "confidentiality_too_long": "保密期过长",
     "penalty_rate_too_high": "违约金比例畸高",
     "ip_ownership_missing": "未约定知识产权归属",
@@ -55,6 +57,10 @@ RISK_LABELS: dict[str, str] = {
     "data_processing_terms_missing": "委托处理要件不完整",
     "data_cross_border_unclear": "数据出境缺少合规路径",
     "data_deletion_missing": "未约定数据删除与泄露通知",
+    # 批3（P-13/P-14）：保密例外与违约金基数/上限
+    "confidentiality_no_exception": "保密条款缺少例外",
+    "penalty_basis_unclear": "违约金基数不明",
+    "penalty_cap_missing": "违约金无上限",
 }
 
 # ContractModel 字段 key → 中文名：用于建议文案/UI 展示,与前端 labels 对齐；
@@ -531,8 +537,11 @@ _BLANK_PATTERN_RE: dict[str, re.Pattern] = {
     # 填空式条款的空标点/空单位（霸王花式模板："标准是 ；""定金 元"）：
     # 易错点——PDF 排版抽取也会在正常句子里带出"空格+标点/单位"，故仅在"未填写文本"
     # 场景参与判定（见 _looks_filled），已填写合同里这两类一律忽略
-    "void_punct": re.compile(r"[\u4e00-\u9fff%][：:]?[\s\u3000]{1,3}[。；,，．]"),
-    "void_unit": re.compile(r"[ \u3000](?:%|元|日内|天内|项|种方式|方)"),
+    # 批3 修正（D36）：① 只认空格/全角空格，不认换行——PDF 折行会造出"值\n，"这种
+    # 假空标点（电煤合同即因此被判空白模板）；② 单位前后紧邻数字说明该值已填
+    # （"见票后 30 天内支付"不是空白位），故加数字邻接限制
+    "void_punct": re.compile(r"[\u4e00-\u9fff%][：:]?[ \u3000]{1,3}[。；,，．]"),
+    "void_unit": re.compile(r"(?<![\d])[ \u3000](?:%|元|日内|天内|项|种方式|方)(?![\s\u3000]*[\d≤≥<])"),
 }
 
 # 已填写合同的形态特征：有带数字的年份/年月 + 数字化金额（真实已签合同/正常样本都满足；
@@ -641,6 +650,9 @@ _OPEN_AMOUNT_RE = re.compile(
     r"|按实际发生|按批次结算|框架(?:协议|合同)|按需下单|对账后付款"
     r"|每月|每个月|按季|按季度|对账|对帐|结算单|结算上月|按供货批次"
     r"|订单要求|以订单为准|订单结算|订单方式|按批下单"
+    # 批3 补农副定价口径（D36 泛化集：江苏小麦"随行就市 + 过磅计量 + 批次收购"
+    # 本就没有固定总额，缺总额被判 high 误停闸）
+    r"|随行就市|随市定价|保底价|浮动价|按质论价|按质计价|计量过磅|过磅|按等级|等级差价"
 )
 # "签字/盖章之日起生效"句式：生效规则明确，但正文未写具体签署日期
 _SIGNING_EFFECT_RE = re.compile(r"(?:签字|盖章|签名)[^。\n]{0,12}生效")
@@ -655,7 +667,11 @@ _EFFECTIVE_FROM_SIGN_RE = re.compile(
 _CONCRETE_END_RE = re.compile(r"(?:至|到|截止)\s*\d{4}\s*年")
 # 日期栏空白：出现"年 月 日"三连但中间没有数字（签署栏/期限栏未填），
 # 真实合同走查 2026-09-10：已签合同正文只留空白签署日期栏，抽取拿不到日期就判 high
-_DATE_BLANK_RE = re.compile(r"(?<!\d)\s*年[ ＿_\u3000]{0,6}月[ ＿_\u3000]{0,6}日")
+# 批3 补：打码占位日期（"202*年*月*日""202X年"）同属"日期未定"，真实电煤竞价件即此形态
+_DATE_BLANK_RE = re.compile(
+    r"(?<!\d)[\s*＊xX×·【】\[\]〔〕]{0,6}年"
+    r"[\s*＊xX×·＿_\u3000【】\[\]〔〕]{0,6}月[\s*＊xX×·＿_\u3000【】\[\]〔〕]{0,6}日"
+)
 
 
 def annotate_open_ended_risks(risks: list[RiskItem], text: str) -> list[RiskItem]:
@@ -669,6 +685,9 @@ def annotate_open_ended_risks(risks: list[RiskItem], text: str) -> list[RiskItem
     """
     if not text:
         return risks
+    # 批3 修正（D36）：保密期没抽到 ≠ 缺保密条款——先按正文语境把文案改准。
+    # 放在开放式降级之前、且不受下方早退分支影响（三类开放式语境都没有时也要修）
+    risks = _refine_confidentiality_wording(risks, text)
     amount_open = _OPEN_AMOUNT_RE.search(text) is not None
     signing_effect = _SIGNING_EFFECT_RE.search(text) is not None
     date_blank = _DATE_BLANK_RE.search(text) is not None
@@ -720,6 +739,36 @@ def annotate_open_ended_risks(risks: list[RiskItem], text: str) -> list[RiskItem
                     )
                 )
                 continue
+        out.append(risk)
+    return out
+
+
+def _refine_confidentiality_wording(risks: list[RiskItem], text: str) -> list[RiskItem]:
+    """把保密期未抽取的提示文案改准：正文有保密义务时不说"缺少保密条款"。
+
+    背景（D36 泛化集）：字段规则 `confidentiality_missing` 的判据只是
+    `confidentiality_months is None`，文案却写"缺少保密条款"——真实 10 份合同里
+    8 份命中、其中 6 份正文明明写了保密义务（有的还成章节），客户视角就是误报。
+    判定口径：正文有保密义务信号 → 文案改"未约定保密期限"；完全没有 → 保留原文案。
+    返回新列表，不修改入参。
+    """
+    if not (text or "") or not _CONF_OBLIGATION_RE.search(text):
+        return risks
+    out: list[RiskItem] = []
+    for risk in risks:
+        # 分支：保密期字段没抽到、但正文确有保密义务 → 只改文案，类型/严重级不动
+        if risk.risk_type == "confidentiality_missing":
+            out.append(
+                risk.model_copy(
+                    update={
+                        "suggestion": (
+                            "正文已约定保密义务，但未明确保密期限，建议按 P-04 补充"
+                            "（保密期宜 24 个月以上、不超过 36 个月）。"
+                        )
+                    }
+                )
+            )
+            continue
         out.append(risk)
     return out
 
@@ -1102,16 +1151,212 @@ def _check_data_deletion(text: str) -> RiskItem | None:
     )
 
 
+# ---- 批3 文本规则（P-13 保密例外 / P-14 违约金基数与上限）----
+
+# 保密义务信号：正文写了保密安排，才谈"例外缺不缺"
+_CONF_OBLIGATION_RE = re.compile(r"保密(?:义务|责任|条款|信息|内容)|负有保密|商业秘密|技术秘密|保密资料")
+# 绝对禁止式披露（素材清单描述的目标缺陷形态："只写不得向任何第三方披露"）。
+# 易错点：不能把普通"负有保密义务"也当缺陷——存量 32 份语料大多只有义务句，
+# 那样会大面积新增 medium；批3 开工前离线验证：绝对式在旧语料上 0 命中。
+_CONF_ABSOLUTE_RE = re.compile(
+    r"不得(?:向|对)?(?:任何)?(?:第三方|第三人|他人|其他单位|任何单位)(?:披露|泄露|提供|公开)"
+    r"|一律不得披露|严禁(?:向|对外)?披露"
+)
+# 保密例外信号：法定/监管/司法披露、已公开、独立开发、经对方书面同意、履约所必需、除外条款
+_CONF_EXCEPTION_RE = re.compile(
+    r"法律规定|法律法规|依法(?:披露|提供)|监管(?:机关|部门|机构)|司法(?:机关)?要求|法院"
+    r"|仲裁.{0,6}要求|已(?:进入)?公开|公开(?:信息|领域)|公共领域|独立(?:开发|研发)|书面同意"
+    r"|为履行.{0,8}(?:所必需|必要)|除外"
+)
+# 例外判定的"紧邻短句"上限（字符）：例外也可能写成紧随其后的独立短句
+# （"……不得披露。法律法规另有规定的除外。"）。易错点——按固定字符窗口（±120/±60）
+# 判定会把隔壁条款的"未经甲方书面同意"（转包）误当保密例外（批3 实测两次踩坑），
+# 故改为"同一句 + 仅当紧邻句以除外类引导词开头才并入"
+_CONF_EXCEPTION_TAIL_CHARS = 60
+_CONF_EXCEPTION_TAIL_RE = re.compile(r"\s*(?:除|但|法律|法规|监管|司法)")
+
+# 比例型违约金数值：万分之X / 千分之X / N% / N‰
+_PENALTY_PCT_RE = re.compile(
+    r"万分之[\d一二三四五六七八九十]+|千分之[\d一二三四五六七八九十]+"
+    r"|[0-9]+(?:\.[0-9]+)?\s*%|[0-9]+(?:\.[0-9]+)?‰"
+)
+# 违约金基数词：句内出现任何一个"金额/数量类名词"即视为基数已明确。
+# 教训（批3 实跑）：起初按品类逐个枚举（合同总价/技术开发费/订单金额…），结果真实合同
+# 的写法永远多一种——"延期货款""订单总金额""当批货物总额"接连漏判，反而制造误报；
+# 改为宽口径识别名词类别（判"有没有说清按什么算"），判不准时宁可不报。
+_PENALTY_BASIS_RE = re.compile(
+    r"金额|价款|货款|总价|总额|费用|价格|单价|造价|结算价|数量|基数|标准|部分|订单|批次|合同价"
+)
+# 按日计罚信号（"每逾期一日/按日/每拖延一天"）
+_PENALTY_DAILY_RE = re.compile(r"每(?:日|天)|按日|每逾期一[日天]|每延迟一[日天]|每拖延一[日天]|每推迟一[日天]")
+# 违约金上限信号
+_PENALTY_CAP_RE = re.compile(r"不超过|最高不超过|累计不超过|上限|封顶|以.{0,8}为限")
+# 上限回溯窗口（字符）：只看命中处之后这么远，避免把别处的上限借过来当本条封顶
+# （真实钢结构合同：0.5%/日 那句之后 271 字才是另一条款的"不超过 8%"）
+_PENALTY_CAP_WINDOW = 150
+# 无上限判定的日费率门槛（%/日）：0.05%/日是行业常见写法，无上限的实际敞口有限
+# （100 天累计 5%），报出来只是噪音；0.5%/日 这类高费率无封顶才会失控（真实钢结构件）
+_PENALTY_UNCAPPED_MIN_DAILY_PERCENT = 0.1
+# 基数判定的回看窗口（字符）：PDF 抽取常在"按合同价款的"与"1‰"之间插换行，
+# 只看命中所在"句"会把基数词切到上一行（真实钢结构合同即如此）→ 往前多看 80 字。
+# 方向仍以"宁可不报"为准：窗口内出现金额类名词就认为基数已写明。
+_PENALTY_BASIS_LOOKBACK = 25
+# 中文数字 → 数值（万分之X/千分之X 的 X 可能是中文，模板与真实合同都常见）
+_CN_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def _daily_penalty_percent(sentence: str) -> float | None:
+    """从违约金句里取日费率（%/日）；取不到返回 None（宁缺毋滥，不据此定罪）。
+
+    覆盖真实写法：0.5% / 5‰ / 万分之三 / 千分之五；多个数值取最大（同句常同时写
+    "万分之三"与"0.03%"两种等价表述）。
+    """
+    values: list[float] = []
+    for num in re.finditer(r"(\d+(?:\.\d+)?)\s*%", sentence):
+        values.append(float(num.group(1)))
+    for num in re.finditer(r"(\d+(?:\.\d+)?)\s*‰", sentence):
+        values.append(float(num.group(1)) / 10)  # 1‰ = 0.1%
+    for cn in re.finditer(r"万分之([\d一二三四五六七八九十]+)", sentence):
+        raw = cn.group(1)
+        values.append((float(raw) if raw.isdigit() else _CN_DIGITS.get(raw, 0)) / 100)
+    for cn in re.finditer(r"千分之([\d一二三四五六七八九十]+)", sentence):
+        raw = cn.group(1)
+        values.append((float(raw) if raw.isdigit() else _CN_DIGITS.get(raw, 0)) / 10)
+    return max(values) if values else None
+
+
+def _sentence_span(text: str, pos: int) -> tuple[int, int]:
+    """取 pos 所在句子的起止下标（句读按 。；;\\n 切），供"句内口径"判定用。
+
+    易错点：基数这类判定必须在句内看——跨句会把责任上限句里的"合同总价款"
+    借来当违约金基数，把真实缺陷判成合规。
+    """
+    start = max((text.rfind(ch, 0, pos) for ch in "。；;\n"), default=-1) + 1
+    ends = [text.find(ch, pos) for ch in "。；;\n"]
+    ends = [e for e in ends if e != -1]
+    return start, (min(ends) if ends else len(text))
+
+
+def _check_confidentiality_no_exception(text: str) -> RiskItem | None:
+    """P-13 保密例外检查：保密条款写成"绝对不得披露"且无任何例外 → medium。
+
+    口径（买方视角）：我方常有法定/监管披露义务（审计、监管报送、诉讼举证），
+    条款若一律禁止披露，履行法定义务反而违约 → 提示补例外。
+    触发刻意收紧为"绝对禁止式"措辞，普通保密义务句不报（防存量语料大面积误报）。
+    """
+    for m in _CONF_ABSOLUTE_RE.finditer(text):
+        # 例外信号要在同一句内出现才算"有例外"（远处争议解决条款的"法院"不算）
+        start, end = _sentence_span(text, m.start())
+        scope = text[start:end]
+        # 例外也可能写成紧随其后的独立短句，但只认以除外类引导词开头的下一句
+        tail = text[end + 1 : end + 1 + _CONF_EXCEPTION_TAIL_CHARS]
+        if _CONF_EXCEPTION_TAIL_RE.match(tail):
+            scope += tail
+        if _CONF_EXCEPTION_RE.search(scope):
+            continue
+        return RiskItem(
+            risk_type="confidentiality_no_exception",
+            label=RISK_LABELS["confidentiality_no_exception"],
+            severity=Severity.medium,
+            clause_ref=_clause_ref_at(text, m.start()),
+            evidence=_text_excerpt(text, m.start()),
+            policy_ref="P-13",
+            suggestion=(
+                "保密条款只写“不得向第三方披露”、未留任何例外，建议按 P-13 补充：法律法规或"
+                "监管/司法机关要求披露、已公开信息、独立开发、经对方书面同意等情形不属于违约。"
+            ),
+            field=None,
+        )
+    return None
+
+
+def _check_penalty_basis_unclear(text: str) -> RiskItem | None:
+    """P-14 违约金基数检查：句内写了比例违约金却没写基数 → medium。
+
+    基数不明（按总额还是未履行部分、是否含税）会让违约金无法计算、争议时各执一词。
+    """
+    for m in _PENALTY_PCT_RE.finditer(text):
+        start, end = _sentence_span(text, m.start())
+        sentence = text[start:end]
+        # 分支 1：本句没提违约金（如责任上限句的百分比）→ 不属本规则
+        if "违约金" not in sentence:
+            continue
+        # 分支 2：本句（含往前 80 字，PDF 换行会把基数词切到上一行）已写基数 → 合规
+        window = text[max(start - _PENALTY_BASIS_LOOKBACK, 0) : end]
+        if _PENALTY_BASIS_RE.search(window):
+            continue
+        # 分支 3：写了比例却没写基数 → medium
+        return RiskItem(
+            risk_type="penalty_basis_unclear",
+            label=RISK_LABELS["penalty_basis_unclear"],
+            severity=Severity.medium,
+            clause_ref=_clause_ref_at(text, m.start()),
+            evidence=_text_excerpt(text, m.start()),
+            policy_ref="P-14",
+            suggestion=(
+                "违约金只写了比例、未写明计算基数（合同总价/未履行部分/逾期部分，是否含税），"
+                "建议按 P-14 明确基数与计算方式。"
+            ),
+            field=None,
+        )
+    return None
+
+
+def _check_penalty_cap_missing(text: str) -> RiskItem | None:
+    """P-14 违约金上限检查：按日计罚且近旁无上限 → high（长期拖延可超本金）。
+
+    口径：按日比例若无封顶，工期越长违约金越高、可能超过合同总额本身，对买方同样是
+    失控敞口；上限句通常紧跟违约金句，故只看命中后的固定窗口，不取全文
+    （真实合同里别的条款写了上限，不能算本条的封顶）。
+    """
+    hit = None
+    rate: float | None = None
+    for m in _PENALTY_DAILY_RE.finditer(text):
+        start, end = _sentence_span(text, m.start())
+        sentence = text[start:end]
+        # 分支：本句没提违约金（如"每日巡检"）→ 继续找下一处
+        if "违约金" not in sentence:
+            continue
+        hit, rate = m, _daily_penalty_percent(sentence)
+        break
+    # 分支 1：没有按日违约金 → 不套本规则（按次/一次性违约金走 P-03 口径）
+    if hit is None:
+        return None
+    # 分支 2：日费率取不到、或低于门槛（0.05%/日 等常见写法）→ 不报（防噪音：低费率
+    #    无上限的敞口有限，真实语料里这类写法很普遍）
+    if rate is None or rate < _PENALTY_UNCAPPED_MIN_DAILY_PERCENT:
+        return None
+    # 分支 3：近旁写了上限（不超过/最高不超过/为限…）→ 视为已封顶
+    if _PENALTY_CAP_RE.search(text[hit.start() : hit.start() + _PENALTY_CAP_WINDOW]):
+        return None
+    # 分支 4：日费率高且无上限 → high
+    return RiskItem(
+        risk_type="penalty_cap_missing",
+        label=RISK_LABELS["penalty_cap_missing"],
+        severity=Severity.high,
+        clause_ref=_clause_ref_at(text, hit.start()),
+        evidence=_text_excerpt(text, hit.start()),
+        policy_ref="P-14",
+        suggestion=(
+            f"逾期违约金按日 {rate:g}% 计收却没有累计上限（长期拖延将超过合同总额），"
+            "建议按 P-14 增加“违约金总额不超过合同总价款 X%”的上限。"
+        ),
+        field=None,
+    )
+
+
 def text_rules(text: str, kind: str | None) -> list[RiskItem]:
-    """文本级条款基线检查：对原文做 P-06~P-12 的存在性/语义检查，输出 RiskItem 列表。
+    """文本级条款基线检查：对原文做 P-06~P-14 的存在性/语义检查，输出 RiskItem 列表。
 
     与 evaluate()（字段级规则）互补：本函数不新增抽取字段，只看"条款该不该写、
-    写了什么"；clause_ref/evidence 摘原文，policy_ref 挂 P-06~P-12。
+    写了什么"；clause_ref/evidence 摘原文，policy_ref 挂 P-06~P-14。
     调用时机：evaluate() 之后、annotate_template_risks() 同层（pipeline/graph 接线）。
     kind 为 None 时按 enterprise_goods 处理（与 KIND_BASELINE 的 None 兜底口径一致）。
     空白模板（占位 ≥2 类）直接返回空：模板到处缺内容，补条款提示是噪音，
     缺必填降级 + 疑似空白模板已覆盖（呼应 D19 不误伤）。
     数据合规（批2）另有"触发前置门"：正文不涉及个人信息/用户数据处理时整组跳过。
+    批3（P-13/P-14）查两条：保密条款缺例外、违约金基数不明/按日无上限——
+    均为"写得对不对"类缺陷，不影响"有没有写"的既有判定。
     """
     # 这种情况是：原文疑似空白/未定稿模板 → 不谈条款完备性
     if is_blank_template_suspect(text or ""):
@@ -1147,6 +1392,16 @@ def text_rules(text: str, kind: str | None) -> list[RiskItem]:
             risk = check(text)
             if risk:
                 out.append(risk)
+    # 批3（P-13/P-14）：保密例外、违约金基数、违约金上限——三条都是"写得对不对"，
+    # 与"有没有写"的批1/批2 规则互不重复（按日无封顶是批3 唯一新增闸口点）
+    for check in (
+        _check_confidentiality_no_exception,
+        _check_penalty_basis_unclear,
+        _check_penalty_cap_missing,
+    ):
+        risk = check(text)
+        if risk:
+            out.append(risk)
     return out
 
 

@@ -309,7 +309,7 @@ def build_contract_model(raw: dict, text: str = "") -> ContractModel:
             needs_human_review=confidence < CONFIDENCE_REVIEW_THRESHOLD,
         )
 
-    return ContractModel(
+    model = ContractModel(
         # 品类先按模型/关键词判据解析，再按正文形态校正（代理销售/维修等不会被判 tech）
         contract_kind=_normalize_kind(_parse_kind(raw.get("contract_kind")), text),
         buyer=_s("buyer"),
@@ -329,11 +329,94 @@ def build_contract_model(raw: dict, text: str = "") -> ContractModel:
         governing_law=_s("governing_law"),
         extraction_meta=meta,
     )
+    # 称谓兜底：买卖双方为空时按原文"供方/需方、卖方/买方"补（批3 修正 D36）
+    return _fill_missing_parties(model, text)
 
 
 def _get(item, key: str, default=""):
     """从 dict 或 pydantic 模型取值（兼容模型输出的两种形态）。"""
     return item.get(key, default) if isinstance(item, dict) else getattr(item, key, default)
+
+
+# ---- 当事人称谓兜底（批3 修正，D36 泛化集）----
+
+# 真实合同常用"供方/需方""卖方/买方"，抽取器只认甲方/乙方时买卖双方大面积缺失
+# （真实 10 份里 7 份 supplier 为空）。这里只在字段**为空**时按原文补一次，不覆盖
+# 模型已抽到的值（避免引入新的抽取漂移）。
+_PARTY_ALIAS_RES: dict[str, re.Pattern] = {
+    "supplier": re.compile(
+        r"(?:供方|卖方|供货方|供应商|承包方|服务方|受托方|乙方)\s*[:：]\s*"
+        r"([^\s，。；、:：（）()]{2,30})"
+    ),
+    "buyer": re.compile(
+        r"(?:需方|买方|采购方|采购人|发包方|委托方|甲方)\s*[:：]\s*"
+        r"([^\s，。；、:：（）()]{2,30})"
+    ),
+}
+# 掩码/占位串不是真实名称：电煤合同"供方:*******（中标供应商）"必须跳过，
+# 空白模板的"甲方：＿＿＿"同理（否则会把下划线当公司名写进报告）
+_PARTY_MASK_RE = re.compile(r"^[*＊_＿•·\s]+$")
+# 自指称谓不是名称：条款里"甲方：乙方应…"这类句式后半句会被正则误抓
+_PARTY_SELF_RE = re.compile(r"^(?:甲方|乙方|买方|卖方|供方|需方|双方|三方)$")
+# 栏位标签词不是名称：真实合同常写"卖方："后换行接"签订时间："，正则会把下一行的
+# 栏位标签当成公司名（小麦合同实测把"签订时间"填进了 supplier）——按标签词拦截
+_PARTY_LABEL_RE = re.compile(
+    r"时间|日期|地点|电话|传真|邮箱|邮编|地址|账号|开户|盖章|签章|签名|签字|编码|代码|方式"
+)
+# 名称形态判据：采购合同当事人几乎都是组织（公司/厂/院/所/中心…）——中文名以组织后缀结尾，
+# 英文名以公司后缀结尾。实测教训：不设形态判据时，"授权代表""Address"这类中英栏位标签
+# 都会被当成公司名写进报告（比留空更糟），故只认形态像组织名的串
+_PARTY_ORG_SUFFIX_RE = re.compile(
+    r"公司|集团|厂|中心|院|所|局|社|行|部|店|企业|商行|合作社|大学|医院|银行|工厂|物流|超市"
+    r"|Ltd|Inc|LLC|GmbH|Co\.|Corp|Company|Limited",
+    re.IGNORECASE,
+)
+
+
+def _party_fallback(field: str, text: str) -> tuple[str | None, str]:
+    """字段缺失时按原文称谓补一个值，返回 (名称, 命中原句)；找不到返回 (None, "")。
+
+    判定口径：只认"称谓 + 冒号 + 名称"形态；掩码、下划线占位、自指称谓一律跳过
+    （宁缺毋滥——补错一个公司名比留空更糟）。
+    """
+    pattern = _PARTY_ALIAS_RES.get(field)
+    if pattern is None or not text:
+        return None, ""
+    for m in pattern.finditer(text):
+        value = m.group(1).strip()
+        # 分支 1：掩码/占位 → 不是名称，继续往后找
+        if _PARTY_MASK_RE.match(value) or _PARTY_SELF_RE.match(value):
+            continue
+        # 分支 2：连一个汉字/字母/数字都没有（纯标点）→ 跳过
+        if not re.search(r"[\u4e00-\u9fffA-Za-z0-9]", value):
+            continue
+        # 分支 3：整串是栏位标签（签订时间/地址/账号…）→ 不是名称，跳过
+        if _PARTY_LABEL_RE.search(value):
+            continue
+        # 分支 4：形态不像组织名（授权代表/Address 之类）→ 跳过
+        if not _PARTY_ORG_SUFFIX_RE.search(value):
+            continue
+        return value, m.group(0)
+    return None, ""
+
+
+def _fill_missing_parties(model: ContractModel, text: str) -> ContractModel:
+    """买卖双方为空时用原文称谓兜底补齐（并写入同字段证据，供前端展示来源句）。"""
+    updates: dict = {}
+    meta = dict(model.extraction_meta)
+    for field in ("buyer", "supplier"):
+        # 分支：模型已抽到 → 不动（兜底只补空，不做二次判断）
+        if getattr(model, field):
+            continue
+        value, quote = _party_fallback(field, text)
+        if not value:
+            continue
+        updates[field] = value
+        # 证据照实写原文句；confidence 0.9（原文直抄，非推断），无需人工复核
+        meta[field] = Evidence(quote=quote, clause_ref="", confidence=0.9, needs_human_review=False)
+    if not updates:
+        return model
+    return model.model_copy(update={**updates, "extraction_meta": meta})
 
 
 # ---- LLM 调用----
