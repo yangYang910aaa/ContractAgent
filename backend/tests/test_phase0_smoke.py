@@ -14,14 +14,14 @@ def test_policy_docs_exist_and_readable() -> None:
     assert len(files) >= 5, "政策文档应至少 5 条"
     for f in files:
         text = f.read_text(encoding="utf-8")
-        # 政策编号形如 P-01 / P-10（批2 后进入两位数编号）
+    # 政策编号形如 P-01 / P-10（超过 9 条后进入两位数编号）
         assert re.search(r"P-\d+", text), f"{f.name} 缺少政策编号"
         assert len(text) > 80, f"{f.name} 内容过短"
 
 
 def test_sample_contracts_generated() -> None:
     files = sorted(OUTPUT_DIR.glob("sample_*.md"))
-    # 批1 后 15 份（01~15）；批2（2026-09-10）新增数据类 16~20；批3（2026-09-11）
+    # 条款级缺陷样本 01~15，数据合规样本 16~20，保密/违约金样本 21 起
     # 新增保密例外/违约金基数与上限 21~24 → 共 24 份
     assert len(files) == 24, "应生成 24 份合成合同"
     for f in files:

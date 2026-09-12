@@ -28,7 +28,7 @@ def test_field_gt_covers_field_gt_samples_and_matches_corpus() -> None:
     gt = json.loads(
         (BASE_DIR / "data/素材/合同变体/out/ground_truth.json").read_text(encoding="utf-8")
     )
-    # 语料中未显式豁免字段尺子的 sample 才需要字段 GT（批1 新样本为条款级缺陷，不判字段）
+# 语料中未显式豁免字段核对的样本才需要字段真值（条款级缺陷样本不判字段）
     field_gt_files = {
         e["file"]
         for e in gt["files"]

@@ -98,7 +98,7 @@ class RiskItem(BaseModel):
     evidence: str = ""  # 证据说明
     # 原文摘录（定位/高亮用）：evidence 常是规则生成的说明句（如"预付款比例 70%"），
     # 在正文里搜不到 → 前端只能落到"纯文本"兜底。这里存一句**真正的原文**，
-    # 由 rules 的定位 pass 填（2026-09-11 走查：点"原文定位"跳纯文本且不高亮）
+    # 由规则引擎的定位环节填（说明句在正文里搜不到时，用它回指原文）
     evidence_quote: str = ""
     policy_ref: str | None = None  # 政策引用（如 "政策库检索结果）
     suggestion: str = ""  # 建议

@@ -78,7 +78,7 @@ class BlindReviewSchema(BaseModel):
 
 
 class ReviewFinding(BaseModel):
-    """一条规范化后的复核发现（merge_review 的输入，纯函数收敛产物）。"""
+    """一条规范化后的复核发现（合并阶段的输入，由纯函数收敛而来）。"""
 
     risk_type: str  # 风险类型机器码（已校验 ∈ RISK_LABELS）
     severity: Severity  # 风险等级（已归一化为枚举）
@@ -191,8 +191,8 @@ def _verify_high(f: ReviewFinding) -> tuple[bool, str]:
         not_occurrence = not bool(re.search(r"每次|按次|每笔", text))
         ok = is_daily and not_occurrence and pct > 1.0
         return ok, f"原文日费率 {pct:g}%（需按日且 >1%）" if not ok else ""
-    # 违约金无累计上限（批3 P-14）：evidence 要能看出"按日计罚"，且原句附近没有上限表述。
-    # 口径与 rules._check_penalty_cap_missing 对齐：日费率 ≥0.1% 才算失控敞口。
+    # 违约金无累计上限：证据要能看出"按日计罚"，且原句附近没有上限表述。
+    # 口径与规则引擎一致：日费率 ≥0.1% 才算失控敞口。
     if f.risk_type == "penalty_cap_missing":
         pct = _first_percent(text)
         is_daily = bool(re.search(r"每(?:日|天)|按日|每逾期一[日天]|每延期一[日天]|每延迟一[日天]", text))
@@ -222,12 +222,10 @@ def normalize_findings(
     raw: Any,
     max_findings: int = REVIEW_MAX_FINDINGS,
 ) -> tuple[list[ReviewFinding], list[str]]:
-    """模型原始 findings → 规范化 ReviewFinding 列表 + 丢弃原因清单。
+    """模型原始输出 → 规范化发现列表 + 丢弃原因清单。
 
-    收敛规则：盲审只列高风险清单，故只收 severity=high 且 risk_type ∈
-    RISK_LABELS 的条目——medium/low 是提示级噪音，由规则引擎负责，一律丢弃；
-    severity 别名收敛；同 (risk_type, severity, clause_ref) 去重；超上限截断。
-    丢弃原因返回给调用方（调试/走查用，不静默）。
+    只收高风险且类型已知的条目（中低风险属提示级噪音，由规则引擎负责）；级别别名收敛、
+    同类型同级别同条款去重、超上限截断。丢弃原因一并返回，不静默。
     """
     items = raw if isinstance(raw, list) else []
     out: list[ReviewFinding] = []
@@ -317,12 +315,10 @@ def _policy_context(
     text: str,
     retriever=None,
 ) -> tuple[list[IndexDoc], str | None]:
-    """取盲审用的政策条文（policy_ref + 正文）。
+    """取盲审用的政策条文（编号 + 正文）。
 
-    默认本地直读 data/policies 全量条文（纵向分条后为 21 个"文件头+第X条"单元，
-    总字数与原 5 份整文件相当，全量给全口径最稳、零 embedding 调用）；
-    测试/未来可注入 retriever(query)->[PolicyHit] 改按条检索——语料横向扩类、
-    单元显著增多后再切 top-k 并控制 prompt 长度（2026-09-09 决定）。
+    默认本地直读全部条文，口径最稳且不产生检索调用；可注入检索函数改按条召回，
+    等条文数量显著变多后再切 top-k 并控制提示长度。
     """
     # 这种情况是：调用方注入了检索器（图测试/未来语料规模化）→ 用检索命中
     if retriever is not None:
@@ -396,7 +392,7 @@ def blind_review(
 
     structured = model.with_structured_output(BlindReviewSchema, method="json_mode")
     try:
-        # 计价埋点：包住 invoke；双审每份只这一次复核调用
+# 调用计数：包住模型调用；双审每份只这一次复核调用
         with llm_call(STAGE_REVIEW):
             result = structured.invoke([("system", system), ("human", human)])
     except Exception as exc:
@@ -439,17 +435,11 @@ def merge_review(
     main: list[RiskItem],
     findings: list[ReviewFinding],
 ) -> MergeOutcome:
-    """主审风险 × 复核发现按 D26 口径合并 → (最终风险, review 报告段)。
+    """主审风险与复核发现合并 → (最终风险清单, 复核报告段)。
 
-    判定口径（每条复核发现独立处理）：
-    - 主审有同 type 且同 severity → 一致，不重复并入；
-    - 主审完全没有该 type：复核 high → 并入 risks（origin=review，走既有 gate）；
-      复核 medium/low → 只记提示不并入（防噪音污染评级/闸口）；
-    - 都报但 severity 不同 → 取高：复核更高则把主审同 type 的对应项升级并标注；
-      复核更低则维持主审（记一致）。
-    易错点护栏：主审已判 blank_template_suspected 时（缺必填被规则主动降级，
-    见 rules.annotate_template_risks），复核的 missing_required_field 只记提示，
-    不升级——否则空白模板会被复核 high 重新顶回闸口（D19/D23 的回归点）。
+    逐条处理：两边都报且同级 → 记一致；只有复核报 → 高风险并入清单、中低风险只记录；
+    两边级别不同 → 取高并标注。护栏：主审已判空白模板时，复核报的缺必填只记录不升级，
+    否则会把空白模板重新顶回闸口。
     """
     out = [r.model_copy() for r in main]  # 不修改入参（复制防副作用）
     details: list[dict] = []
@@ -549,7 +539,8 @@ def _merge_summary(stats: dict) -> str:
     if stats["added"]:
         parts.append(f"{stats['added']} 条为复核新增")
     if stats["noted"]:
-        parts.append(f"{stats['noted']} 条仅提示")
+        # 措辞与前端徽标保持一致（"仅提示"太含糊，用户看不出是"只记录不并入"）
+        parts.append(f"{stats['noted']} 条仅记录不并入")
     return "；".join(parts) + "（独立复核，未参考主审结论）"
 
 

@@ -83,7 +83,7 @@ def test_normalize_findings_dedupe_and_cap() -> None:
     assert any("重复" in d for d in dropped)
 
 
-# ---- merge_review：D26 四类 diff ----
+# ---- merge_review：四类合并结果 ----
 
 
 def test_merge_case_agree_keeps_single() -> None:
@@ -380,7 +380,7 @@ def test_double_reviewer_failure_falls_back_to_main() -> None:
     assert state["report"]["grade"] == "pass"
     assert "盲审失败" in state["report"]["review"]["error"]
 def test_verify_high_accepts_penalty_cap_missing() -> None:
-    """批3 新增闸口类型：按日 ≥0.1% 且无上限 → 复核门放行（走查修复：此前漏登记白名单）。"""
+    """按日 ≥0.1% 且无上限的违约金反馈 → 复核门放行（此前漏登记白名单）。"""
     from backend.app.reviewer import ReviewFinding, Severity, _verify_high
 
     daily_uncapped = ReviewFinding(
@@ -400,4 +400,3 @@ def test_verify_high_accepts_penalty_cap_missing() -> None:
     assert _verify_high(not_daily)[0] is False
     tiny = daily_uncapped.model_copy(update={"evidence": "每延期一日按合同总金额的0.05%承担违约责任。"})
     assert _verify_high(tiny)[0] is False
-

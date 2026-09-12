@@ -131,8 +131,7 @@ class TaskListOut(BaseModel):
 
     tasks: list[TaskSummaryOut]
     concurrency: int
-    # 源文件已丢失、被隐藏的历史任务数（早期联调留下的记录）：前端提示一行，
-    # 免得用户以为任务凭空消失（2026-09-11 启动自查）
+    # 源文件已丢失、被隐藏的历史任务数：前端提示一行，免得用户以为任务凭空消失
     hidden_stale: int = 0
 
 
@@ -260,8 +259,8 @@ async def upload_task(
 def list_tasks(manager: TaskManager = Depends(get_manager)) -> dict:
     """列任务摘要与当前并发数(队列页轮询用)；源文件已丢失的历史任务默认隐藏。
 
-    隐藏口径见 _is_stale（只隐藏 done/error，进行中与待审批一律保留），
-    隐藏条数随响应带回 hidden_stale，前端提示一行而不是静默吞掉。
+    隐藏口径：只隐藏已完成/失败的，进行中与待审批一律保留；隐藏条数随响应带回，
+    前端提示一行而不是静默吞掉。
     """
     records = manager.runner.store.list_records()
     visible = [r for r in records if not _is_stale(r)]
@@ -421,7 +420,7 @@ def _resume_or_409(manager: TaskManager, thread_id: str, answer: dict) -> dict:
     return {**_summary(updated).model_dump(), "report": updated.report}
 
 
-# ---- 审批三动作：都走 _resume_or_409（仅 gate 状态可续跑）----
+# ---- 审批三动作：仅待审批状态可续跑，其余状态返回冲突 ----
 
 
 @router.post("/tasks/{thread_id}/approve", response_model=TaskDetailOut)

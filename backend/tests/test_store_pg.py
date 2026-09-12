@@ -4,7 +4,7 @@
 核心价值点——闸口任务在"换一个连接/进程"后仍能恢复审批(LangGraph 检查点落库)。
 内存路径(默认)由既有 test_tasks/test_routes/test_graph 覆盖, 不依赖数据库。
 
-隔离口径(2026-09-11 启动自查后修): 每个用例在**临时 schema** 里建表读写, 跑完即 drop——
+隔离口径: 每个用例在**临时 schema** 里建表读写, 跑完即 drop——
 此前直接连生产库并 clear(), 每跑一次测试就往真实任务表塞一条 sample.md、还会清掉
 用户的历史任务(实测把队列里的真实任务记录删了)。现在 search_path 只指向临时 schema,
 public 里的 contract_tasks 一行不动。

@@ -15,19 +15,19 @@
     python -m backend.eval.run_eval --check        # 离线: 校验 GT + 语料在位
     python -m backend.eval.run_eval --list         # 离线: 列评测语料清单
 
-指标口径(high 级判定, 与 D21/交接文档一致):
+ 指标口径(只看高风险级判定):
 - 检出率: 缺陷文件里"期望 high 是否判成 high"的比例(必须命中且 severity=high);
 - 零误报率: 无期望 high 的文件(正常/模板/半填)整份没出现任何 high 的比例;
 - 风险类型级 macro-F1: 以 (文件, 某次运行) 为样本, 按 risk_type 累加 high 级
   TP/FP/FN 后宏平均(类型未在任何期望/预测出现则跳过);
 - 评级准确率: expected_grade == 实测 grade。
 每份文件跑 N 次, 头部指标取 N 次(每次=全语料一遍)的均值与 [min,max] 波动区间。
-评测二期增列 LLM 调用成本(metrics.llm_calls): 每次全语料跑一遍的调用总次数/每份
-均值/耗时/分阶段次数, 与四项主指标并列落产物, 供 PRD 成本口径回填。
+增列模型调用成本(metrics.llm_calls): 每次全语料跑一遍的调用总次数/每份均值/耗时/
+分阶段次数, 与四项主指标并列, 供成本口径回填。
 judge=false 的样本(tech_01 真实合同, P-03 口径未定)只记录观察、不判分。
-产物(JSON + 人读摘要)默认写 backend/eval/output/(gitignore, 不入库)。
+输出(JSON + 人读摘要)默认写 backend/eval/output/(gitignore, 不入库)。
 
-双审对比口径(D26): --compare 在同一语料上分别以 review_mode=single/double 各跑
+ 双审对比: --compare 在同一语料上分别以 review_mode=single/double 各跑
 N 次; double 只比 single 多 1 次盲审 LLM 调用。除头部指标并列对比外, 逐文件给
 "double 相对 single 的漏检/误报差异"明细——这是 README「为什么多 agent」的量化行。
 """
@@ -47,7 +47,7 @@ from backend.app.schemas import Grade, Severity
 from backend.app.rules import RISK_LABELS
 from backend.eval.field_gt import EXPECTED_FIELDS, FIELD_GROUPS
 
-# 语料根目录与 GT 默认位置(均为本地数据, 不入库; D21 口径只服务回归/评测)
+# 语料根目录与 GT 默认位置(均为本地数据, 不入库; 只服务回归/评测)
 VARIANTS_DIR = BASE_DIR / "data/素材/合同变体/out"
 SAMPLES_DIR = BASE_DIR / "data/contracts"
 DEFAULT_GT = VARIANTS_DIR / "ground_truth.json"
@@ -80,8 +80,8 @@ class GtEntry:
     expected_grade: str | None  # pass/conditional_pass/fail; None=不判评级
     expected_types: dict[str, str] = field(default_factory=dict)  # {risk_type: severity}
     judge: bool = True  # False=只观察不判分(如真实合同 tech_01)
-    field_gt: bool = True  # False=sample 明确豁免字段尺子（批1 新样本为条款级缺陷，不判字段）
-    why: str = ""  # 期望依据(人工说明, 供走查)
+    field_gt: bool = True  # False=该样本明确豁免字段真值（条款级缺陷样本不判字段）
+    why: str = ""  # 期望依据(人工说明, 供复核)
     path: Path | None = None  # 解析后的文件绝对路径(load_gt 后填充)
     expected_fields: dict = field(default_factory=dict)  # 字段级期望(仅 sample 有, field_gt 提供)
 
@@ -172,8 +172,8 @@ def _num_key(value) -> float | None:
 def _field_outcome(field: str, expected, actual) -> str:
     """单字段抽取判定: ok / wrong / missing（expected=None 表示正文本无此内容）。
 
-    口径（第一期, 尺子用）：
-    - 期望无值（None）：抽到空/缺失 → ok，抽到值 → wrong（幻觉, 呼应 tech_03 教训）；
+    口径：
+    - 期望无值（None）：抽到空/缺失 → ok，抽到值 → wrong（模型凭空补值）；
     - 期望有值：抽取为空 → missing；有值按字段口径比（日期/金额精确, 数值容差 1e-6,
       期次表逐期比金额+比例并忽略期次名, 文本字段精确）。
     """
@@ -369,8 +369,8 @@ def _llm_summary(run_metrics: list[dict]) -> dict | None:
     """按"每次全语料跑一遍"汇总 LLM 调用成本: 总次数/每份均值/耗时/分阶段次数。
 
     run_metrics: 每份判分文件一个 {run_no: state}；state 由 _observed 带出
-    llm_calls/llm_seconds/llm_stages。返回 None = 这次跑批没有计数数据（旧产物），
-    打印与产物都跳过该段（向后兼容，不影响四项主指标）。
+    llm_calls/llm_seconds/llm_stages。返回 None = 这次跑批没有计数数据（旧输出），
+    打印与输出都跳过该段（向后兼容，不影响四项主指标）。
     """
     if not run_metrics:
         return None
@@ -519,7 +519,7 @@ def _aggregate(
         if col:
             print(f"{name}: mean={col['mean']} 波动=[{col['min']},{col['max']}] "
                   f"runs={col['runs']}")
-    # 成本口径(评测二期)：调用次数/耗时；与四项主指标并列落产物(键 metrics.llm_calls)
+# 成本口径：调用次数/耗时；与四项主指标并列写入输出(键 metrics.llm_calls)
     llm_col = _llm_summary(run_metrics)
     _print_llm_section(llm_col)
     if llm_col:
@@ -538,7 +538,7 @@ def _aggregate(
         f1 = 2 * p * r / (p + r) if p + r else 0.0
         print(f"  {risk_type}: tp={tp} fp={fp} fn={fn} "
               f"precision={p:.3f} recall={r:.3f} f1={f1:.3f}")
-    # ---- 字段准确率（尺子, 第一期仅 9 份 sample 有字段 GT）----
+    # ---- 字段准确率（第一期仅 9 份样本有字段真值）----
     field_col = _field_collapse(judged, run_metrics)
     _print_field_section(field_col, mode)
     return metrics, merged_per_type, field_col
@@ -553,7 +553,7 @@ def _print_single_summaries(per_file: list[dict], mode: str | None = None) -> No
 
 
 def _mode_label(mode: str) -> str:
-    """头部指标行/产物里的人读模式名(与 CLI 取值一致)。"""
+    """头部指标行里的人读模式名(与 CLI 取值一致)。"""
     return {"single": "单审 single", "double": "双审 double"}.get(mode, mode)
 
 
@@ -673,15 +673,15 @@ def _main_compare(entries: list[GtEntry], judged: list[GtEntry], runs: int, out_
     out_json.write_text(
         json.dumps(_to_jsonable(payload), ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"\n对比产物: {out_json}")
+    print(f"\n对比结果: {out_json}")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI 入口: 校验 → 逐份跑 N 次 → 汇总指标 → 写产物。"""
+    """CLI 入口: 校验 → 逐份跑 N 次 → 汇总指标 → 写输出文件。"""
     parser = argparse.ArgumentParser(description="Phase 4 评测闭环(run_eval)")
     parser.add_argument("--gt", type=Path, default=DEFAULT_GT, help="ground_truth.json 路径")
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="产物输出目录")
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="输出目录")
     parser.add_argument("--runs", type=int, default=3, help="每份文件跑几次(默认 3)")
     parser.add_argument("--set", choices=("variants", "samples", "all"), default="all")
     parser.add_argument("--only", default="", help="只跑文件名含该子串的语料(调试用)")
@@ -716,7 +716,7 @@ def main(argv: list[str] | None = None) -> int:
             if not any(e.file == key for e in entries):
                 problems.append(f"字段 GT 无对应语料: {key}")
         for e in entries:
-            # 分支: GT 显式声明 field_gt=false 的新样本（批1 条款级缺陷）豁免字段登记
+    # 分支: GT 显式声明 field_gt=false 的样本（条款级缺陷）豁免字段登记
             if (
                 e.set_ == "samples"
                 and e.field_gt
@@ -742,7 +742,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"评测语料 {len(entries)} 份(判分 {len(judged)}), 每份跑 {args.runs} 次, "
           f"review_mode={args.review_mode if not args.compare else 'single+double'}")
 
-    # 这种情况是: --compare → 双模式各跑一遍并输出对比, 落盘单个对比产物
+    # 这种情况是: --compare → 双模式各跑一遍并输出对比, 落盘单个对比文件
     if args.compare:
         return _main_compare(entries, judged, args.runs, args.out)
 
@@ -768,7 +768,7 @@ def main(argv: list[str] | None = None) -> int:
     out_json.write_text(
         json.dumps(_to_jsonable(result), ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"\n产物: {out_json}")
+    print(f"\n输出: {out_json}")
     return 0
 
 

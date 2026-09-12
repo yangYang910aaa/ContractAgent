@@ -87,7 +87,7 @@ def test_blank_template_text_downgrades_missing_and_adds_notice() -> None:
     assert "空白模板" in notice[0].suggestion
     assert grade_report(risks) == Grade.conditional_pass  # 无 high → 不再 fail/gate
     # 官方示范文本的另两类占位写法也要命中：GF 式"点线 + □ 选框"、
-    # 科技部/校服式"冒号后纯空格填空栏"（不一定画下划线，2026-09-07 修复）
+    # 科技部/校服式"冒号后纯空格填空栏"（不一定画下划线）
     gf_style = (
         "甲方（出卖人）:………… … …\n"
         "联系电话 :……………………………… … …\n"
@@ -329,8 +329,7 @@ def test_infer_effective_noop_without_signature_or_wording() -> None:
 
 
 def test_tech_service_liability_cap_30_is_ok_but_29_low() -> None:
-    """P-03 技术类底线 30%（2026-09-07 B 口径）：cap=30 不判 too_low（科技部示范
-    文本即 30%），低于 30% 仍判 high。"""
+    """P-03 技术类底线 30%：cap=30 不判过低（科技部示范文本即 30%），低于 30% 仍判高风险。"""
     model = _with(contract_kind="tech_service", liability_cap=30.0)
     assert "liability_cap_too_low" not in _risk_types(model)
     low = _with(contract_kind="tech_service", liability_cap=29.0)
@@ -403,7 +402,7 @@ def test_penalty_daily_quote_still_high() -> None:
 
 
 def test_percent_misparsed_into_term_amount_downgrades_to_medium() -> None:
-    """真实合同走查（2026-09-10）：只写比例时抽取把 70/30 填进金额字段，
+    """只写比例的真实合同里，抽取会把 70/30 填进金额字段，
     不得当成"期次加总 ≠ 总额"的 high 误停闸 → 降 medium 提示人工核对。"""
     model = _with(
         total_amount=Decimal("1600000"),
@@ -442,7 +441,7 @@ def test_normal_and_real_defect_amount_consistency_unchanged() -> None:
 
 
 def test_first_payment_named_shoufu_counts_as_prepayment() -> None:
-    """"首付款"按 P-01 第二条计入预付款（真实合同走查 2026-09-10 漏判修复）。"""
+    """"首付款"按 P-01 第二条计入预付款（此前漏判）。"""
     model = _with(
         total_amount=Decimal("4815000"),
         payment_schedule=[_term("首付款", "3370500", 70.0), _term("尾款", "1444500", 30.0)],
@@ -456,7 +455,7 @@ def test_first_payment_named_shoufu_counts_as_prepayment() -> None:
     assert "prepayment_ratio_high" not in _risk_types(model2)
 
 
-# ---- 开放式条款语境（真实合同走查 2026-09-10）----
+# ---- 开放式条款语境 ----
 
 
 def test_open_ended_amount_downgrades_missing_total_with_explicit_notice() -> None:
@@ -530,7 +529,7 @@ def test_missing_expiry_with_concrete_end_date_stays_high() -> None:
     assert next(r for r in risks if r.field == "expiry_date").severity == Severity.high
 
 
-# ---- 空白模板检测精化（真实合同走查 2026-09-10）----
+# ---- 空白模板检测精化 ----
 
 
 def test_filled_contract_with_signature_date_blank_not_template() -> None:

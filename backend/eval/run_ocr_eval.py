@@ -1,16 +1,14 @@
 """扫描件 OCR → 抽取 的离线评分（第 5 步，本地工具，可入库）。
 
-用途：拿人工核过的扫描件真值（data/素材/ocr/ocr_gt.json）对比一次跑批产物里
-的抽取字段，量化"OCR 出来的文本能不能被正确抽取"——这样"支持扫描件"才是有数字的
-结论，而不是口头承诺。
+用途：拿人工核过的扫描件真值（data/素材/ocr/ocr_gt.json）对比一次跑批输出里的
+抽取字段，量化"OCR 出来的文本能不能被正确抽取"。
 
-特点：本脚本**不调用任何 API、也不跑 OCR**，只读已有产物（run_generalization 的 JSON）；
-所以可以随时复算，不花钱、可复现。GT 只对"写了的字段"评分（没写的字段跳过，
-例如原文没有独立签署日期栏就不设日期真值）。
+特点：本脚本**不调用任何接口、也不跑 OCR**，只读已有输出（run_generalization 的 JSON），
+可随时复算、不花钱。真值只对"写了的字段"评分，原文没有的字段跳过。
 
 用法：
-    python -m backend.eval.run_ocr_eval                 # 用最新一份 generalization 产物
-    python -m backend.eval.run_ocr_eval --run <产物.json>
+    python -m backend.eval.run_ocr_eval                 # 用最新一份跑批输出
+    python -m backend.eval.run_ocr_eval --run <输出.json>
 """
 
 from __future__ import annotations
@@ -27,7 +25,7 @@ from backend.app.config import BASE_DIR
 
 DEFAULT_GT = BASE_DIR / "data/素材/ocr/ocr_gt.json"
 DEFAULT_OUT = BASE_DIR / "backend/eval/output"
-# 跑批产物默认目录（取最新的 generalization_*.json 当输入）
+# 跑批输出默认目录（取最新的 generalization_*.json 当输入）
 RUN_DIR = DEFAULT_OUT
 
 
@@ -70,7 +68,7 @@ def _norm_date(value) -> str:
 
 
 def _outcome(field: str, expected, actual) -> str:
-    """单字段判定：ok / wrong / missing（口径与 run_eval 的字段尺子一致，便于互相对照）。"""
+    """单字段判定：ok / wrong / missing（口径与 run_eval 的字段核对一致，便于对照）。"""
     # 分支 1：抽取为空 → 缺失（OCR 全丢或模型没抄到）
     if actual in (None, "", []):
         return "missing"
@@ -88,23 +86,25 @@ def _outcome(field: str, expected, actual) -> str:
 
 
 def _latest_run() -> Path | None:
-    """取输出目录里最新的 generalization 产物（没有则返回 None）。"""
+    """取输出目录里最新的跑批输出（没有则返回 None）。"""
     files = sorted(RUN_DIR.glob("generalization_*.json"))
     return files[-1] if files else None
 
 
 def evaluate(gt_path: Path, run_path: Path) -> dict:
-    """读 GT 与跑批产物 → 逐份逐字段判定，返回结果 dict（含总体准确率）。"""
+    """读真值与跑批输出 → 逐份逐字段判定，返回结果 dict（含总体准确率）。"""
     gt = json.loads(gt_path.read_text(encoding="utf-8"))
     run = json.loads(run_path.read_text(encoding="utf-8"))
-    # 产物按文件名索引：GT/产物都按文件名字符串对齐
+    # 按文件名索引：真值与输出都以文件名字符串对齐
     items = run.get("files", [])
     rows: list[dict] = []
     counters = {"ok": 0, "wrong": 0, "missing": 0}
     for entry in gt.get("files", []):
         observed = _find_run_item(entry["file"], items)
         if observed is None:
-            rows.append({"file": entry["file"], "error": "产物里没有该文件（未跑或文件名不符）", "fields": {}})
+            rows.append(
+                {"file": entry["file"], "error": "输出里没有该文件（未跑或文件名不符）", "fields": {}}
+            )
             continue
         extracted = observed.get("extracted") or {}
         fields: dict[str, dict] = {}
@@ -136,11 +136,11 @@ def evaluate(gt_path: Path, run_path: Path) -> dict:
 
 
 def _find_run_item(gt_file: str, items: list[dict]) -> dict | None:
-    """在产物里找 GT 对应的那份：先精确比文件名，找不到再按关键词包含比。
+    """在输出里找真值对应的那份：先精确比文件名，找不到再按关键词包含比。
 
-    为什么要兜底（2026-09-11 素材重命名）：尺子按文件名对齐，改名后旧产物就对不上，
-    报"产物里没有该文件"而不是给分数。这里把 "扫描件_04_医用设备.pdf" 这类名字
-    去掉前缀与序号后取关键词（"医用设备"）做包含匹配，改名/换批次都不再影响复算。
+    为什么要退一步找：核对按文件名对齐，素材改名后旧输出就对不上，只会报"没有该文件"
+    而不给分数。这里把 "扫描件_04_医用设备.pdf" 这类名字去掉前缀与序号后取关键词
+    （"医用设备"）做包含匹配，改名不再影响复算。
     """
     exact = next((i for i in items if i.get("file") == gt_file), None)
     if exact is not None:
@@ -152,23 +152,23 @@ def _find_run_item(gt_file: str, items: list[dict]) -> dict | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI：读 GT + 产物 → 打印逐字段结果 → 写评分产物（全部本地，不花钱）。"""
+    """CLI：读真值 + 跑批输出 → 打印逐字段结果 → 写评分结果（全部本地，不花钱）。"""
     parser = argparse.ArgumentParser(description="扫描件 OCR→抽取 离线评分")
     parser.add_argument("--gt", type=Path, default=DEFAULT_GT, help="扫描件真值 JSON")
-    parser.add_argument("--run", type=Path, default=None, help="跑批产物 JSON（默认取最新）")
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="评分产物输出目录")
+    parser.add_argument("--run", type=Path, default=None, help="跑批输出 JSON（默认取最新）")
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="评分结果输出目录")
     args = parser.parse_args(argv)
 
     run_path = args.run or _latest_run()
     if run_path is None or not run_path.is_file():
-        print("找不到跑批产物，请先跑 run_generalization --include-scans", flush=True)
+        print("找不到跑批输出，请先跑 run_generalization --include-scans", flush=True)
         return 1
     if not args.gt.is_file():
         print(f"找不到真值文件: {args.gt}", flush=True)
         return 1
 
     result = evaluate(args.gt, run_path)
-    print(f"扫描件字段尺子：{result['counters']}  整体准确率={result['field_accuracy']}")
+    print(f"扫描件字段核对：{result['counters']}  整体准确率={result['field_accuracy']}")
     for row in result["files"]:
         if row.get("error"):
             print(f" - {row['file']}: {row['error']}")
@@ -181,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     stamp = time.strftime("%Y%m%d_%H%M%S")
     out_json = args.out / f"ocr_eval_{stamp}.json"
     out_json.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\n产物: {out_json}")
+    print(f"\n输出: {out_json}")
     return 0
 
 

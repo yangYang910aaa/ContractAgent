@@ -1,7 +1,7 @@
-"""真实合同泛化集观察跑批(评测二期, 决策 D36)。
+"""真实合同泛化集观察跑批。
 
 用途：拿用户收集的真实合同（非生成器产出）整份跑一遍流水线，只看表现、不打分——
-这批没有 ground truth（判分口径留给后续批3/走查再定）。观察四件事：
+这批没有 ground truth（判分口径待定）。观察四件事：
 1) 抽取是否失败（报告 error）；2) 有没有误停闸（出现 high，逐条人工核证据）；
 3) medium 噪音分布（按 risk_type 计数，用于收紧规则口径）；4) parser 章节切分是否
 正常（0 条/极少条要记入问题与踩坑记录）。
@@ -9,7 +9,7 @@
 成本口径：默认 single × runs=1，每份 1~2 次 chat 调用（付款期次双读各 +1）。
 扫描件默认整批跳过（纯图片 PDF 留给第 5 步 OCR，用 --include-scans 才纳入）。
 
-合规：素材目录 data/素材/ 已 gitignore，产物 JSON 写 backend/eval/output/
+合规：素材目录 data/素材/ 已 gitignore，输出 JSON 写 backend/eval/output/
 （同样不入库）；脚本里不写任何真实合同文件名，选子集只在命令行给 --only。
 
 用法：
@@ -52,7 +52,7 @@ def discover(base: Path, only: list[str], exclude: list[str], include_scans: boo
     # 这种情况是：显式要求纳入扫描件 → 不再按"扫描件"前缀排除
     if include_scans:
         ex = [e for e in ex if e not in DEFAULT_EXCLUDE]
-    # 递归扫描：真实合同放在"电子版/扫描件"两个子目录里（2026-09-11 素材目录合并后）
+    # 递归扫描：真实合同按格式放在"电子版/扫描件"两个子目录里
     files = [
         p
         for p in sorted(base.rglob("*"))
@@ -89,7 +89,7 @@ def _row(path: Path, review_mode: str, double_read: bool, llm=None, retriever=No
         "file": path.name,
         "grade": report.get("grade"),
         "error": report.get("error"),
-        # 全部命中按"类型/严重级"落成字符串列表，人读与产物都好对
+# 全部命中按"类型/严重级"落成字符串列表，人读与输出都好对
         "types": [f"{r['risk_type']}/{r['severity']}" for r in risks],
         "high_types": [r["risk_type"] for r in risks if r.get("severity") == "high"],
         "medium_types": [r["risk_type"] for r in risks if r.get("severity") == "medium"],
@@ -186,10 +186,10 @@ def _print_summary(summary: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI 入口：列文件/预算 → 逐份观察跑 → 打印结论并落盘产物。"""
+    """CLI 入口：列文件/预算 → 逐份观察跑 → 打印结论并落盘输出。"""
     parser = argparse.ArgumentParser(description="真实合同泛化集观察跑批")
     parser.add_argument("--dir", type=Path, default=DEFAULT_DIR, help="真实合同素材目录")
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="产物输出目录")
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="输出目录")
     parser.add_argument("--runs", type=int, default=1, help="每份跑几次（默认 1，省钱）")
     parser.add_argument("--only", default="", help="只跑文件名含该子串的文件，逗号分隔")
     parser.add_argument(
@@ -259,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
     out_json.write_text(
         json.dumps(_to_jsonable(result), ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"\n产物: {out_json}")
+    print(f"\n输出: {out_json}")
     return 0
 
 

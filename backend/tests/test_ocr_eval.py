@@ -1,4 +1,4 @@
-"""扫描件字段尺子单测（离线，0 API）：归一化口径 + 用假 GT/产物算准确率。"""
+"""扫描件字段核对单测（离线，0 接口调用）：归一化口径 + 用假真值/输出来算准确率。"""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ def test_evaluate_scores_only_declared_fields(tmp_path: Path) -> None:
 
 
 def test_evaluate_reports_missing_file(tmp_path: Path) -> None:
-    """产物里没有该文件（未跑/改名）→ 明确报错而不是静默算 0 分。"""
+    """输出里没有该文件（未跑/改名）→ 明确报错而不是静默算 0 分。"""
     gt_path = tmp_path / "gt.json"
     run_path = tmp_path / "run.json"
     gt_path.write_text(json.dumps({"files": [{"file": "x.pdf", "buyer": "某"}]}, ensure_ascii=False), encoding="utf-8")

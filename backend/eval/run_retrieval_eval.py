@@ -1,6 +1,6 @@
 """政策检索质量离线评测：向量 vs 混合（向量+BM25+RRF）。
 
-用途（执行计划第 2 步）：语料纵向分条 + 横向扩类后，用"查询→期望政策编号"金标集
+用途：语料纵向分条 + 横向扩类后，用"查询→期望政策编号"标准答案集
 量化检索质量，验证混合检索是否真的更好，并留下可复现数字（PRD/README 引用）。
 
 指标：Recall@1、Recall@3、MRR（同一查询在两种模式下的对照）。
@@ -18,7 +18,7 @@ from pathlib import Path
 from backend.app.config import BASE_DIR
 from backend.app.policy_rag import retrieve_policies
 
-# 金标集：(查询, 期望政策编号)。查询取自各政策/风险类型的典型表述，覆盖 P-01~P-12。
+# 标准答案集：(查询, 期望政策编号)。查询取自各政策/风险类型的典型表述，覆盖 P-01~P-12。
 GOLD: list[tuple[str, str]] = [
     ("预付款比例超过合同总额的百分之三十", "P-01"),
     ("预付款资金占用与供应商履约风险", "P-01"),
@@ -61,7 +61,7 @@ GOLD: list[tuple[str, str]] = [
 
 
 def _metrics(rows: list[tuple[str, str, list[str]]]) -> dict:
-    """按金标行算 Recall@1/@3 与 MRR（hits 为按序命中的 policy_ref 列表）。"""
+    """按标准答案逐行算 Recall@1/@3 与 MRR（hits 为按序命中的 policy_ref 列表）。"""
     n = len(rows)
     r1 = sum(1 for _, want, hits in rows if hits[:1] == [want]) / n
     r3 = sum(1 for _, want, hits in rows if want in hits[:3]) / n
@@ -72,7 +72,7 @@ def _metrics(rows: list[tuple[str, str, list[str]]]) -> dict:
 
 
 def _run(mode: str, k: int) -> tuple[dict, list[tuple[str, str, list[str]]]]:
-    """跑一遍金标集，返回 (指标, 明细行)。"""
+    """跑一遍标准答案集，返回 (指标, 明细行)。"""
     rows: list[tuple[str, str, list[str]]] = []
     for query, want in GOLD:
         hits = [h.policy_ref for h in retrieve_policies(query, k=k, mode=mode)]
@@ -81,7 +81,7 @@ def _run(mode: str, k: int) -> tuple[dict, list[tuple[str, str, list[str]]]]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI：跑 vector / hybrid 两种模式并打印对照表，产物落 output/。"""
+    """CLI：跑 vector / hybrid 两种模式并打印对照表，结果落 output/。"""
     parser = argparse.ArgumentParser(description="政策检索质量评测（vector vs hybrid）")
     parser.add_argument("--k", type=int, default=3, help="每次检索返回条数（默认 3）")
     parser.add_argument("--out", type=Path, default=BASE_DIR / "backend/eval/output")
@@ -117,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
         encoding="utf-8",
     )
-    print(f"\n产物: {out}")
+    print(f"\n输出: {out}")
     return 0
 
 

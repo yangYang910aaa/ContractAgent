@@ -9,6 +9,7 @@ from backend.app.config import BASE_DIR
 from backend.app.graph import ReviewRunner
 from backend.app.policy_rag import PolicyHit
 from backend.app.schemas import ContractModel, PaymentTerm
+from backend.app.usage import STAGE_EXTRACT, llm_call
 
 
 def _normal_model() -> ContractModel:
@@ -66,11 +67,45 @@ def _runner(model: ContractModel) -> tuple[ReviewRunner, FakeRetriever]:
     return runner, retriever
 
 
+def _counting_extractor(model: ContractModel):
+    """假抽取器：像真抽取器那样走一次调用计数，用来验证服务端链路的用量统计。"""
+
+    def _extract(text: str) -> ContractModel:
+        with llm_call(STAGE_EXTRACT):
+            return model
+
+    return _extract
+
+
+def test_report_carries_llm_usage() -> None:
+    """服务端报告要带模型调用用量段，与评测链路口径一致。"""
+    runner = ReviewRunner(extractor=_counting_extractor(_normal_model()), retriever=FakeRetriever())
+    state = runner.start(
+        "sample_01.md",
+        text=(
+            "第一条 交付与验收：甲方组织验收，验收标准以双方确认的技术规范为准。\n"
+            "乙方不得将本合同项下义务转包或分包。"
+        ),
+    )
+    llm = state["report"]["llm"]
+    assert llm["calls"] == 1
+    assert llm["stages"] == {"extract": 1}
+    assert llm["seconds"] >= 0
+
+
+def test_llm_usage_accumulates_across_gate_resume() -> None:
+    """审批恢复会重跑 rules/policy 节点：用量要按任务累计，不能被本次 invoke 清零。"""
+    runner = ReviewRunner(extractor=_counting_extractor(_defect_model()), retriever=FakeRetriever())
+    runner.start("sample_07.md", text="质保 6 个月，违约金日 1.5%")
+    state = runner.resume(runner.last_thread_id, action="approved", note="放行")
+    assert state["report"]["llm"]["calls"] == 1
+
+
 def test_normal_contract_passes_without_gate() -> None:
     """无缺陷合同应一路到底：done + pass + 无审批记录、无闸口。"""
     runner, retriever = _runner(_normal_model())
-    # 桩文本需含验收与转包限制句：批1 文本级规则（P-06/P-09）下，缺验收安排或
-    # 未限制转包都会判 medium，不再是零风险 pass
+    # 桩文本需含验收与转包限制句：缺验收安排或未限制转包都会判提示级，
+    # 不再是无风险通过
     state = runner.start(
         "sample_01.md",
         text=(
@@ -218,4 +253,3 @@ def test_gate_payload_carries_review_and_quote() -> None:
     assert payload["high_risks"][0]["evidence_quote"].startswith("第一笔-预付款")
     assert payload["review"]["mode"] == "double"
     assert payload["review"]["stats"]["added"] == 1
-

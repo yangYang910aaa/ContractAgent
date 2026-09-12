@@ -20,17 +20,17 @@ export const RISK_LABELS: Record<string, string> = {
   ip_ownership_unclear: '知识产权归属不清',
   governing_law_missing: '缺少适用法律约定',
   blank_template_suspected: '疑似空白模板',
-  // 横向批1（P-06~P-09）
+  // 条款级缺陷（P-06~P-09）
   acceptance_unclear: '验收标准或期限不明确',
   invoice_unclear: '发票开具约定缺失',
   performance_bond_missing: '履约担保缺失',
   subcontract_unrestricted: '转包/分包未作限制',
-  // 横向批2（P-10~P-12）数据与个人信息合规
+  // 数据与个人信息合规（P-10~P-12）
   personal_info_clause_missing: '未约定个人信息保护义务',
   data_processing_terms_missing: '委托处理要件不完整',
   data_cross_border_unclear: '数据出境缺少合规路径',
   data_deletion_missing: '未约定数据删除与泄露通知',
-  // 横向批3（P-13~P-14）保密例外与违约金口径
+  // 保密例外与违约金口径（P-13~P-14）
   confidentiality_no_exception: '保密条款缺少例外',
   penalty_basis_unclear: '违约金基数不明',
   penalty_cap_missing: '违约金无上限',
@@ -70,11 +70,10 @@ export function kindLabel(kind: string | null | undefined): string {
 }
 
 /**
- * 政策条文重排：把源文件里"手工折行"的半句续行合并成逻辑行，返回每行一条。
- * 背景：政策细则源文档每行约 40~50 字就换行，直接按行渲染会出现"一页纸只有
- * 左边有内容、右半空白"（用户反馈，2026-09-05）。规则：结构行（细则标题/
- * 第X条/「标签：」前缀行）另起一行；普通续行接续到上一逻辑行，直到句末
- * （。；！？）才断——渲染时每行按整行宽度自然换行，右侧不再空。
+ * 政策条文重排：把源文件"手工折行"的半句续行合并成逻辑行，返回每行一条。
+ * 源文档每行约 40~50 字就换行，按行直接渲染会显得一页纸只用了左半边。
+ * 结构行（细则标题/第X条/「标签：」）另起一行，普通续行并到上一逻辑行，
+ * 到句末才断——渲染时每行按整行宽度自然换行。
  */
 export function policyReflow(text: string): string[] {
   const logical: string[] = []

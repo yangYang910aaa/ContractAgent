@@ -26,7 +26,7 @@ def test_counts_calls_and_stages() -> None:
 
 
 def test_no_tracker_is_noop() -> None:
-    """没有追踪上下文（服务端直调/旧代码）时埋点是 no-op，不能抛异常。"""
+    """没有追踪上下文（服务端直调/旧代码）时计数不生效，也不能抛异常。"""
     with llm_call("extract"):
         pass
 

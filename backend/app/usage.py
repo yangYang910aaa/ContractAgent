@@ -1,4 +1,4 @@
-"""LLM 调用计数与耗时统计（评测二期，决策 D36）。
+"""大模型调用计数与耗时统计。
 
 用途：回答"审一份合同到底问了几次大模型"——审查报告带 `llm` 段
 （calls / stages / seconds），run_eval 再按"每次全语料跑一遍"汇总成本，
@@ -21,10 +21,10 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
-# 当前追踪器：None = 未开启追踪（埋点退化为 no-op，不产生任何副作用）
+# 当前追踪器：None = 未开启追踪（此时计数什么都不做，不产生任何副作用）
 _ACTIVE: ContextVar["Usage | None"] = ContextVar("llm_usage", default=None)
 
-# 阶段名常量：与埋点处一致，报告/产物里按这两个键分组
+# 阶段名常量：与计数处一致，报告与输出文件里按这两个键分组
 STAGE_EXTRACT = "extract"  # 结构化抽取（双读时同一阶段计两次）
 STAGE_REVIEW = "review"  # 双审盲审复核
 
@@ -78,3 +78,30 @@ def llm_call(stage: str):
             usage.seconds += time.perf_counter() - started
             usage.calls += 1
             usage.stages[stage] = usage.stages.get(stage, 0) + 1
+
+
+def current_usage() -> dict | None:
+    """当前追踪上下文里的用量快照（未开启追踪返回 None）。
+
+    图节点用它把"本任务到目前发生的调用"写进 state：报告在最后一个节点才拼出来，
+    而审批恢复会重新跑一遍 rules/policy 节点——用量要按"任务累计"而不是
+    "本次调用"来报，所以存在 state 里并逐次合并。
+    """
+    usage = _ACTIVE.get()
+    return usage.to_dict() if usage is not None else None
+
+
+def merge_usage(prev: dict | None, cur: dict | None) -> dict:
+    """合并两段用量（各字段相加，阶段计数按 key 相加）。"""
+    if not prev:
+        return cur or {"calls": 0, "stages": {}, "seconds": 0.0}
+    if not cur:
+        return prev
+    stages = dict(prev.get("stages") or {})
+    for name, count in (cur.get("stages") or {}).items():
+        stages[name] = stages.get(name, 0) + count
+    return {
+        "calls": (prev.get("calls") or 0) + (cur.get("calls") or 0),
+        "stages": stages,
+        "seconds": round((prev.get("seconds") or 0.0) + (cur.get("seconds") or 0.0), 2),
+    }

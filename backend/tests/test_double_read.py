@@ -20,7 +20,7 @@ def _model_with_terms(amounts_percents: list[tuple[str, float | None]]) -> Contr
 
 
 def test_terms_signature_ignores_name_but_not_order() -> None:
-    """期次判同看 (金额,比例) 且顺序敏感（与字段尺子/金额规则同口径）。"""
+    """期次判同看 (金额,比例) 且顺序敏感（与金额规则同口径）。"""
     a = _model_with_terms([("200000", 20.0), ("800000", 80.0)])
     b = _model_with_terms([("200000", 20.0), ("800000", 80.0)])
     assert _field_equal("payment_schedule", a.payment_schedule, b.payment_schedule)

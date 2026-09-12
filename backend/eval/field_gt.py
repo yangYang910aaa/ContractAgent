@@ -1,17 +1,17 @@
-"""字段级 ground truth：合成 sample 的抽取期望（金额/日期/比例等，D29 后下一步②）。
+"""字段级 ground truth：合成样本的抽取期望（金额/日期/比例等）。
 
 用途：给 run_eval 的"字段准确率"指标提供真值——逐字段比较抽取结果与生成 spec
-的真实参数，量"抽取准不准"（金额/日期/比例），是"关键字段双读"的尺子。
+的真实参数，量"抽取准不准"（金额/日期/比例），是关键字段核对的依据。
 
 真值来源：generate_samples.SPECS（sample_01~05 企业 / 06~07 校服 / 08~09 技术），
 字段值与渲染正文一致（spec 参数化，直接是文本真值）。校服/技术合同的生效日正文
 写"自{签署日}双方签字盖章之日起生效"，无独立日期——抽取靠 infer_effective_from_
-signature 回填，故期望生效日 = 签署日（与 rules 兜底口径一致）。
+signature 回填，故期望生效日 = 签署日（与规则引擎一致）。
 
 口径约定（仅第一期，覆盖 9 份 sample；变体/真实合同无结构化 spec，后续再说）：
 - expected_fields 只收录"正文必然出现、抽取器应当填对"的字段；值为 None 表示
   该文件正文没有此内容（如 sample_04 缺保密条款、校服无责任上限），抽到值反算
-  wrong（量化 LLM 幻觉，呼应 D23 tech_03 脑补金额的教训）；
+wrong（量化模型幻觉，如把比例数字脑补成金额）；
 - 判分字段 = 金额(total_amount/payment_schedule) + 日期(signature/effective/expiry)
   + 比例与数值(penalty_rate/liability_cap/warranty_months/confidentiality_months/
   termination_notice_days) + 标识(buyer/supplier/contract_kind/currency)；

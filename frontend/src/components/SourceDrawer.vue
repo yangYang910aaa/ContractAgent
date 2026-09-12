@@ -1,5 +1,5 @@
 <!--
-  U2 原文抽屉：任务页「查看原合同」的侧滑面板（2026-09-05 体验修订）。
+  原文抽屉：任务页「查看原合同」的侧滑面板。
   视图按文件类型给：pdf 提供「原文件」（浏览器内嵌预览，inline 而非下载）、
   「条文视图」（按条款整理、Markdown 表格转文本、证据定位锚点）与「纯文本」
   （模型解析出的原始全文快照，含 Markdown 标记）；docx/md/txt 提供
@@ -22,8 +22,7 @@ interface DrawerRisk {
   severity?: string | null
   clause_ref?: string
   evidence?: string
-  // 原文摘录（后端定位 pass 填）：evidence 常是规则生成的说明句，正文里搜不到；
-  // 定位与句内高亮优先用它（2026-09-11 走查修复）
+  // 原文摘录（后端定位环节补）：说明句在正文里搜不到，定位与句内高亮优先用它
   evidence_quote?: string
 }
 
@@ -41,6 +40,36 @@ const props = defineProps<{
 
 const emit = defineEmits<{ close: [] }>()
 
+/** 面板宽度（px）：0 = 用 CSS 默认宽度。用户拖过之后记住，下次打开还是这个宽度
+ *  （右栏默认 60vw，不缩窄会把左边的报告内容遮住）。 */
+const panelWidth = ref(Number(localStorage.getItem('src-panel-width')) || 0)
+const resizing = ref(false)
+// 最小宽度：再窄就看不清条文了（拖过头没意义）
+const PANEL_MIN_W = 520
+
+/** 拖左缘改宽度：往左拖变宽、往右拖变窄，夹在 [520, 视口宽-48] 之间。 */
+function startResize(e: MouseEvent) {
+  e.preventDefault()
+  const panel = (e.currentTarget as HTMLElement).closest('.src-panel') as HTMLElement | null
+  const startX = e.clientX
+  // 没有显式宽度时以实际渲染宽度为起点（dock 模式是 min(860, 60vw)，不能按 0 算）
+  const startW = panelWidth.value || panel?.getBoundingClientRect().width || window.innerWidth * 0.6
+  const maxW = Math.max(PANEL_MIN_W, window.innerWidth - 48)
+  resizing.value = true
+  const onMove = (ev: MouseEvent) => {
+    panelWidth.value = Math.min(Math.max(startW - (ev.clientX - startX), PANEL_MIN_W), maxW)
+  }
+  // 收尾：解绑监听 + 记住宽度（存 localStorage，关掉抽屉再开还是这个宽度）
+  const onUp = () => {
+    resizing.value = false
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+    localStorage.setItem('src-panel-width', String(Math.round(panelWidth.value)))
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
+
 type TabId = 'file' | 'blocks' | 'text'
 
 // doc=原文数据；tab=当前视图；askDownload=下载确认弹窗开关
@@ -56,8 +85,7 @@ const docxClamped = ref(0) // 因源文件缩进异常而被夹回的段落数�
 let timer: number | undefined
 
 // 缩进容错阈值（pt）：超过 2 英寸的缩进在 A4 页面里没有正常用途，判为源文件坏样式。
-// 背景（2026-09-11 启动自查）：真实素材里有一份 docx 的 w:ind left/firstLine 达 22 英寸，
-// docx-preview 原样渲染会把行首字符顶出可视区，看起来像"掉字"。
+// 真实素材里出现过缩进达 22 英寸的 docx，原样渲染会把行首字符顶出可视区，看着像"掉字"。
 const INDENT_MAX_PT = 144
 
 /** 把渲染结果里离谱的缩进夹回 0，返回被修正的属性个数（0=无需修正）。 */
@@ -279,6 +307,10 @@ function layoutHtml(index: number, b: SourceBlock): string {
   while (i < lines.length) {
     const raw = lines[i]
     const clean = pdfCleanLine(raw)
+    // 这种情况是：OCR 页标记行（"--- 第 3 页 ---"）→ 不进正文、也**不打断段落**。
+    // 页标记常把一句话从中间切开（"…各自单｜--- 第 3 页 ---｜位公章…"），落进正文会读成
+    // "页码混进条款"；跳过后两截自然拼回一句。纯文本页签仍保留原样。
+    if (PAGE_MARK_AT.test(clean)) { i++; continue }
     // 表格碎片簇：连续 ≥3 个短行且都不是段落/编号头 → 合并成一行近似文本
     if (clean && isPdfShard(raw)) {
       let run = 1
@@ -344,7 +376,7 @@ function findBlock(clause: string, blocks: SourceBlock[]): number {
   const byTitle = blocks.findIndex((b) => b.title.includes(c) || c.includes(b.title))
   if (byTitle >= 0) return byTitle
   // 条款号是子条（如 "5.2"）时标题里没有它，但块正文里通常写着（"5.2付款方式"）
-  // → 再按块正文找一次（2026-09-11 走查：此前落到"纯文本"兜底且不高亮）
+  // → 再按块正文找一次（否则会落到"纯文本"兜底且不高亮）
   return blocks.findIndex((b) => b.text.includes(c))
 }
 
@@ -359,14 +391,130 @@ function findBlockByEvidence(evidence: string, blocks: SourceBlock[]): number {
   return blocks.findIndex((b) => b.text.replace(/\s+/g, '').includes(flat))
 }
 
-/** 滚动到目标块并**保持**高亮：高亮是"定位到这儿"的锚，闪一下就没会让人以为没定位成功
- *  （2026-09-11 走查：用户反馈蓝色区域出现一秒就消失）。下次定位时自动清掉上一处。 */
-function flashTo(index: number) {
+// OCR 页标记（parser 逐页拼接时插入）：与后端 rules._PAGE_MARK_RE 同口径——比对原句时
+// 连同空白一起丢掉，否则"正文有页标记、摘录没有"会让句级定位失败（真实扫描件实测）
+const PAGE_MARK_SRC = String.raw`-{2,}\s*第\s*\d+\s*页\s*-{2,}`
+const PAGE_MARK_ALL = new RegExp(PAGE_MARK_SRC, 'g') // 整串删除（处理摘录）
+const PAGE_MARK_AT = new RegExp(`^${PAGE_MARK_SRC}`) // 锚定匹配（逐字符扫描正文）
+
+/** 把块内文本压成"紧凑串"（去掉空白与页标记），并记录每个字符落在哪个文本节点上，
+ *  这样摘录（连续句）才能精确映射回 DOM 位置——PDF/OCR 正文里满是硬换行与页标记。 */
+function compactBlock(el: HTMLElement): { flat: string; owner: { node: Text; offset: number }[] } {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  const nodes: Text[] = []
+  let n = walker.nextNode() as Text | null
+  while (n) {
+    nodes.push(n)
+    n = walker.nextNode() as Text | null
+  }
+  const chars: string[] = []
+  const owner: { node: Text; offset: number }[] = []
+  for (const node of nodes) {
+    const s = node.data
+    let i = 0
+    while (i < s.length) {
+      // 这种情况是：页标记（内部还可能有空格）→ 整段跳过，不参与比对
+      const mark = s.slice(i).match(PAGE_MARK_AT)
+      if (mark) {
+        i += mark[0].length
+        continue
+      }
+      if (!/\s/.test(s[i])) {
+        chars.push(s[i])
+        owner.push({ node, offset: i })
+      }
+      i += 1
+    }
+  }
+  return { flat: chars.join(''), owner }
+}
+
+/** 摘录 → 紧凑候选片段（长的优先）。
+ *  为什么不止一个候选：规则的摘录是"命中点左右取窗口"，会横跨两个条款块
+ *  （实测"…以资共同遵守执行。一、原合同变更内容：…"跨"前言"与"一、"），
+ *  整段在一个块里找不到时，要退到"按句拆开、取落在本块的那句"。 */
+function quoteCandidates(quote: string): string[] {
+  const norm = (s: string) => s.replace(PAGE_MARK_ALL, '').replace(/\s+/g, '')
+  const whole = norm(quote)
+  const parts = quote
+    .split(/[。；;！？]/)
+    .map(norm)
+    // 太短的碎片（"1.1"这种）既没有定位价值，又容易在正文里撞到别处
+    .filter((s) => s.length >= 12)
+    .sort((x, y) => y.length - x.length)
+  return [whole, ...parts].filter((s) => s.length > 0)
+}
+
+/** 摘录与块正文的"最长公共片段"（短于 minLen 视为对不上）。
+ *  兜底用：摘录可能带着条款标题、跨块拼接、或与正文有零星差异，
+ *  前两种候选都对不上时，至少把真正落在本块的那一段圈出来。 */
+function longestOverlap(quote: string, flat: string, minLen = 12): string | null {
+  const q = quote.replace(PAGE_MARK_ALL, '').replace(/\s+/g, '')
+  let best = ''
+  for (let i = 0; i < q.length; i++) {
+    // 以 i 为起点二分最长可命中长度（前缀命中单调 → 二分成立）
+    let lo = minLen
+    let hi = q.length - i
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      if (flat.includes(q.slice(i, i + mid))) {
+        if (mid > best.length) best = q.slice(i, i + mid)
+        lo = mid + 1
+      } else {
+        hi = mid - 1
+      }
+    }
+    if (best.length >= q.length) break
+  }
+  return best.length >= minLen ? best : null
+}
+
+/** 在块正文里把摘录那一句包成 <mark class="mk-locate">；命中返回该元素，找不到返回 null。 */
+function wrapQuote(el: HTMLElement, quote: string): HTMLElement | null {
+  // 只在**正文**里找：块标题与"命中 N"徽标夹在标题和正文之间，
+  // 连它们一起算会让"摘录以条款标题开头"的情况永远匹配失败（实测发票那条）
+  const body = (el.querySelector('.block-text') as HTMLElement | null) ?? el
+  const { flat, owner } = compactBlock(body)
+  // 先按整段 / 整句候选找，都对不上再退到"最长公共片段"
+  const target = quoteCandidates(quote).find((c) => flat.includes(c)) ?? longestOverlap(quote, flat)
+  if (!target) return null
+  const at = flat.indexOf(target)
+  const head = owner[at]
+  const tail = owner[at + target.length - 1]
+  if (!head || !tail) return null
+  const range = document.createRange()
+  range.setStart(head.node, head.offset)
+  range.setEnd(tail.node, tail.offset + 1)
+  const mark = document.createElement('mark')
+  mark.className = 'mk-locate'
+  mark.appendChild(range.extractContents())
+  range.insertNode(mark)
+  return mark
+}
+
+/** 清掉上一次定位留下的句内高亮，并合并被拆开的文本节点（下次定位仍能精确回查）。 */
+function clearLocateMarks() {
+  document.querySelectorAll('.mk-locate').forEach((node) => {
+    const parent = node.parentNode
+    if (!parent) return
+    while (node.firstChild) parent.insertBefore(node.firstChild, node)
+    parent.removeChild(node)
+    ;(parent as HTMLElement).normalize()
+  })
+}
+
+/** 滚动到定位目标并保持高亮（下次定位时清掉上一处）：高亮闪一下就没会让人以为没定位成功。
+ *  优先只标"命中那一句"，拿不到原句时才退回整块高亮；返回 true 表示已做句级高亮。 */
+function flashTo(index: number, quote = ''): boolean {
   const el = document.getElementById(`src-block-${index}`)
-  if (!el) return
+  if (!el) return false
+  clearLocateMarks()
   document.querySelectorAll('.block.flash').forEach((node) => node.classList.remove('flash'))
-  el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  el.classList.add('flash')
+  const mark = quote ? wrapQuote(el, quote) : null
+  // 这种情况是：标不到原句 → 整块高亮兜底，至少让用户看到定位到了哪一块
+  if (!mark) el.classList.add('flash')
+  ;(mark ?? el).scrollIntoView({ behavior: 'smooth', block: mark ? 'center' : 'start' })
+  return Boolean(mark)
 }
 
 /** 纯文本兜底定位：按片段在全文中的位置估滚（无条文结构时仍能跳个大概）。 */
@@ -394,7 +542,14 @@ async function locate() {
     if (i >= 0) {
       tab.value = 'blocks'
       await nextTick()
-      flashTo(i)
+      // 这种情况是：条款号能对上块，但摘录原句不在该块（条款号常来自模型自述、
+      // 可能指偏）→ 改按摘录所在块定位，摘录是原文，落点更可信
+      if (flashTo(i, evidence) || !evidence) return
+      const byQuote = findBlockByEvidence(evidence, blocks)
+      if (byQuote >= 0 && byQuote !== i) {
+        flashTo(byQuote, evidence)
+        return
+      }
       return
     }
   }
@@ -404,7 +559,7 @@ async function locate() {
     if (j >= 0) {
       tab.value = 'blocks'
       await nextTick()
-      flashTo(j)
+      flashTo(j, evidence)
       return
     }
     await scrollTextTo(evidence)
@@ -503,11 +658,19 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <!-- Teleport 到 body：弹窗须相对视口 fixed；放在动画容器（.rise 带
-       transform）内会把包含块锁在卡片上，导致弹窗变小/偏右（2026-09-05 实测） -->
+  <!-- Teleport 到 body：弹窗须相对视口 fixed；放在带动画的容器里会把包含块锁在卡片上，
+       导致弹窗变小/偏右 -->
   <Teleport to="body">
     <div class="src-overlay" @click.self="emit('close')">
-      <aside class="src-panel rise" role="dialog" aria-label="原合同查看">
+      <aside
+        class="src-panel rise"
+        :class="{ resizing }"
+        :style="panelWidth ? { width: `${panelWidth}px` } : undefined"
+        role="dialog"
+        aria-label="原合同查看"
+      >
+      <!-- 左缘拖拽手柄：右栏默认占 60vw，能拖窄才方便边看报告边核对原文 -->
+      <div class="src-resize" title="拖动调整宽度" @mousedown="startResize"></div>
       <header class="src-head">
         <div class="title-wrap">
           <span class="file serif" :title="doc?.name">{{ doc?.name || '…' }}</span>
@@ -637,6 +800,7 @@ onUnmounted(() => {
 }
 
 .src-panel {
+  position: relative; /* 左缘拖拽手柄的定位基准 */
   width: min(860px, 60vw);
   height: 100%;
   margin: 0;
@@ -652,6 +816,39 @@ onUnmounted(() => {
   animation: src-in 0.22s ease both;
 }
 
+/* 拖动中禁掉选中文字：否则拖手柄会顺手把原文选中一片 */
+.src-panel.resizing {
+  user-select: none;
+}
+
+/* 左缘拖拽手柄：细条常驻，hover 变主色提醒"这里能拖" */
+.src-resize {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  z-index: 5;
+  cursor: col-resize;
+}
+
+.src-resize::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 46px;
+  border-radius: 3px;
+  background: var(--line-strong);
+  transition: background 0.15s ease;
+}
+
+.src-resize:hover::after {
+  background: var(--pri);
+}
+
 @keyframes src-in {
   from {
     transform: translateX(46px);
@@ -665,6 +862,11 @@ onUnmounted(() => {
 
 /* 中窄屏：回到居中近全屏浮层（点遮罩空白关闭） */
 @media (max-width: 1100px) {
+  /* 居中浮层里"拖左缘"没有直观的参照，隐藏手柄，避免误触 */
+  .src-resize {
+    display: none;
+  }
+
   .src-overlay {
     justify-content: center;
     align-items: center;
@@ -892,6 +1094,16 @@ onUnmounted(() => {
 .block-text :deep(mark.mk-med) {
   background: #f7e7bd;
   color: #7a5510;
+}
+
+/* 定位命中句：句级高亮（蓝底 + 下划线）——比整块框选精确得多，
+   扫描件那种"一块里塞十几条"的文本尤其需要 */
+.block-text :deep(mark.mk-locate) {
+  background: rgba(52, 86, 209, 0.16);
+  color: var(--ink);
+  box-shadow: inset 0 -2px 0 rgba(52, 86, 209, 0.45);
+  border-radius: 2px;
+  padding: 0 2px;
 }
 
 /* docx/pdf 条文块的结构化排版：段落、近似表格行、真表格 */

@@ -121,6 +121,6 @@ def test_llm_summary_counts_calls_and_stages() -> None:
 
 
 def test_llm_summary_none_without_data() -> None:
-    """旧产物/未接入计数时返回 None（打印与产物都跳过，不影响四项主指标）。"""
+    """旧输出/未接入计数时返回 None（打印与输出都跳过，不影响四项主指标）。"""
     assert _llm_summary([]) is None
     assert _llm_summary([{1: {"llm_calls": 0}}]) is None

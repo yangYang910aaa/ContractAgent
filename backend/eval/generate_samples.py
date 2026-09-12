@@ -61,14 +61,14 @@ class SampleSpec:
     ip_ownership: str = "定制成果知识产权归甲方（采购方）所有"  # IP 权属表述
     governing_law: str = "中华人民共和国法律"  # 适用法律
     note: str = ""  # 缺陷说明（写进生成清单）
-    # 批1（P-06~P-09）合规章节开关：企业骨架默认写全，缺陷样本按需关掉对应章节。
+# 条款合规章节开关：企业骨架默认写全，缺陷样本按需关掉对应章节。
     # 背景：横向政策扩类后"完整正常合同"必须含 验收安排/发票约定/履约担保/转包限制，
     # 旧样本正文没有这些条款会新增 medium 误报，重渲染为"新政策口径下完整"形态。
     acceptance_clause: bool = True  # False=删除交付与验收整节（P-06 缺陷：缺验收安排）
     invoice_clause: bool = True  # False=付款方式节不写开票句（P-07 缺陷：缺发票约定）
     performance_bond_clause: bool = True  # False=不写履约担保节（P-08 缺陷：大额/预付缺担保）
     subcontract_clause: str = "restrict"  # restrict=不得转包 / waiver=任意转包免责(P-09 high) / none=不写
-    # 批3（P-13/P-14）合规开关：None=保持旧写法（存量样本文本不动，防止基线漂移）；
+# 保密与违约金合规开关：None=保持旧写法（存量样本文本不动，防止基线漂移）；
     # True=保密条款写明例外；False=绝对禁止式、无例外（sample_21 缺陷）
     confidentiality_exception: bool | None = None
     # True=违约金句只写费率不写基数（sample_22 缺陷：基数不明）
@@ -286,7 +286,7 @@ class TechServiceSampleSpec:
     liability_cap_percent: float = 100.0  # 责任上限（占开发费总额 %）：100=合规
     ip_to_supplier: bool = False  # True=成果 IP 归乙方（构造缺陷）；False=归甲方（正常）
     note: str = ""  # 缺陷说明（写进生成清单）
-    # 批1（P-07/P-08）合规章节开关：tech 骨架固定 14 条，开票/保函句并入费用条款内
+# 发票与保函合规章节开关：技术骨架固定 14 条，开票/保函句并入费用条款内
     # （不新增条款，保持既有 parser 测试"第X条 1..14"锚点不变）
     invoice_clause: bool = True  # False=费用条款不写开票句（P-07 缺陷）
     bond_clause: bool = True  # False=费用条款不写履约保函句（P-08 缺陷，大额 120 万）
@@ -328,11 +328,11 @@ TECH_SPECS: list[TechServiceSampleSpec] = [
 ]
 
 
-# ---- 横向批1 新样本（sample_10~15，2026-09-09，P-06~P-09 条款级缺陷 + 正常对照）----
+# ---- 条款级缺陷样本（sample_10~15：验收/发票/担保/转包缺陷 + 正常对照）----
 # 与 01~05 企业骨架同源渲染，只是多出 P-06~P-09 合规章节开关：缺陷=关掉/改写对应章节，
 # 正常对照=全部写全（新政策口径下的"完整正常合同"，供评测零风险对照）。
 # 独立成 NEW_SPECS 而不并入 SPECS/TECH_SPECS：field_gt 只覆盖既有 9 份 sample
-# （批1 四类缺陷均为条款级、无新增抽取字段，字段尺子不扩，见范围卡第四节）。
+# （四类缺陷均为条款级、无新增抽取字段，字段真值不扩。）
 
 
 NEW_SPECS: list = [
@@ -393,7 +393,7 @@ NEW_SPECS: list = [
         performance_bond_clause=False,  # 缺陷：总额 200 万且含预付，无履约担保（P-08）
         note="缺陷：合同总额 200 万且含 20% 预付款，却无履约保函/保证金，P-08 应报 medium。",
     ),
-    # sample_13：缺陷 = 转包免责（high，批1 唯一 high：改写成任意转包且甲方无权追责）
+# sample_13：缺陷 = 转包免责（改写成任意转包且甲方无权追责 → 高风险）
     SampleSpec(
         sample_id="sample_13",
         filename="sample_13_定制机床采购合同_转包免责.md",
@@ -452,12 +452,12 @@ NEW_SPECS: list = [
 ]
 
 
-# ---- 数据服务式（批2：数据与个人信息合规）样本：第X条骨架 + 数据条款开关 ----
+# ---- 数据服务式样本（数据与个人信息合规）：第X条骨架 + 数据条款开关 ----
 
 
 @dataclass
 class DataSampleSpec:
-    """数据服务/个人信息处理类合成合同规格（批2，2026-09-10）。
+    """数据服务/个人信息处理类合成合同规格。
 
     骨架参考用户收集的真实合同结构（档案数字化 / 平台开发 / 数字化运维），内容全部
     合成（真实主体与信息不入库）。数据类条款用开关控制，用于构造 P-10~P-12 的缺陷：
@@ -482,7 +482,7 @@ class DataSampleSpec:
     liability_cap_percent: float = 100.0  # 责任上限（占总额 %）
     warranty_months: int = 24  # 质保/维护期（月）
     confidentiality_months: int = 24  # 保密期（月）
-    # 批2 数据条款开关（默认全部合规，缺陷样本按需关闭/改写）
+# 数据条款开关（默认全部合规，缺陷样本按需关闭/改写）
     data_protect_clause: bool = True  # False=缺个人信息保护义务
     processing_terms: bool = True  # False=委托处理要件不全
     cross_border: bool = False  # True=约定数据出境（无合规路径 → high）
@@ -502,7 +502,7 @@ DATA_SPECS: list[DataSampleSpec] = [
         signature_date="2026年9月1日",
         expiry_date="2027年8月31日",
         payment_terms=[("预付款", "300,000", 20), ("验收合格后支付", "1,200,000", 80)],
-        note="批2 正常对照：个人信息保护义务/处理要件/删除与事件条款齐全，应零风险 pass。",
+        note="正常对照：个人信息保护义务/处理要件/删除与事件条款齐全，应零风险通过。",
     ),
     # sample_17：缺陷 = 缺个人信息保护义务条款（其余数据要件仍在）
     DataSampleSpec(
@@ -532,7 +532,7 @@ DATA_SPECS: list[DataSampleSpec] = [
         processing_terms=False,  # 缺陷：委托处理要件不完整（P-10）
         note="缺陷：数据条款只写笼统一句，缺处理目的/期限/方式/种类/删除义务，P-10 应报 medium。",
     ),
-    # sample_19：缺陷 = 约定数据出境但无合规路径（high，批2 唯一闸口验证点）
+# sample_19：缺陷 = 约定数据出境但无合规路径（高风险，闸口验证点）
     DataSampleSpec(
         sample_id="sample_19",
         filename="sample_19_跨境数据平台服务合同_出境无合规路径.md",
@@ -560,7 +560,7 @@ DATA_SPECS: list[DataSampleSpec] = [
         deletion_and_breach=False,  # 缺陷：无删除/返还与安全事件通知（P-12）
         note="缺陷：未约定数据删除/返还，也未约定泄露等安全事件告知义务，P-12 应报 medium。",
     ),
-    # ---- 批3（P-13/P-14）：保密例外、违约金基数与上限 ----
+# ---- 保密例外、违约金基数与上限样本 ----
     # sample_21：缺陷 = 保密条款绝对禁止式、无任何例外（P-13 medium）
     SampleSpec(
         sample_id="sample_21",
@@ -599,7 +599,7 @@ DATA_SPECS: list[DataSampleSpec] = [
         penalty_basis_unclear=True,  # 缺陷：违约金句只写 0.05%，不写计算基数
         note="缺陷：违约金只写费率未写基数（按总额还是逾期部分、是否含税），P-14 应报 medium。",
     ),
-    # sample_23：缺陷 = 按日违约金 0.5% 且全文无累计上限（P-14 high，批3 闸口点）
+# sample_23：缺陷 = 按日违约金 0.5% 且全文无累计上限（高风险，闸口点）
     SampleSpec(
         sample_id="sample_23",
         filename="sample_23_环保设备采购合同_违约金无上限.md",
@@ -619,7 +619,7 @@ DATA_SPECS: list[DataSampleSpec] = [
         liability_cap_percent=None,  # 且无责任上限句 → 违约金无任何封顶
         note="缺陷：按日 0.5% 违约金且无累计上限，P-14 应报 high（长期拖延可超合同总额）。",
     ),
-    # sample_24：批3 正常对照（保密含例外 + 违约金基数与上限齐全，应零风险 pass）
+# sample_24：正常对照（保密含例外 + 违约金基数与上限齐全，应零风险通过）
     SampleSpec(
         sample_id="sample_24",
         filename="sample_24_劳保用品采购合同_正常.md",
@@ -1210,7 +1210,7 @@ def _penalty_lines(spec: SampleSpec) -> list[str]:
 
     分支：配置了责任上限 → 渲染上限句；未配置 → 写「按法律规定承担」兜底句，
     避免正文出现空条款。
-    分支：penalty_basis_unclear=True（批3 缺陷）→ 违约金句只写费率不写基数。
+    分支：penalty_basis_unclear=True（缺陷样本）→ 违约金句只写费率不写基数。
     """
     # 分支 0：基数不明缺陷（sample_22）→ 句内不出现任何计算基数
     if spec.penalty_basis_unclear:
@@ -1239,14 +1239,14 @@ def _confidentiality_lines(spec: SampleSpec) -> list[str]:
     # 分支：confidentiality_clause=False（如 sample_04）→ 返回空，整节不渲染
     if not spec.confidentiality_clause:
         return []
-    # 分支 1：批3 正常对照 → 写明法定/监管披露、已公开、书面同意等例外
+    # 分支 1：正常对照 → 写明法定/监管披露、已公开、书面同意等例外
     if spec.confidentiality_exception is True:
         return (
             "双方对因履行本合同而知悉的对方商业秘密负有保密义务；除法律法规要求、"
             "监管或司法机关要求披露，以及已公开信息、经对方书面同意外，不得向第三方披露。",
             f"保密期限自本合同终止之日起 {spec.confidentiality_months} 个月。",
         )
-    # 分支 2：批3 缺陷 sample_21 → 绝对禁止式、无任何例外
+    # 分支 2：缺陷样本 sample_21 → 绝对禁止式、无任何例外
     if spec.confidentiality_exception is False:
         return (
             "双方对因履行本合同而知悉的对方商业秘密负有保密义务，"
@@ -1394,7 +1394,7 @@ def render_contract(spec: SampleSpec) -> str:
 from backend.eval.format_render import _cjk_font_path, render_docx, render_pdf  # noqa: F401
 
 
-ALL_SPECS: list = [*SPECS, *UNIFORM_SPECS, *TECH_SPECS, *NEW_SPECS, *DATA_SPECS]  # 01~09 旧 + 10~15 批1 + 16~20 批2
+ALL_SPECS: list = [*SPECS, *UNIFORM_SPECS, *TECH_SPECS, *NEW_SPECS, *DATA_SPECS]  # 01~09 基础 + 10~15 条款级 + 16~20 数据合规
 
 
 def _body_for(spec) -> str:
@@ -1406,14 +1406,14 @@ def _body_for(spec) -> str:
     if isinstance(spec, UniformSampleSpec):
         return render_uniform_contract(spec)
     # 分支 3：企业式 spec → 原有「第X条」正文
-    # 分支 4：数据服务式 spec（批2）→ 数据条款骨架正文
+    # 分支 4：数据服务式 spec → 数据条款骨架正文
     if isinstance(spec, DataSampleSpec):
         return render_data_service_contract(spec)
     return render_contract(spec)
 
 
 def main() -> None:
-    """把全部 spec（企业/校服/技术开发 + 批1 新样本 10~15）渲染成 md/docx/pdf 落盘。"""
+    """把全部 spec（企业/校服/技术开发 + 条款级样本 10~15）渲染成 md/docx/pdf 落盘。"""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     manifest: list[str] = []
     for spec in ALL_SPECS:

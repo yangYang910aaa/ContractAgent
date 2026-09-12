@@ -26,6 +26,7 @@ from backend.app.rules import (
     text_rules,
 )
 from backend.app.schemas import ContractModel, RiskItem
+from backend.app.usage import current_usage, merge_usage, track_usage
 from backend.app.store import ThreadStore
 
 
@@ -47,6 +48,7 @@ class ReviewState(TypedDict, total=False):
     rerun: bool  # True=审批要求 edited，需回 rules 重审（edge 判定用）
     report: dict  # 最终报告（JSON 可序列化）
     review: dict  # 双审合并结果段（mode/stats/details/summary；单审不写此键）
+    llm: dict  # LLM 用量累计（calls/stages/seconds）：报告 `llm` 段，审批恢复也不清零
     error: str  # 抽取/图执行错误信息
     review_mode: str  # single / double / parallel（多智能体决策钩子，默认 single）
 
@@ -79,7 +81,7 @@ def _build_gate_payload(state: ReviewState) -> dict:
             for r in high
         ],
         # 双审时把复核结论一并带进闸口载荷：审批人在放行/打回前就能看到"复核新增了什么、
-        # 哪些只提示"（2026-09-11 走查：此前 gate 阶段完全看不到盲审结果，属于展示缺口）
+        # 哪些只记录"，不放行后再补看
         "review": review,
     }
 
@@ -108,13 +110,10 @@ def build_review_graph(
     reviewer: Callable[[str], BlindReviewOutput] | None = None,
     checkpointer: Any = None,
 ) -> Any:
-    """构造 LangGraph 审核图 
+    """构造审核图：抽取 → 规则 → （可选盲审复核）→ 政策检索 → 评级 → 闸口/报告。
 
-    extractor: text -> ContractModel (默认 extract_contract 真 LLM)  
-    retriever: query -> PolicyHit 列表 (默认 pipeline.enrich 的默认检索)。
-    reviewer: text -> BlindReviewOutput(双审盲审复核器；默认 blind_review 真 LLM)。
-    checkpointer: MemorySaver 等；不传也能跑，但 interrupt/HITL 必须配checkpointer 
-    返回 compiled graph。
+    抽取器、检索器、复核器、检查点都可注入，不传则用真实实现；检查点不传也能跑，
+    但需要中断恢复（人工审批）时必须配上。返回编译好的图。
     """
     from backend.app.extractor import extract_contract  # 延迟导入：防循环
 
@@ -189,10 +188,15 @@ def build_review_graph(
         }
 
     def policy_node(state: ReviewState) -> dict:
-        """为带 policy_ref 的风险检索政策原文（引用依据，检索失败不阻断）。"""
+        """为带 policy_ref 的风险检索政策原文（引用依据，检索失败不阻断）。
+
+        顺带把本任务的模型调用用量写进 state：这个节点在抽取与盲审之后、闸口之前，
+        单审/双审都会经过；审批恢复会重跑本节点，所以用累计合并而不是覆盖，
+        免得把抽取那几次调用冲掉。
+        """
         risks = _risks_from_dicts(state.get("risks", []))
         hits = enrich_policy_hits(risks, retriever=retriever)
-        return {"policy_hits": hits}
+        return {"policy_hits": hits, "llm": merge_usage(state.get("llm"), current_usage())}
 
     def grade_node(state: ReviewState) -> dict:
         """按风险清单评级 (pass/conditional_pass/fail)"""
@@ -239,6 +243,8 @@ def build_review_graph(
                 "review": state.get("review"),
                 "approval": state.get("approval"),
                 "review_mode": state.get("review_mode", "single"),
+                # LLM 用量：与评测链路（pipeline.run_review）口径一致，报告可直接看成本
+                "llm": state.get("llm"),
                 "status": "done",
             }
         }
@@ -253,6 +259,8 @@ def build_review_graph(
                 "policy_hits": [],
                 "extracted": state.get("extracted"),
                 "error": state.get("error", "未知错误"),
+                # 抽取失败也可能已经发出调用（超时/限流），用量照实带出
+                "llm": current_usage(),
                 "status": "error",
             }
         }
@@ -303,12 +311,10 @@ def build_review_graph(
 
 
 class ReviewRunner:
-    """将langgraph的compiled graph包装为审核运行器。
-    审核运行器: graph + checkpointer + 任务登记簿，封装开始/续跑。
+    """审核运行器：图 + 检查点 + 任务登记簿，封装"受理"与"续跑审批"。
 
-    默认全内存(MemorySaver + ThreadStore, 测试/无库兜底); 服务入口在
-    DATABASE_URL 配置时注入 Postgres 持久化的 store/checkpointer(store_pg.py),
-    使任务与审批闸口跨重启保留。
+    默认全内存（测试与无库时兜底）；配了数据库时换成 Postgres 持久化，
+    任务与待审批闸口跨重启保留。
     """
 
     def __init__(
@@ -359,12 +365,11 @@ class ReviewRunner:
         thread_id: str | None = None,
         review_mode: str | None = None,
     ) -> dict:
-        """发起一份合同的审核: 登记任务 → 跑图（可能停在 gate 等审批）。
+        """受理一份合同：登记任务并跑图（有高危项会停在闸口等审批）。
 
-        thread_id 缺省时新建任务; 队列/路由先登记的场景传入既有 thread_id,
-        避免同一任务被登记两次（登记簿与 checkpointer 必须同键）。
-        review_mode 缺省用构造参数 self.review_mode；队列/服务可按任务覆盖
-        （任务登记簿存的 review_mode 由 TaskManager 起跑时传入）。
+        任务号缺省时新建任务；队列/路由已先登记的场景必须把同一个任务号传进来，
+        否则同一任务会被登记两次。审查模式缺省用构造参数，服务端可按任务覆盖。
+        返回图状态。
         """
         if thread_id is None:
             record = self.store.create(source)
@@ -385,7 +390,10 @@ class ReviewRunner:
         }
         if text is not None:
             init["text"] = text
-        state = self.graph.invoke(init, self._config(tid))
+        # 用量追踪只在本次 invoke 内生效（contextvar 按调用隔离，并发 worker 不串号）；
+        # 节点把累计值写进 state，所以闸口暂停再恢复也不会丢
+        with track_usage():
+            state = self.graph.invoke(init, self._config(tid))
         return self._finish(tid, state)
 
     def pending(self, thread_id: str) -> dict | None:
@@ -406,7 +414,8 @@ class ReviewRunner:
         if record is None or record.status != "gate":
             raise ValueError(f"任务 {thread_id} 不在待审批状态（当前 {record.status if record else '未知'}) ")
         answer = {"action": action, "note": note, "patches": patches}
-        state = self.graph.invoke(Command(resume=answer), self._config(thread_id))
+        with track_usage():
+            state = self.graph.invoke(Command(resume=answer), self._config(thread_id))
         return self._finish(thread_id, state)
 
     def delete_task(self, thread_id: str) -> bool:

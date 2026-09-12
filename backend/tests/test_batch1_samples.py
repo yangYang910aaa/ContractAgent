@@ -1,4 +1,4 @@
-"""横向批1 新样本（sample_10~15）确定性测试：文本级规则命中/对照、语料登记、三格式渲染。
+"""条款级缺陷样本（sample_10~15）确定性测试：文本规则命中/对照、语料登记、三格式渲染。
 
 全部离线（不调 LLM）：P-06~P-09 是文本级规则，md 正文即可确定性断言命中；
 docx/pdf 渲染走既有 format_render 通道，验证新 spec 能出三格式。
@@ -44,10 +44,13 @@ def test_new_samples_text_rules_match_design() -> None:
         risks = text_rules(_md_text(sample_id), _KINDS[sample_id])
         got = {r.risk_type: r.severity.value for r in risks}
         assert got == expected, f"{sample_id}: {got} != {expected}"
-        # 命中项应带政策编号与原文证据（报告可溯源）
+        # 命中项应带政策编号；有原文可指的还要带证据摘录（报告可溯源）。
+        # 例外：缺验收安排 / 未限制转包属"全篇找不到"类，正文里没有可指的句子，
+        # 就不给假定位（卡片上会明说"没有可直接指路的表述"）
         for r in risks:
             assert r.policy_ref in ("P-06", "P-07", "P-08", "P-09")
-            assert r.evidence
+            if r.risk_type not in ("acceptance_unclear", "subcontract_unrestricted"):
+                assert r.evidence
 
 
 def test_regenerated_old_samples_clean_on_text_rules() -> None:
@@ -89,13 +92,13 @@ def test_defect_samples_remove_only_target_clause() -> None:
 
 
 def test_new_samples_registered_in_gt() -> None:
-    """六份新样本都在 GT 登记（samples set、field_gt=false 豁免字段尺子）。"""
+    """六份新样本都在真值表登记（field_gt=false，豁免字段核对）。"""
     gt = json.loads(GT_PATH.read_text(encoding="utf-8"))
     entries = {e["file"]: e for e in gt["files"] if e["set"] == "samples"}
     for spec in NEW_SPECS:
         entry = entries.get(spec.filename)
         assert entry is not None, f"{spec.filename} 未在 GT 登记"
-        assert entry.get("field_gt") is False, f"{spec.filename} 应豁免字段尺子(field_gt=false)"
+    assert entry.get("field_gt") is False, f"{spec.filename} 应豁免字段核对(field_gt=false)"
 
 
 def test_new_specs_render_docx_pdf_roundtrip(tmp_path) -> None:

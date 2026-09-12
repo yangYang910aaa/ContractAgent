@@ -28,7 +28,7 @@ export interface GatePayload {
   ask?: string
   grade?: string
   high_risks: GateHighRisk[]
-  // 双审复核结论：闸口阶段报告未生成，靠它让审批人看到盲审发现（2026-09-11）
+  // 双审复核结论：闸口阶段报告还没生成，靠它让审批人先看到盲审发现
   review?: ReviewSection | null
 }
 
@@ -70,7 +70,7 @@ export interface ReviewDetail {
   evidence?: string
   policy_ref?: string | null
   suggestion?: string
-  outcome: 'agreed' | 'added' | 'upgraded' | 'noted' // 一致/复核新增/取高升级/仅提示
+  outcome: 'agreed' | 'added' | 'upgraded' | 'noted' // 一致/复核新增/取高升级/仅记录不并入
   note?: string // outcome 的补充说明（如复核门拦截原因）
 }
 
@@ -83,7 +83,7 @@ export interface ReviewSection {
     agreed: number // 与主审一致
     upgraded: number // 取高升级
     added: number // 复核新增（并入风险）
-    noted: number // 仅提示不并入
+    noted: number // 仅记录不并入（不进风险清单）
   }
   details?: ReviewDetail[]
   error?: string | null // 盲审调用失败说明（best-effort）
@@ -99,8 +99,16 @@ export interface Report {
   approval?: Approval | null
   review_mode?: string // single/double/parallel（多智能体决策钩子）
   review?: ReviewSection | null // 双审复核段（double 模式报告）
+  llm?: LlmUsage | null // 大模型用量（calls/stages/seconds；老报告可能没有）
   error?: string
   status?: string
+}
+
+/** LLM 用量段：只计 chat 调用（抽取首读/二读、盲审），不含本地规则与检索。 */
+export interface LlmUsage {
+  calls: number // 调用总次数
+  stages: Record<string, number> // 分阶段次数（extract/review）
+  seconds: number // 调用累计耗时（秒）
 }
 
 /** 队列列表项（无报告正文，详情接口才带 report）。 */

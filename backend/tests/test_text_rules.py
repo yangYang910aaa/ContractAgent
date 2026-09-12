@@ -81,7 +81,7 @@ def test_bond_missing_with_prepay_fires() -> None:
 
 
 def test_bond_gate_covers_first_payment_wording() -> None:
-    """P-08 的预付触发与 P-01 口径一致："首付款"同样计入（真实合同走查修复）。"""
+    """P-08 的预付触发与 P-01 口径一致："首付款"同样计入（此前漏判）。"""
     text = "合同总价款为 500,000 元。甲方支付首付款 100,000 元，余款验收后付清。"
     assert _types(text)["performance_bond_missing"] == Severity.medium.value
 
@@ -101,7 +101,7 @@ def test_bond_small_no_prepay_skips() -> None:
 
 
 def test_bond_present_clean() -> None:
-    """已有履约保函/质保金/保证金 → 不报（含质保金口径，范围卡列明）。"""
+    """已有履约保函/质保金/保证金 → 不报（质保金也算履约担保）。"""
     for text in (
         "合同总价款为 2,000,000 元，乙方应向甲方提供合同总价款 10% 的银行保函。",
         "合同总价款为 2,000,000 元，甲方按合同总价款的 5% 预留质保金。",
@@ -132,7 +132,7 @@ def test_subcontract_restricted_clean() -> None:
 
 
 def test_subcontract_waiver_fires_high() -> None:
-    """明文允许任意转包且甲方无权追责 → subcontract_unrestricted high（批1 唯一 high）。"""
+    """明文允许任意转包且甲方无权追责 → 转包风险判高风险。"""
     text = (
         "乙方可将本合同项下全部或部分工作任意转包给第三方，无需征得甲方同意；"
         "因转包产生的责任与甲方无关。"
@@ -141,7 +141,7 @@ def test_subcontract_waiver_fires_high() -> None:
 
 
 def test_agri_kind_no_subcontract_baseline() -> None:
-    """农副产品买卖无转包概念：agri 品类不套转包基线（范围卡判定草案口径）。"""
+    """农副产品买卖无转包概念：农副品类不套转包基线。"""
     text = "甲方采购农副产品，货到验收后结算货款。"
     kinds = _types(text, "agri_goods")
     assert "subcontract_unrestricted" not in kinds
@@ -185,10 +185,16 @@ def test_all_four_fire_on_bare_big_prepay_contract() -> None:
     ]
     assert all(r.policy_ref in ("P-06", "P-07", "P-08", "P-09") for r in risks)
     assert all(r.label for r in risks)  # 每条都有中文展示名
-    assert all(r.evidence for r in risks)  # 每条都带原文证据
+    # 文本里提了"验收"（"余款验收合格后付清"）→ 验收条有可指的原文；
+    # 而全篇没有转包字样 → 不再拿文档开头凑定位，留空并让前端明说
+    # （指到抬头比不给定位更让人困惑）
+    by_type = {r.risk_type: r for r in risks}
+    assert by_type["invoice_unclear"].evidence
+    assert by_type["acceptance_unclear"].evidence
+    assert by_type["subcontract_unrestricted"].evidence == ""
 
 
-# ---- 批2：数据与个人信息合规（P-10~P-12，含触发前置门）----
+# ---- 数据与个人信息合规（含触发前置门）----
 
 
 def test_data_rules_skipped_when_no_personal_info() -> None:

@@ -47,22 +47,29 @@ const drawerRisks = computed(() => {
     severity: (r as { severity?: string }).severity ?? 'high',
     clause_ref: r.clause_ref ?? '',
     evidence: r.evidence ?? '',
+    // 原文摘录要一并带上：说明句（"预付款比例 70%"）在正文里搜不到，
+    // 少了它抽屉里就只能整块标色、标不到那一句
+    evidence_quote: (r as { evidence_quote?: string | null }).evidence_quote ?? '',
   }))
 })
 
-/** 右栏"原文核对"清单：把风险项的 clause_ref 去重聚合，取最高 severity 并计数。 */
+/** 右栏"原文核对"清单：把风险项的 clause_ref 去重聚合，取最高 severity 并计数，
+ *  同时留一句摘录——条款号来自模型自述，可能对应不到条款块（实测有"三、其他 3"
+ *  这类正文里不存在的号），点定位时靠摘录兜底才找得到位置。 */
 const hitClauses = computed(() => {
-  const seen = new Map<string, { clause: string; sev: string; count: number }>()
+  const seen = new Map<string, { clause: string; sev: string; count: number; quote: string }>()
   for (const r of drawerRisks.value) {
     const clause = (r.clause_ref ?? '').trim()
     if (!clause) continue
     const sev = r.severity === 'medium' ? 'medium' : 'high'
+    const quote = (r.evidence_quote || r.evidence || '').trim()
     const cur = seen.get(clause)
     if (cur) {
       cur.count += 1
       if (cur.sev === 'medium' && sev === 'high') cur.sev = sev
+      if (!cur.quote) cur.quote = quote
     } else {
-      seen.set(clause, { clause, sev, count: 1 })
+      seen.set(clause, { clause, sev, count: 1, quote })
     }
   }
   return [...seen.values()]
@@ -120,6 +127,14 @@ const fieldLabels: Record<string, string> = {
 
 // 审查中 = pending/processing：显示进行中动画，不渲染闸口/报告
 const extracting = computed(() => detail.value && ['pending', 'processing'].includes(detail.value.status))
+/** 审查中提示的预计时长：双审要多跑一轮独立复核；扫描件/图片多一步本地 OCR
+ *  （实测 3~17 秒/页），都比单审慢——原来固定写"约需 30~60 秒"，双审扫描件会像卡住。 */
+const etaText = computed(() => {
+  const doubleReview = detail.value?.review_mode === 'double'
+  return doubleReview
+    ? '双审（主审 + 独立复核）约需 1~2 分钟；扫描件/图片件还要加本地 OCR，更久'
+    : '单审约需 30~60 秒；扫描件/图片件要加本地 OCR，约 1~2 分钟起'
+})
 const ext = computed(() => detail.value?.report?.extracted ?? null)
 // 报告风险：疑似空白模板单拎为顶部"结论条"，不进风险清单卡片与计数
 const reportRisks = computed(() => detail.value?.report?.risks ?? [])
@@ -138,7 +153,9 @@ const outcomeText: Record<string, string> = {
   agreed: '与主审一致',
   added: '复核新增',
   upgraded: '取高升级',
-  noted: '仅提示',
+  // "仅提示"太含糊（看不出是"提示1"还是别的）→ 直接写清处理结果：
+  // 复核发现了，但没过确定性校验/类型不在可并入范围，所以只记录、不并入风险清单
+  noted: '仅记录不并入',
 }
 const outcomeClass: Record<string, string> = {
   agreed: 'rv-agree',
@@ -160,7 +177,7 @@ function chipsOf(stats: Record<string, number> | undefined | null) {
     { key: 'added', label: '复核新增', count: s.added },
     { key: 'upgraded', label: '取高升级', count: s.upgraded },
     { key: 'agreed', label: '与主审一致', count: s.agreed },
-    { key: 'noted', label: '仅提示', count: s.noted },
+    { key: 'noted', label: '仅记录不并入', count: s.noted },
   ].filter((c) => c.count > 0)
 }
 const gateReviewChips = computed(() => chipsOf(gateReview.value?.stats))
@@ -367,7 +384,7 @@ function openSource(clause?: string, evidence?: string) {
     <!-- 审查中 -->
     <div v-else-if="extracting" class="card pad-center">
       <p class="serif big pulse">{{ statusText[detail.status] }}</p>
-      <p class="muted">正在抽取字段 → 规则审查 → 政策比对，约需 30~60 秒</p>
+      <p class="muted">正在抽取字段 → 规则审查 → 政策比对，{{ etaText }}</p>
     </div>
 
     <!-- 待审批闸口（与报告页同款两栏：左=待审风险与审批，右=结论预览/原文核对） -->
@@ -405,6 +422,9 @@ function openSource(clause?: string, evidence?: string) {
                     @click="openSource(r.clause_ref ?? '', r.evidence_quote || r.evidence || '')">
               {{ r.clause_ref ? `条款：${r.clause_ref} · 原文定位` : '原文定位' }}
             </button>
+            <!-- 这种情况是：既无条款号也无摘录（字段类规则没抽到原文锚点）→
+                 明说"定位不了"，别让人以为是功能坏了 -->
+            <p v-else class="clause-none">正文里没有可直接指路的表述，请人工通读核对</p>
             <p v-if="r.evidence" class="quote">「{{ r.evidence }}」</p>
             <p v-if="r.suggestion" class="suggest">{{ prettyField(r.suggestion) }}</p>
           </div>
@@ -417,10 +437,15 @@ function openSource(clause?: string, evidence?: string) {
               <span class="muted rv-desc">复核只看原文与政策，不看主审结论</span>
             </div>
             <p v-if="gateReview.error" class="err">{{ gateReview.error }}</p>
-            <p v-else-if="gateReview.summary" class="rv-summary">{{ gateReview.summary }}</p>
+            <!-- 有分类统计时不再重复整句摘要（一句话与一排统计说的是同一件事）；
+                 只有"无发现"那种没有 chips 的情况才用整句 -->
+            <p v-else-if="gateReview.summary && !gateReviewChips.length" class="rv-summary">
+              {{ gateReview.summary }}
+            </p>
             <div v-if="gateReviewChips.length" class="rv-chips">
+              <span class="rv-chips-label">结论统计</span>
               <span v-for="c in gateReviewChips" :key="c.key" class="chip" :class="outcomeClass[c.key]">
-                {{ c.label }} {{ c.count }}
+                {{ c.label }} {{ c.count }} 条
               </span>
             </div>
             <ul v-if="gateReview.details?.length" class="rv-list">
@@ -429,7 +454,7 @@ function openSource(clause?: string, evidence?: string) {
                   <span class="chip" :class="outcomeClass[d.outcome]">{{ outcomeText[d.outcome] ?? d.outcome }}</span>
                   <span v-if="d.severity" class="rv-sev" :class="severityClass[d.severity]">{{ severityText[d.severity] }}</span>
                   <span class="rv-type serif">{{ riskLabel(d) }}</span>
-                  <span v-if="d.clause_ref" class="muted mono-num rv-clause">{{ d.clause_ref }}</span>
+                  <span v-if="d.clause_ref" class="rv-clause"><span class="rv-clause-lbl">条款</span>{{ d.clause_ref }}</span>
                   <span v-if="d.policy_ref" class="mono-num ref">{{ d.policy_ref }}</span>
                 </div>
                 <p v-if="d.evidence" class="rv-ev">「{{ d.evidence }}」</p>
@@ -438,11 +463,16 @@ function openSource(clause?: string, evidence?: string) {
                         @click="openSource(d.clause_ref ?? '', d.evidence ?? '')">原文定位</button>
               </li>
             </ul>
-            <!-- 结果术语解释：不解释的话"仅提示/取高升级"这类词看不懂 -->
-            <p class="rv-legend">
-              结果说明：与主审一致 = 双方都报；复核新增 = 主审漏检、复核补抓并已并入风险清单；
-              取高升级 = 双方都报、复核级别更高；仅提示 = 复核发现未过确定性校验或类型不属可并入范围，只记录不并入。
-            </p>
+            <!-- 结果术语解释：不解释的话"仅记录不并入/取高升级"这类词看不懂 -->
+            <div class="rv-legend">
+              <p class="rv-legend-t">结果说明</p>
+              <ol>
+                <li><b>与主审一致</b>：双方都报，无分歧</li>
+                <li><b>复核新增</b>：主审漏检、复核补抓，已并入风险清单</li>
+                <li><b>取高升级</b>：双方都报、复核级别更高，按高的记</li>
+                <li><b>仅记录不并入</b>：复核发现未过确定性校验、或类型不属可并入范围，只记录、不进风险清单</li>
+              </ol>
+            </div>
           </div>
 
           <!-- 人工审批：意见 + 放行/打回/编辑重审 -->
@@ -485,7 +515,7 @@ function openSource(clause?: string, evidence?: string) {
                 v-for="h in hitClauses"
                 :key="h.clause"
                 class="s-clause"
-                @click="openSource(h.clause)"
+                @click="openSource(h.clause, h.quote)"
               >
                 <span class="dot-sev" :class="h.sev"></span>
                 <span class="c-txt">{{ h.clause }}</span>
@@ -531,17 +561,21 @@ function openSource(clause?: string, evidence?: string) {
             <p class="tpl-sug">{{ prettyField(templateNotice.suggestion ?? '') }}</p>
           </div>
 
-          <!-- 双审复核段：盲审独立结论与主审 diff 的结果（一致/新增/升级/仅提示） -->
+          <!-- 双审复核段：盲审独立结论与主审 diff 的结果（一致/新增/升级/仅记录不并入） -->
           <div v-if="review && review.mode === 'double'" class="card pad rv-card">
             <div class="rv-head">
               <h4 class="rv-title">独立复核（盲审）</h4>
               <span class="muted rv-desc">复核只看原文与政策，不看主审结论</span>
             </div>
             <p v-if="reviewError" class="err">{{ reviewError }}</p>
-            <p v-else-if="review.summary" class="rv-summary">{{ review.summary }}</p>
+            <!-- 同上：统计交给下面的"结论统计"chips，避免同一件事说两遍 -->
+            <p v-else-if="review.summary && !reviewChips.length" class="rv-summary">
+              {{ review.summary }}
+            </p>
             <div v-if="reviewChips.length" class="rv-chips">
+              <span class="rv-chips-label">结论统计</span>
               <span v-for="c in reviewChips" :key="c.key" class="chip" :class="outcomeClass[c.key]">
-                {{ c.label }} {{ c.count }}
+                {{ c.label }} {{ c.count }} 条
               </span>
             </div>
             <ul v-if="review.details?.length" class="rv-list">
@@ -550,7 +584,7 @@ function openSource(clause?: string, evidence?: string) {
                   <span class="chip" :class="outcomeClass[d.outcome]">{{ outcomeText[d.outcome] ?? d.outcome }}</span>
                   <span v-if="d.severity" class="rv-sev" :class="severityClass[d.severity]">{{ severityText[d.severity] }}</span>
                   <span class="rv-type serif">{{ riskLabel(d) }}</span>
-                  <span v-if="d.clause_ref" class="muted mono-num rv-clause">{{ d.clause_ref }}</span>
+                  <span v-if="d.clause_ref" class="rv-clause"><span class="rv-clause-lbl">条款</span>{{ d.clause_ref }}</span>
                   <span v-if="d.policy_ref" class="mono-num ref">{{ d.policy_ref }}</span>
                 </div>
                 <!-- 复核看到的原文（最多两行，点开详情仍可在原文抽屉里定位） -->
@@ -561,10 +595,15 @@ function openSource(clause?: string, evidence?: string) {
                         @click="openSource(d.clause_ref ?? '', d.evidence ?? '')">原文定位</button>
               </li>
             </ul>
-            <p class="rv-legend">
-              结果说明：与主审一致 = 双方都报；复核新增 = 主审漏检、复核补抓并已并入风险清单；
-              取高升级 = 双方都报、复核级别更高；仅提示 = 复核发现未过确定性校验或类型不属可并入范围，只记录不并入。
-            </p>
+            <div class="rv-legend">
+              <p class="rv-legend-t">结果说明</p>
+              <ol>
+                <li><b>与主审一致</b>：双方都报，无分歧</li>
+                <li><b>复核新增</b>：主审漏检、复核补抓，已并入风险清单</li>
+                <li><b>取高升级</b>：双方都报、复核级别更高，按高的记</li>
+                <li><b>仅记录不并入</b>：复核发现未过确定性校验、或类型不属可并入范围，只记录、不进风险清单</li>
+              </ol>
+            </div>
           </div>
 
           <!-- 风险清单：空=自动放行提示，非空逐条展示 -->
@@ -581,6 +620,8 @@ function openSource(clause?: string, evidence?: string) {
                 @click="openSource(r.clause_ref ?? '', r.evidence_quote || r.evidence || '')">
                 {{ r.clause_ref ? `条款：${r.clause_ref} · 原文定位` : '原文定位' }}
               </button>
+              <!-- 同上：没有条款号也没有摘录时明说定位不了，避免被当成漏做功能 -->
+              <p v-else class="clause-none">正文里没有可直接指路的表述，请人工通读核对</p>
               <p v-if="r.evidence" class="quote">「{{ r.evidence }}」</p>
               <p v-if="r.suggestion" class="suggest">{{ prettyField(r.suggestion) }}</p>
             </div>
@@ -651,6 +692,10 @@ function openSource(clause?: string, evidence?: string) {
                 <b class="mono-num">{{ detail.report.policy_hits?.length ?? 0 }}</b>
               </div>
             </div>
+            <!-- LLM 用量（成本可见）：服务端与评测链路同口径（只计 chat 调用，不含本地规则/检索） -->
+            <p v-if="detail.report.llm" class="muted s-llm mono-num">
+              大模型调用 {{ detail.report.llm.calls }} 次 · 合计 {{ detail.report.llm.seconds }} 秒
+            </p>
           </div>
 
           <!-- 关键抽取字段：只展示有值字段（null 不占行），右栏速览用 -->
@@ -678,7 +723,7 @@ function openSource(clause?: string, evidence?: string) {
                 v-for="h in hitClauses"
                 :key="h.clause"
                 class="s-clause"
-                @click="openSource(h.clause)"
+                @click="openSource(h.clause, h.quote)"
               >
                 <span class="dot-sev" :class="h.sev"></span>
                 <span class="c-txt">{{ h.clause }}</span>
@@ -1210,6 +1255,12 @@ function openSource(clause?: string, evidence?: string) {
   border-top: 1px solid var(--line);
 }
 
+/* LLM 用量行：成本可见（口径 = chat 调用，双读/盲审都算一次） */
+.s-llm {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+}
+
 .s-stat {
   display: flex;
   flex-direction: column;
@@ -1434,8 +1485,27 @@ function openSource(clause?: string, evidence?: string) {
 .rv-chips {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
   margin-bottom: 6px;
+}
+
+/* 统计行前缀：不加说明的话"仅提示 1"会被读成一个名字 */
+.rv-chips-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* 结论徽标基础样式：原来只有底色、没有内边距，看起来像被选中的文字而不是标签 */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
 }
 
 .rv-list {
@@ -1472,8 +1542,30 @@ function openSource(clause?: string, evidence?: string) {
   font-weight: 600;
 }
 
+/* 条款引用：原来只有 muted 小字，淡到看不出指什么
+   → 加"条款"标签 + 提到正文色，与右侧政策号形成同一种"可读小标签"语言 */
 .rv-clause {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--card-2);
   font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.rv-clause-lbl {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* 无原文定位时的说明：字段类风险找不到锚点，明说"指不了路"而不是留白 */
+.clause-none {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
 }
 
 /* 复核看到的原文：最多两行，避免长段落撑爆卡片 */
@@ -1490,24 +1582,46 @@ function openSource(clause?: string, evidence?: string) {
   overflow: hidden;
 }
 
-/* 处理说明：为什么"仅提示"（复核门未过/类型白名单/已降级）——不写清楚用户会以为漏判 */
+/* 处理说明：为什么"仅记录不并入"（复核门未过/类型白名单/已降级）——不写清楚用户会以为漏判 */
 .rv-note {
   margin: 4px 0 0 4px;
   font-size: 12.5px;
   color: #8a5a00;
 }
 
-/* 结果术语说明：怕"仅提示/取高升级"看不懂，给一句人话解释 */
+/* 结果术语说明：原来 12px 浅灰一行、用分号分点，字太小太细看不清 → 放大加深、
+   改成分点列表，并加浅底细框让它像"说明卡"而不是正文边角料 */
 .rv-legend {
-  margin: 8px 0 0;
-  padding-top: 6px;
-  border-top: 1px dashed var(--line);
-  font-size: 12px;
-  line-height: 1.6;
-  color: #6b7280;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card-2);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--ink-2);
 }
 
-/* outcome 徽标色：一致=灰绿、新增=主色、升级=朱、仅提示=灰 */
+.rv-legend-t {
+  margin: 0 0 4px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.rv-legend ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.rv-legend li + li {
+  margin-top: 2px;
+}
+
+.rv-legend b {
+  color: var(--ink);
+}
+
+/* outcome 徽标色：一致=灰绿、新增=主色、升级=朱、仅记录不并入=灰 */
 .chip.rv-agree {
   background: var(--ok-soft);
   color: var(--ok);

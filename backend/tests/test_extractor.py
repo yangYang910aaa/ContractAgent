@@ -98,7 +98,7 @@ def test_build_contract_model_keeps_parsed_kind() -> None:
 
 
 def test_kind_normalized_by_contract_form() -> None:
-    """企业货物/服务形态（维修/代理销售/供货）优先于 tech（真实合同走查 2026-09-10）。"""
+    """企业货物/服务形态（维修/代理销售/供货）优先于技术开发类。"""
     # 模型误判 tech，但正文是汽车维修服务采购 → 校正为 enterprise_goods
     model = build_contract_model(
         {"contract_kind": "tech_service"},
@@ -262,8 +262,8 @@ class _DriftLLM:
 class _DriftLLMDotSeparator(_DriftLLM):
     """镜像真实 langchain 报错：completion JSON 与 Got: 之间带句点（". Got:"）。
 
-    早期正则 `completion (\{.*\}) Got:` 在此形态下漏匹配导致整份 error——
-    2026-09-05 用户上传农副 GF 示范文本（GF—2025—0151）实测复现。
+    早期正则 `completion (\{.*\}) Got:` 在此形态下漏匹配导致整份 error，
+    上传的农副示范文本即此形态。
     """
 
     def invoke(self, messages):
