@@ -140,6 +140,25 @@ def test_subcontract_waiver_fires_high() -> None:
     assert _types(text)["subcontract_unrestricted"] == Severity.high.value
 
 
+def test_subcontract_restriction_split_by_hard_wrap_clean() -> None:
+    """限制句被 PDF 硬换行切开（"乙方不/得…转包"）仍算已限制 → 不报。
+
+    真实商用车采购合同就是把"不得"拆在两行里，按原样文本匹配会漏掉限制句、误报。
+    """
+    for text in (
+        "8.4 乙方具备履行本合同的资质和能力。乙方不\n得将本合同项下的权利和义务进行转包或分包。",
+        "乙方不得将本\n合同项下义务转包或分包。",
+    ):
+        assert "subcontract_unrestricted" not in _types(text)
+
+
+def test_clause_ref_survives_hard_wrap_join() -> None:
+    """接回硬换行后条款标题仍留在行首，摘录还能回推到条款号。"""
+    text = "第七条 违约责任\n乙方逾期交付的，\n每逾期一日按合同总价款的 0.5% 支付违约金。"
+    risks = {r.risk_type: r for r in text_rules(text, "enterprise_goods")}
+    assert risks["penalty_cap_missing"].clause_ref == "第七条 违约责任"
+
+
 def test_agri_kind_no_subcontract_baseline() -> None:
     """农副产品买卖无转包概念：农副品类不套转包基线。"""
     text = "甲方采购农副产品，货到验收后结算货款。"

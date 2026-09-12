@@ -83,6 +83,23 @@ def test_normalize_findings_dedupe_and_cap() -> None:
     assert any("重复" in d for d in dropped)
 
 
+def test_normalize_findings_strips_article_suffix_from_policy_ref() -> None:
+    """政策编号连条号一起写（"P-14 第三条"）要归一成 P-14。
+
+    报告里的政策引用按 P-XX 建索引，带条号的编号在报告里对不上任何一条命中，
+    复核新增的风险就会显示"依据了某条政策但查不到原文"。
+    """
+    raw = [
+        {"risk_type": "penalty_cap_missing", "severity": "high", "clause_ref": "第十条",
+         "evidence": "每延期一日按 1% 支付违约金", "policy_ref": "P-14 第三条"},
+        {"risk_type": "warranty_too_short", "severity": "high", "clause_ref": "第二条",
+         "evidence": "质保 6 个月", "policy_ref": "  "},
+    ]
+    findings, _ = normalize_findings(raw)
+    assert findings[0].policy_ref == "P-14"
+    assert findings[1].policy_ref is None
+
+
 # ---- merge_review：四类合并结果 ----
 
 

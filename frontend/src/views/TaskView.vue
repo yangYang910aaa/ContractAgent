@@ -300,12 +300,16 @@ onUnmounted(() => {
 })
 
 function paymentText(raw: unknown): string {
-  /** 付款期次数组 → "名称 金额（比例%）；…" 单行展示。 */
+  /** 付款期次数组 → "名称 金额 元（比例%）；…" 单行展示；缺哪项就不显示哪项。 */
   if (!Array.isArray(raw)) return ''
   return raw
     .map((t) => {
       const x = t as Record<string, unknown>
-      return `${String(x.name ?? '')} ${x.amount ?? ''}（${x.percent ?? ''}%）`
+      // 金额要带单位：比例被抄进金额字段时，"30（30%）"会被读成 30 元却又说不清，
+      // 写成"30 元（30%）"至少让金额口径一眼可见；金额为空时不留空括号
+      const amount = x.amount === null || x.amount === undefined || x.amount === '' ? '' : ` ${x.amount} 元`
+      const percent = x.percent === null || x.percent === undefined || x.percent === '' ? '' : `（${x.percent}%）`
+      return `${String(x.name ?? '')}${amount}${percent}`
     })
     .join('；')
 }
@@ -471,6 +475,7 @@ function openSource(clause?: string, evidence?: string) {
                 <li><b>复核新增</b>：主审漏检、复核补抓，已并入风险清单</li>
                 <li><b>取高升级</b>：双方都报、复核级别更高，按高的记</li>
                 <li><b>仅记录不并入</b>：复核发现未过确定性校验、或类型不属可并入范围，只记录、不进风险清单</li>
+                <li><b>复核按通用口径</b>：独立复核不看品类，也不套"政采/校服按范本执行"的豁免，政采类合同可能出现主审未报、复核报出的条目</li>
               </ol>
             </div>
           </div>
@@ -602,6 +607,7 @@ function openSource(clause?: string, evidence?: string) {
                 <li><b>复核新增</b>：主审漏检、复核补抓，已并入风险清单</li>
                 <li><b>取高升级</b>：双方都报、复核级别更高，按高的记</li>
                 <li><b>仅记录不并入</b>：复核发现未过确定性校验、或类型不属可并入范围，只记录、不进风险清单</li>
+                <li><b>复核按通用口径</b>：独立复核不看品类，也不套"政采/校服按范本执行"的豁免，政采类合同可能出现主审未报、复核报出的条目</li>
               </ol>
             </div>
           </div>

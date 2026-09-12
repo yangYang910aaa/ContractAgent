@@ -18,7 +18,7 @@ from pathlib import Path
 
 from backend.app.config import BASE_DIR
 from backend.app.extractor import DOUBLE_READ_FIELDS, extract_contract
-from backend.app.parser import extract_text
+from backend.app.parser import NO_TEXT_ERROR, extract_text
 from backend.app.policy_rag import PolicyHit, load_policy_full, retrieve_policies_many
 from backend.app.rules import (
     annotate_open_ended_risks,
@@ -60,17 +60,25 @@ def enrich_policy_hits(
         if not risk.policy_ref or risk.policy_ref in seen:
             continue
         seen.add(risk.policy_ref)
-        #优先用证据原文作query,没有才用建议文本
-        wanted.append((risk.policy_ref, risk.evidence or risk.suggestion))
+        # 优先用建议文本作 query：建议讲的是"这条风险要什么样的条款"（话题），与所引政策对得上；
+        # 证据原文是合同自己的话，话题常和所引政策两回事——实测按证据检索会把"数据处理要件"
+        # 检索成知识产权条文，报告里就查不到声明的政策原文。没有建议才退回证据
+        wanted.append((risk.policy_ref, risk.suggestion or risk.evidence))
 
     found_lists = (
-        retrieve_policies_many([query for _, query in wanted], k=1)
+        # 多取两条候选：语义检索不看政策号，话题相近的政策会互相插队，
+        # 多取几个才有机会挑回属于声明政策的那条
+        retrieve_policies_many([query for _, query in wanted], k=3)
         if retriever is None
         else [_safe_retrieve(retriever, query) for _, query in wanted]
     )
 
     for (policy_ref, _), found in zip(wanted, found_lists):
-        top = found[0] if found else None
+        # 分支：候选里有属于声明的政策号的条文 → 取它（这才是这条风险的依据）
+        top = next((hit for hit in found if hit.policy_ref == policy_ref), None)
+        # 分支：一条都不属于声明政策 → 退回首条，照实呈现检索到的内容
+        if top is None and found:
+            top = found[0]
         if top is not None:
             hits.append(
                 {
@@ -169,6 +177,19 @@ def run_review(
     text = extract_text(path)
     # 计价区间只覆盖 LLM 环节：parser/规则/检索是纯本地，不进成本口径
     with track_usage() as usage:
+        # 这种情况是：文件读不出正文（空文件、加密/损坏 PDF、OCR 没认出字）→ 直接给错误报告。
+        # 在空正文上跑规则只会凭空报"缺必填"，让人对着空文件点审批（服务端图链路同一口径）
+        if not text.strip():
+            return {
+                "contract_file": str(path),
+                "grade": None,
+                "risks": [],
+                "policy_hits": [],
+                "extracted": ContractModel().model_dump(),
+                "review": None,
+                "llm": usage.to_dict(),
+                "error": NO_TEXT_ERROR,
+            }
         try:
             #LLM 结构化抽取（double_read 开时含付款期次第二读）
             extracted = extract_contract(

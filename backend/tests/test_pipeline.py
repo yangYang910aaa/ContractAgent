@@ -1,17 +1,21 @@
-"""pipeline 纯逻辑单测（不调 LLM / 不联网）：报告组装 + 政策检索去重。"""
+"""pipeline 纯逻辑单测（不调 LLM / 不联网）：报告组装 + 政策检索去重 + 空正文护栏。"""
 
-from backend.app.pipeline import _policy_snippet, build_report, enrich_policy_hits
+from backend.app.pipeline import _policy_snippet, build_report, enrich_policy_hits, run_review
 from backend.app.policy_rag import PolicyHit
 from backend.app.schemas import ContractModel, RiskItem, Severity
 
 
-def _risk(policy_ref: str | None = "P-01", evidence: str = "预付款比例 60%") -> RiskItem:
+def _risk(
+    policy_ref: str | None = "P-01",
+    evidence: str = "预付款比例 60%",
+    suggestion: str = "预付款降至 30% 以内",
+) -> RiskItem:
     return RiskItem(
         risk_type="prepayment_ratio_high",
         severity=Severity.high,
         policy_ref=policy_ref,
         evidence=evidence,
-        suggestion="降至 30% 以内",
+        suggestion=suggestion,
     )
 
 
@@ -27,7 +31,7 @@ def test_enrich_policy_hits_dedup_and_skip_nonpolicy() -> None:
     risks = [
         _risk("P-01", evidence="预付款比例 60%"),
         _risk("P-01", evidence="预付款比例 60%"),
-        _risk("P-04", evidence="保密期 60 个月"),
+        _risk("P-04", evidence="保密期 60 个月", suggestion="保密期宜压到 24 个月以内"),
         _risk(None),
     ]
     fake = lambda q: [PolicyHit(policy_ref="P-01" if "预付" in q else "P-04", source="x.md", text="条文", score=0.9)]
@@ -46,7 +50,10 @@ def test_enrich_policy_hits_batch_path_matches_loop(monkeypatch) -> None:
     """默认路径走批量检索，结果必须与逐条检索完全一致（加速不改引用内容）。"""
     from backend.app import pipeline
 
-    risks = [_risk("P-01", evidence="预付款比例 60%"), _risk("P-04", evidence="保密期 60 个月")]
+    risks = [
+        _risk("P-01", evidence="预付款比例 60%"),
+        _risk("P-04", evidence="保密期 60 个月", suggestion="保密期宜压到 24 个月以内"),
+    ]
     calls: list[list[str]] = []
 
     def fake_many(queries, k=1, **kwargs):
@@ -60,8 +67,46 @@ def test_enrich_policy_hits_batch_path_matches_loop(monkeypatch) -> None:
     loop_hits = pipeline.enrich_policy_hits(
         risks, retriever=lambda q: [PolicyHit(policy_ref="P-01" if "预付" in q else "P-04", source="", text="条文 " + q, score=0.9)]
     )
-    assert calls == [["预付款比例 60%", "保密期 60 个月"]]  # 一次批量、两条 query
+    # 一次批量、两条 query；query 取建议文本（讲的是"要什么样的条款"，与所引政策对得上）
+    assert calls == [["预付款降至 30% 以内", "保密期宜压到 24 个月以内"]]
     assert batch_hits == loop_hits
+
+
+def test_policy_query_prefers_suggestion_over_evidence() -> None:
+    """检索 query 取建议文本：证据原文是合同自己的话，话题常与所引政策两回事。
+
+    真实运维服务合同的证据段讲的是"权利瑕疵担保"，按证据检索会命中知识产权政策，
+    报告里就查不到声明的数据合规政策原文。
+    """
+    queries: list[str] = []
+
+    def spy(query: str) -> list[PolicyHit]:
+        queries.append(query)
+        return [PolicyHit(policy_ref="P-10", source="p.md", text="条文", score=0.9)]
+
+    enrich_policy_hits(
+        [_risk("P-10", evidence="乙方保证交付成果不侵犯第三方专利权、著作权", suggestion="建议按 P-10 补充委托处理要件")],
+        retriever=spy,
+    )
+    assert queries == ["建议按 P-10 补充委托处理要件"]
+
+    # 建议为空时才退回证据
+    enrich_policy_hits([_risk("P-10", evidence="乙方保证交付成果不侵犯第三方专利权", suggestion="")], retriever=spy)
+    assert queries[-1] == "乙方保证交付成果不侵犯第三方专利权"
+
+
+def test_policy_hit_prefers_declared_policy() -> None:
+    """候选里出现别条政策的条文时，取属于声明政策号的那条；都没有才退回首条。"""
+    foreign = PolicyHit(policy_ref="P-05", source="p05.md", text="知识产权条文", score=0.9)
+    declared = PolicyHit(policy_ref="P-13", source="p13.md", text="保密例外条文", score=0.8)
+    hits = enrich_policy_hits([_risk("P-13", suggestion="保密条款宜写明例外情形")],
+                              retriever=lambda q: [foreign, declared])
+    assert hits[0]["policy_ref"] == "P-13"
+    assert hits[0]["text"] == "保密例外条文"
+
+    fallback = enrich_policy_hits([_risk("P-13", suggestion="保密条款宜写明例外情形")],
+                                  retriever=lambda q: [foreign])
+    assert fallback[0]["policy_ref"] == "P-05"
 
 
 def test_enrich_policy_hits_calls_retriever_once_per_policy() -> None:
@@ -111,3 +156,17 @@ def test_enrich_policy_hits_retriever_failure_tolerated() -> None:
 
     hits = enrich_policy_hits([_risk()], retriever=boom)
     assert hits == [{"policy_ref": "P-01", "score": None, "snippet": ""}]
+
+
+def test_run_review_empty_file_returns_error_without_llm(tmp_path) -> None:
+    """读不出正文的文件（空文件/加密损坏 PDF）→ 直接给错误报告。
+
+    不调模型、不进规则：否则会在空正文上凭空报"缺必填"并停到人工审批闸口。
+    """
+    empty = tmp_path / "empty.txt"
+    empty.write_text("   \n", encoding="utf-8")
+    report = run_review(empty)
+    assert report["grade"] is None
+    assert report["risks"] == []
+    assert "无法解析" in report["error"]
+    assert report["llm"]["calls"] == 0

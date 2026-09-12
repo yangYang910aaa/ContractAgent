@@ -1,5 +1,5 @@
 """
-定位编排:原文摘录、缺必填锚点、条款号纠正、OCR 页标记清洗
+定位编排:原文摘录、缺必填锚点、条款号纠正、文本清洗(OCR 页标记 / 硬换行)
 """
 from __future__ import annotations
 
@@ -137,6 +137,61 @@ def _clean_page_marks(text: str) -> str:
     return PAGE_MARK_RE.sub("", text or "")
 
 
+# 条款标题行（回指 evidence 所在条款用）：第X条 / 章节式"七、"两种头
+_CLAUSE_HEADER_RE = re.compile(
+    r"^\s*(?:第[一二三四五六七八九十百\d]+条|(?:[一二三四五六七八九十]+)、)[^\n]{0,24}$"
+)
+
+# 行尾出现这些字符时，其后的换行算语义分界（句末标点、或引出下一行的冒号）
+_LINE_END_CHARS = ("。", "！", "？", "；", "!", "?", ";", "：")
+
+
+def _unwrap_hard_wraps(text: str) -> str:
+    """把 PDF/OCR 的硬换行接回上一行，只在真正的语义分界处保留换行。
+
+    判定口径：空行、本行是条款标题、上一行是条款标题、上一行以句末标点或冒号收尾 →
+    保留换行；其余换行都是排版造成的断行，接回去才能让被切断的词句（"乙方不/得转包"）匹配到。
+    返回接回后的文本；条款标题仍留在行首，条款号回推与摘录定位照旧可用。
+    """
+    out: list[str] = []
+    previous = ""
+    for raw in text.split("\n"):
+        # 这几种情况是真正的分界，不能接回：空行分段、本行是条款标题、
+        # 上一行是条款标题（标题与正文分开，标题行才认得出）、上一行已收尾
+        keep_break = (
+            not raw.strip()
+            or not previous.strip()
+            or _CLAUSE_HEADER_RE.match(raw) is not None
+            or _CLAUSE_HEADER_RE.match(previous) is not None
+            or previous.rstrip().endswith(_LINE_END_CHARS)
+        )
+        # 分支：首行或语义分界 → 另起一行
+        if not out or keep_break:
+            out.append(raw)
+            previous = raw
+            continue
+        # 分支：硬换行 → 去掉上一行行尾与当前行行首的空白后接回同一行；
+        # 换行两侧都是西文字符时补一个空格，直接粘连会凭空造出"notsubcontract"这类词
+        glue = " " if (_is_word_char(out[-1][-1:]) and _is_word_char(raw[:1])) else ""
+        out[-1] = out[-1].rstrip() + glue + raw.lstrip()
+        previous = raw
+    return "\n".join(out)
+
+
+def _is_word_char(char: str) -> bool:
+    """字符是否西文字母/数字（判断折行两侧要不要补空格用）。"""
+    return bool(char) and char.isascii() and char.isalnum()
+
+
+def _clean_rule_text(text: str) -> str:
+    """文本级规则的统一入口清洗：先去 OCR 页标记，再接回硬换行。
+
+    页标记会占掉正则窗口预算，硬换行会把关键词与整句切开；两步都做，规则才在
+    "同一条干净正文"上判定。只清洗规则用的副本，界面展示与纯文本页签仍用原文本。
+    """
+    return _unwrap_hard_wraps(_clean_page_marks(text))
+
+
 def _find_quote_pos(text: str, quote: str) -> int:
     """找摘录在原文里的起始下标，找不到返回 -1。
 
@@ -189,12 +244,6 @@ def _normalize_clause_refs(risks: list[RiskItem], text: str) -> list[RiskItem]:
     return out
 
 
-# 条款标题行（回指 evidence 所在条款用）：第X条 / 章节式"七、"两种头
-_CLAUSE_HEADER_RE = re.compile(
-    r"^\s*(?:第[一二三四五六七八九十百\d]+条|(?:[一二三四五六七八九十]+)、)[^\n]{0,24}$"
-)
-
-
 def _text_excerpt(text: str, pos: int, width: int = 120) -> str:
     """截取命中位置附近的原文作证据：取 pos 前后 width/2 字符，折叠空白，防摘录过长。"""
     start = max(pos - width // 2, 0)
@@ -203,6 +252,13 @@ def _text_excerpt(text: str, pos: int, width: int = 120) -> str:
 
 def _clause_ref_at(text: str, pos: int) -> str:
     """找 pos 前的最后一个条款/章节标题作 clause_ref（无标题返回空串）。"""
+    # 锚点词可能正好落在条款标题行里（"第五条 货款的结算"里的"结算"）——
+    # 按 pos 截断会得到半行标题，先看整行是不是标题，是就回指完整标题
+    line_start = text.rfind("\n", 0, pos) + 1
+    line_end = text.find("\n", pos)
+    current = text[line_start : line_end if line_end != -1 else len(text)]
+    if _CLAUSE_HEADER_RE.match(current):
+        return current.strip()
     for line in reversed(text[:pos].splitlines()):
         if _CLAUSE_HEADER_RE.match(line):
             return line.strip()
@@ -211,7 +267,10 @@ def _clause_ref_at(text: str, pos: int) -> str:
 
 # 条款起始行（划某条款的正文范围用）：只看行首的"第X条"，不限长度——
 # 长度上限是"条款标题"的判定口径，拿来划范围会把写得长的条款拦腰截断
-_CLAUSE_START_RE = re.compile(r"(?m)^第[一二三四五六七八九十百\d]+条")
+# 易错点：行首允许空白（PDF/docx 抽取常在条款号前留全角空格）。起点判定用 strip() 容忍
+# 空白、终点判定不容忍，同一份文本就会"认得出起点、找不到终点"，范围一路划到文末，
+# 泛词锚点于是抓到后面毫不相干的条款
+_CLAUSE_START_RE = re.compile(r"(?m)^[^\S\n]*第[一二三四五六七八九十百\d]+条")
 
 
 def _clause_spans(text: str, ref: str) -> list[tuple[int, int]]:

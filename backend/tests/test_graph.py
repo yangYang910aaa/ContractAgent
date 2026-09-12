@@ -215,6 +215,23 @@ def test_extract_error_goes_error_report() -> None:
     assert runner.pending(tid) is None
 
 
+def test_empty_text_goes_error_report_without_llm() -> None:
+    """读不出正文（空文件/损坏 PDF/OCR 没认出字）→ 错误出口，不调模型也不停闸。"""
+    seen: list[str] = []
+
+    def _spy(text: str) -> ContractModel:
+        seen.append(text)
+        return _normal_model()
+
+    runner = ReviewRunner(extractor=_spy, retriever=lambda q: [])
+    state = runner.start("empty.txt", text="   \n  ")
+    tid = runner.last_thread_id
+    assert runner.store.get(tid).status == "error"
+    assert "无法解析" in state["report"]["error"]
+    assert runner.pending(tid) is None
+    assert seen == []  # 空正文不该白花一次调用
+
+
 def test_start_reads_file_when_no_text_given() -> None:
     """start 不给 text 时应按 source 读盘（真实上传链路形态）。"""
     # 用企业正常样本（与 _normal_model 的品类一致）：校服文本配企业模型会触发

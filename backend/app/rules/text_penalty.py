@@ -45,8 +45,10 @@ _CONF_EXCEPTION_TAIL_RE = re.compile(r"\s*(?:除|但|法律|法规|监管|司法
 
 
 # 比例型违约金数值：万分之X / 千分之X / N% / N‰
+# 易错点：PDF 与 OCR 常在"千分之"与数字之间插空格（"千分之 1"），
+# 不留 \s* 就会取不到费率，整条日费率规则形同不判
 _PENALTY_PCT_RE = re.compile(
-    r"万分之[\d一二三四五六七八九十]+|千分之[\d一二三四五六七八九十]+"
+    r"万分之\s*[\d一二三四五六七八九十]+|千分之\s*[\d一二三四五六七八九十]+"
     r"|[0-9]+(?:\.[0-9]+)?\s*%|[0-9]+(?:\.[0-9]+)?‰"
 )
 
@@ -60,8 +62,14 @@ _PENALTY_BASIS_RE = re.compile(
 )
 
 
-# 按日计罚信号（"每逾期一日/按日/每拖延一天"）
-_PENALTY_DAILY_RE = re.compile(r"每(?:日|天)|按日|每逾期一[日天]|每延迟一[日天]|每拖延一[日天]|每推迟一[日天]")
+# 按日计罚信号。真实合同写法很散：
+# "每日""按日""每逾期一日""每延期一天""每延误壹个日历天"都在用。
+# 易错点：只枚举"每逾期/每延迟"会把"每延期""每延误"等同义写法整条漏掉——
+# 按日比例无上限的高风险正是靠这条触发词捞出来的。中间那截限定在 4 字内且不含句读，
+# 避免把"每逾期付款金额的"这类无关表述当成按日计罚
+_PENALTY_DAILY_RE = re.compile(
+    r"每(?:日|天)|按(?:日|天)|每(?:逾期|延期|延误|延迟|拖延|推迟|超期|迟延)[^，。；:：\n]{0,4}[日天]"
+)
 
 
 # 违约金上限信号
@@ -99,10 +107,10 @@ def _daily_penalty_percent(sentence: str) -> float | None:
         values.append(float(num.group(1)))
     for num in re.finditer(r"(\d+(?:\.\d+)?)\s*‰", sentence):
         values.append(float(num.group(1)) / 10)  # 1‰ = 0.1%
-    for cn in re.finditer(r"万分之([\d一二三四五六七八九十]+)", sentence):
+    for cn in re.finditer(r"万分之\s*([\d一二三四五六七八九十]+)", sentence):
         raw = cn.group(1)
         values.append((float(raw) if raw.isdigit() else _CN_DIGITS.get(raw, 0)) / 100)
-    for cn in re.finditer(r"千分之([\d一二三四五六七八九十]+)", sentence):
+    for cn in re.finditer(r"千分之\s*([\d一二三四五六七八九十]+)", sentence):
         raw = cn.group(1)
         values.append((float(raw) if raw.isdigit() else _CN_DIGITS.get(raw, 0)) / 10)
     return max(values) if values else None
@@ -161,8 +169,9 @@ def _check_penalty_basis_unclear(text: str) -> RiskItem | None:
     for m in _PENALTY_PCT_RE.finditer(text):
         start, end = _sentence_span(text, m.start())
         sentence = text[start:end]
-        # 分支 1：本句没提违约金（如责任上限句的百分比）→ 不属本规则
-        if "违约金" not in sentence:
+        # 分支 1：本句没提违约金（如责任上限句的百分比）→ 不属本规则。
+        # 认"违约"二字即可：合同常写"承担违约责任"而不是"支付违约金"
+        if "违约" not in sentence:
             continue
         # 分支 2：本句（含往前 80 字，PDF 换行会把基数词切到上一行）已写基数 → 合规
         window = text[max(start - _PENALTY_BASIS_LOOKBACK, 0) : end]
@@ -193,21 +202,27 @@ def _check_penalty_cap_missing(text: str) -> RiskItem | None:
     （真实合同里别的条款写了上限，不能算本条的封顶）。
     """
     hit = None
-    rate: float | None = None
+    rate = 0.0
     for m in _PENALTY_DAILY_RE.finditer(text):
         start, end = _sentence_span(text, m.start())
         sentence = text[start:end]
-        # 分支：本句没提违约金（如"每日巡检"）→ 继续找下一处
-        if "违约金" not in sentence:
+        # 分支：本句没提违约金（如"每日巡检"）→ 继续找下一处。
+        # 认"违约"二字即可：真实林区修路合同写的是"承担违约责任"
+        if "违约" not in sentence:
             continue
-        hit, rate = m, _daily_penalty_percent(sentence)
+        candidate = _daily_penalty_percent(sentence)
+        # 分支：本句是"按日"却没写比例（如"缺勤违约金每日 10000 元"是固定金额）→ 继续找。
+        # 遇到一句取不到费率就收工，会把后面真正的"每逾期一日按 1%"整条漏掉
+        if candidate is None:
+            continue
+        hit, rate = m, candidate
         break
     # 分支 1：没有按日违约金 → 不套本规则（按次/一次性违约金走 P-03 口径）
     if hit is None:
         return None
-    # 分支 2：日费率取不到、或低于门槛（0.05%/日 等常见写法）→ 不报（防噪音：低费率
+    # 分支 2：日费率低于门槛（0.05%/日 等常见写法）→ 不报（防噪音：低费率
     #    无上限的敞口有限，真实语料里这类写法很普遍）
-    if rate is None or rate < _PENALTY_UNCAPPED_MIN_DAILY_PERCENT:
+    if rate < _PENALTY_UNCAPPED_MIN_DAILY_PERCENT:
         return None
     # 分支 3：近旁写了上限（不超过/最高不超过/为限…）→ 视为已封顶
     if _PENALTY_CAP_RE.search(text[hit.start() : hit.start() + _PENALTY_CAP_WINDOW]):

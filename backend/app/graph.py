@@ -15,7 +15,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
-from backend.app.parser import extract_text
+from backend.app.parser import NO_TEXT_ERROR, extract_text
 from backend.app.pipeline import enrich_policy_hits, infer_effective_from_signature
 from backend.app.reviewer import BlindReviewOutput, blind_review, merge_review
 from backend.app.rules import (
@@ -130,12 +130,17 @@ def build_review_graph(
 
     def extract_node(state: ReviewState) -> dict:
         """LLM 结构化抽取；失败不中断图，置 error 由条件边走错误出口。"""
+        text = state.get("text") or ""
+        # 这种情况是：文件读不出正文（空文件、加密/损坏 PDF、OCR 没认出字）→ 走错误出口。
+        # 空正文上抽取只会凭空报"缺必填"，白花一次调用还让人对着空文件点审批
+        if not text.strip():
+            return {"error": NO_TEXT_ERROR}
         try:
-            model = extract(state.get("text") or "")
+            model = extract(text)
         except Exception as exc:  # LLM/解析异常 → 整份走 error 报告（不拖垮队列）
             return {"error": f"抽取失败：{exc}"}
         # 真实示范文本把生效写为签字盖章之日, 不写具体日期; 按句式用签署日回填
-        model = infer_effective_from_signature(model, state.get("text") or "")
+        model = infer_effective_from_signature(model, text)
         return {"extracted": model.model_dump(mode="json")}
 
     def rules_node(state: ReviewState) -> dict:

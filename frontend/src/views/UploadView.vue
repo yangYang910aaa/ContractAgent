@@ -14,7 +14,9 @@ const picked = ref<File[]>([])
 const busy = ref(false)
 const uploading = ref('') // 当前正在传的文件名（进度文案）
 const results = ref<{ name: string; ok: boolean; tid?: string; error?: string }[]>([])
-const hint = '支持 PDF / Word / 文本(md,txt)，可多选批量上传；审核在后台顺序进行。'
+// 图片（扫描件、拍照件）与文本型合同同样在白名单里，提示里必须写上，
+// 否则拿扫描件来的用户会以为传不了
+const hint = '支持 PDF / Word / 文本(md,txt) / 图片(扫描件、拍照件)，可多选批量上传；审核在后台顺序进行。'
 // 审查模式：single=主审规则；double=主审 + 独立复核盲审（多一次 LLM 调用）
 const reviewMode = ref<'single' | 'double'>('single')
 const modeOptions = [
@@ -93,7 +95,7 @@ async function uploadAll() {
     <label class="drop card">
       <input type="file" accept=".pdf,.docx,.md,.txt,.jpg,.jpeg,.png,.bmp,.tif,.tiff" multiple @change="onPick" />
       <span class="drop-main">{{ picked.length ? `已选 ${picked.length} 份` : '点击选择合同文件（可多选）' }}</span>
-      <span class="drop-sub mono-num">pdf / docx / md / txt · 文本型即可</span>
+      <span class="drop-sub mono-num">pdf / docx / md / txt / jpg / png · 扫描件与拍照件走本地 OCR</span>
     </label>
 
     <!-- 待上传清单：可移除单项 -->

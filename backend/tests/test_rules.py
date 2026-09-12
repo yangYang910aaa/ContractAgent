@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 
 from backend.app.rules import annotate_template_risks, evaluate, grade_report
-from backend.app.schemas import ContractModel, Grade, PaymentTerm, Severity
+from backend.app.schemas import ContractModel, Evidence, Grade, PaymentTerm, Severity
 
 
 def _term(name: str, amount: str, percent: float | None) -> PaymentTerm:
@@ -343,6 +343,39 @@ def test_enterprise_liability_cap_30_still_low() -> None:
     assert "liability_cap_too_low" in types
     assert all(r.severity == Severity.high
                for r in evaluate(model) if r.risk_type == "liability_cap_too_low")
+
+
+def test_penalty_only_quote_is_not_treated_as_liability_cap() -> None:
+    """抽到的"上限"出处其实是违约金约定 → 判上限不明 medium，不做"上限过低"high。
+
+    真实监理合同写的是"违约金一般为监理合同总价的 20%"——那句约束的是违约金，
+    被填进责任上限后会误报"上限过低"并停到人工审批。
+    """
+    model = _with(
+        liability_cap=20.0,
+        extraction_meta={
+            "liability_cap": Evidence(quote="违约金一般为监理合同总价的 20%", clause_ref="第十七条", confidence=0.9)
+        },
+    )
+    risks = {r.risk_type: r.severity for r in evaluate(model)}
+    assert "liability_cap_too_low" not in risks
+    assert risks["liability_cap_unclear"] == Severity.medium
+
+
+def test_true_cap_quote_still_flags_low_cap() -> None:
+    """证据句确为赔偿责任上限口径 → 仍按"上限过低"判高风险，不因兜底放松。"""
+    model = _with(
+        liability_cap=10.0,
+        extraction_meta={
+            "liability_cap": Evidence(
+                quote="甲方在本协议项下承担的全部赔偿责任累计最高不超过该笔订单金额的10%",
+                clause_ref="三、合同的主要内容",
+                confidence=0.9,
+            )
+        },
+    )
+    risks = {r.risk_type: r.severity for r in evaluate(model)}
+    assert risks["liability_cap_too_low"] == Severity.high
 
 
 def test_amount_mismatch_with_unreliable_total_is_medium() -> None:

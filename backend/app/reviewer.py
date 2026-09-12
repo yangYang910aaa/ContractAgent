@@ -264,15 +264,24 @@ def normalize_findings(
                 severity=severity,
                 clause_ref=clause_ref,
                 evidence=str(item.get("evidence") or "").strip(),
-                policy_ref=(
-                    str(item["policy_ref"]).strip()
-                    if item.get("policy_ref") not in (None, "")
-                    else None
-                ),
+                policy_ref=_policy_ref_id(item.get("policy_ref")),
                 suggestion=str(item.get("suggestion") or "").strip(),
             )
         )
     return out, dropped
+
+
+def _policy_ref_id(raw: Any) -> str | None:
+    """政策编号归一成 P-XX：模型会连着条号一起写（"P-14 第三条"）。
+
+    报告里的政策引用按 P-XX 建索引，带条号的编号在报告里对不上任何一条命中。
+    认不出编号形态时原样保留（不猜），空值返回 None。
+    """
+    text_value = str(raw or "").strip()
+    if not text_value:
+        return None
+    match = re.match(r"(P-\d+)", text_value)
+    return match.group(1) if match else text_value
 
 
 _SYSTEM_PROMPT = """你是中文采购合同的独立复核员（盲审）。

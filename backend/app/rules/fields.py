@@ -81,6 +81,23 @@ def _total_amount_reliable(model: ContractModel) -> bool:
     return meta.confidence >= 0.7 and bool(re.search(r"\d", meta.quote or ""))
 
 
+# 责任上限的支持性证据：证据句得真是"赔偿/责任上限"口径
+_CAP_EVIDENCE_RE = re.compile(r"赔偿|责任总额|责任限额|责任上限|责任封顶|最高不超过|累计不超过|以.{0,8}为限|上限")
+
+
+def _cap_evidence_supported(model: ContractModel) -> bool:
+    """责任上限的原文依据是否支持"这是赔偿责任上限"（没有依据时按可信处理）。
+
+    模型会把只约束违约金的句子填进 liability_cap（"违约金一般为合同总价的 20%"），
+    照它判"上限过低"会误停闸；这类句子属违约金口径，不是赔偿责任上限。
+    """
+    meta = model.extraction_meta.get("liability_cap")
+    # 分支：没有字段证据（离线测试/旧路径）→ 保持既有判定，不据此翻案
+    if meta is None or not (meta.quote or "").strip():
+        return True
+    return bool(_CAP_EVIDENCE_RE.search(meta.quote))
+
+
 def _check_required(model: ContractModel) -> list[RiskItem]:
     """必填字段完整性检查。
 
@@ -292,7 +309,23 @@ def _check_policies(model: ContractModel, required: set[str]) -> list[RiskItem]:
                     ),
                 )
             )
-    # 分支 2：有约定但低于该品类底线 → high（供应商赔偿被压得过低）
+    # 分支 2：抽到的上限出处其实是违约金约定（不是赔偿责任上限）→ 判"上限不明"medium，
+    # 不做"上限过低"的 high：一句话只约束违约金时，拿它当责任上限会误停闸
+    elif cap < floor and not _cap_evidence_supported(model):
+        out.append(
+            _mk(
+                model,
+                risk_type="liability_cap_unclear",
+                severity=Severity.medium,
+                field="liability_cap",
+                policy_ref="P-03",
+                suggestion=(
+                    f"抽到的责任上限 {cap:g}% 出自违约金约定，是否属于赔偿责任上限需人工核对；"
+                    f"若确为赔偿责任上限，建议不低于总额 {floor:g}%。"
+                ),
+            )
+        )
+    # 分支 3：确为赔偿责任上限且低于该品类底线 → high（供应商赔偿被压得过低）
     elif cap < floor:
         out.append(
             _mk(

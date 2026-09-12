@@ -10,7 +10,11 @@ import re
 
 from backend.app.rules.constants import EFFECTIVE_FROM_SIGN_RE, SIGNING_EFFECT_RE
 from backend.app.schemas import RiskItem, Severity
-from backend.app.rules.locator import _annotate_missing_locators, _clean_page_marks, _normalize_clause_refs
+from backend.app.rules.locator import (
+    _annotate_missing_locators,
+    _clean_rule_text,
+    _normalize_clause_refs,
+)
 from backend.app.rules.template import is_supplementary_agreement
 from backend.app.rules.text_penalty import _CONF_OBLIGATION_RE
 
@@ -67,9 +71,9 @@ def annotate_open_ended_risks(risks: list[RiskItem], text: str) -> list[RiskItem
     合同写"按实结算/长期有效/签字盖章之日起生效"时，抽不到金额或日期是常态，
     判高风险会误停闸口。降级会在建议里写明，不静默。返回新列表，不修改入参。
     """
-    # 扫描件文本先去掉页标记：后面的锚点/窗口判定与摘录都按干净正文来
-    # （页标记既占窗口预算，又会混进给用户看的摘录）
-    text = _clean_page_marks(text)
+    # 扫描件/PDF 文本先做统一清洗：去掉页标记、接回硬换行——后面的锚点与窗口判定、
+    # 以及给用户看的摘录都按干净正文来（页标记占窗口预算，硬换行会把关键词切开）
+    text = _clean_rule_text(text)
     if not text:
         return risks
     # 这种情况是：补充/变更协议 → 期限、币种这些字段由原合同继承，缺了不是缺陷；

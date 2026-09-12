@@ -93,6 +93,19 @@ def test_neighbor_clause_wording_is_not_a_confidentiality_exception() -> None:
     assert _types(text)["confidentiality_no_exception"] == "medium"
 
 
+def test_exception_split_by_hard_wrap_is_recognized() -> None:
+    """例外句与义务句之间被 PDF 硬换行切开，仍算有例外 → 不误报。
+
+    真实系统集成合同："未经乙方书面同意，"在上一行、禁止披露句在下一行，
+    换行若当成句边界，例外就被切没了。
+    """
+    text = _text(confidentiality=(
+        "本合同项下全部成果的所有权和知识产权归乙方所有。未经乙方书面同意，\n"
+        "甲方不得擅自使用，亦不得向第三方披露。"
+    ))
+    assert "confidentiality_no_exception" not in _types(text)
+
+
 def test_penalty_basis_unclear_is_medium() -> None:
     """只写费率不写基数 → P-14 medium。"""
     text = _text(penalty=(
@@ -114,6 +127,44 @@ def test_penalty_with_basis_not_flagged() -> None:
 def test_penalty_cap_missing_high_for_high_daily_rate() -> None:
     """按日 0.5% 且无任何上限 → 违约金失控，判高风险。"""
     text = _text(penalty="乙方逾期交付的，每逾期一日按合同总价款的 0.5% 向甲方支付违约金。")
+    assert _types(text)["penalty_cap_missing"] == "high"
+
+
+def test_daily_penalty_with_spaced_cn_fraction_fires_high() -> None:
+    """中文分数与数字之间有空格（"千分之 1"）也要取到费率 → 判高风险。
+
+    真实小麦购销合同写的就是"每日千分之 1"，取不到费率这条规则等于不判。
+    """
+    for penalty in (
+        "卖方逾期到达的，应按逾期金额每日千分之 1 计算，向买方支付违约金。",
+        "乙方逾期交付的，每逾期一日按合同总价款的千分之 5 支付违约金。",
+    ):
+        assert _types(_text(penalty=penalty))["penalty_cap_missing"] == "high"
+
+
+def test_daily_penalty_wording_variants_fire_high() -> None:
+    """按日计罚的同义写法（每延期/每延误）与"承担违约责任"句式都要判高风险。
+
+    真实林区修路合同写的是"每延期一日…承担违约责任"：字面既不是"每逾期"，
+    也没有"违约金"三个字，两处都按字面写就会整条漏判。
+    """
+    for penalty in (
+        "乙方逾期交付工程的，每延期一日，乙方应按照合同总金额的 1% 承担违约责任。",
+        "工期每延误一日，乙方应支付合同总价款的 1% 作为违约赔偿。",
+    ):
+        assert _types(_text(penalty=penalty))["penalty_cap_missing"] == "high"
+
+
+def test_fixed_amount_daily_sentence_does_not_stop_scanning() -> None:
+    """前面一句按日违约金是固定金额（取不到费率），不能就此收工。
+
+    真实合同先出现"缺勤违约金每日 10000 元"，后面才是"每延期一日按 1%"；
+    遇到第一句算不出费率就返回，后面的高风险条款就永远看不到。
+    """
+    text = _text(penalty=(
+        "乙方人员缺勤的，缺勤违约金每日 10000 元，未经甲方书面同意不得更换人员。"
+        "乙方逾期交付的，每逾期一日按合同总价款的 1% 支付违约金。"
+    ))
     assert _types(text)["penalty_cap_missing"] == "high"
 
 
