@@ -156,6 +156,27 @@ class MemoryStore:
             for doc, score in scored[:k]
         ]
 
+    def similarity_search_many(self, queries: list[str], k: int = 2) -> list[list[PolicyHit]]:
+        """多条 query 批量检索：向量一次批量算好，再各自取 top-k。
+
+        返回值与入参同序。逐条查各自要一次向量化往返，报告里往往有五六条引用，
+        合并成一次请求能把这部分从"每条一次"压到"一批一次"。
+        """
+        if not queries:
+            return []
+        vectors = [_normalize(vec) for vec in self._embedding.embed_documents(list(queries))]
+        out: list[list[PolicyHit]] = []
+        for q in vectors:
+            scored = [(doc, _cosine(q, vec)) for doc, vec in zip(self._docs, self._vectors)]
+            scored.sort(key=lambda item: item[1], reverse=True)
+            out.append(
+                [
+                    PolicyHit(policy_ref=doc.policy_ref, source=doc.source, text=doc.text, score=score)
+                    for doc, score in scored[:k]
+                ]
+            )
+        return out
+
 
 class MilvusStore:
     """Milvus 政策库封装(pymilvus 3.0.1,MilvusClient 写法)。
@@ -248,6 +269,33 @@ class MilvusStore:
                 )
             )
         return hits
+
+    def similarity_search_many(self, queries: list[str], k: int = 2) -> list[list[PolicyHit]]:
+        """多条 query 批量检索：向量一次批量算好再交给 Milvus，返回值与入参同序。"""
+        if not queries:
+            return []
+        vectors = self._embedding.embed_documents(list(queries))
+        results = self.client.search(
+            collection_name=self.collection_name,
+            data=vectors,  # 一次请求检索多条：Milvus 按入参顺序返回，故无需再对齐
+            limit=k,
+            search_params={"metric_type": "COSINE", "params": {"ef": 64}},
+            output_fields=["text", "source", "policy_ref"],
+        )
+        out: list[list[PolicyHit]] = []
+        for hits_raw in results:
+            out.append(
+                [
+                    PolicyHit(
+                        policy_ref=hit["entity"].get("policy_ref", ""),
+                        source=hit["entity"].get("source", ""),
+                        text=hit["entity"].get("text", ""),
+                        score=hit.get("distance", 0.0),
+                    )
+                    for hit in hits_raw
+                ]
+            )
+        return out
 
 
 def _tokenize(text: str) -> list[str]:
@@ -347,6 +395,19 @@ class HybridRetriever:
         bm25_hits = self.bm25.search(query, k=self.pool)
         return rrf_fuse([vector_hits, bm25_hits], k=self.rrf_k, top_k=k)
 
+    def search_many(self, queries: list[str], k: int = 3) -> list[list[PolicyHit]]:
+        """多条 query 的混合检索：向量一路批量召回，BM25 是本地计算逐条做，再各自 RRF。
+
+        返回值与入参同序。融合口径与单条 search 完全一致，只是省掉重复的向量化往返。
+        """
+        if not queries:
+            return []
+        vector_lists = self.store.similarity_search_many(list(queries), k=self.pool)
+        return [
+            rrf_fuse([vectors, self.bm25.search(query, k=self.pool)], k=self.rrf_k, top_k=k)
+            for query, vectors in zip(queries, vector_lists)
+        ]
+
 
 # 混合检索器进程内缓存：向量库与 BM25 索引构建成本高，避免每次查询重灌
 _HYBRID_CACHE: dict[str, HybridRetriever] = {}
@@ -445,3 +506,34 @@ def retrieve_policies(
     elif isinstance(store, MilvusStore):
         store.insert(load_policies())
     return store.similarity_search(query, k=k)
+
+
+def retrieve_policies_many(
+    queries: list[str],
+    k: int = 2,
+    backend: str | None = None,
+    embedding_model=None,
+    mode: str | None = None,
+) -> list[list[PolicyHit]]:
+    """一次检索多条 query，返回值与入参同序（每条命中的口径与 retrieve_policies 一致）。
+
+    逐条检索时每条都要一次向量化往返；报告里常有五六条引用，合并成一次批量请求
+    能把这段从"每条一次"压到"一批一次"。批量整批失败（如接口限流）时退回逐条，
+    单条失败只让那一条返回空列表——保持"检索不可用不阻断审查"的语义。
+    """
+    queries = list(queries)
+    if not queries:
+        return []
+    mode = mode or settings.retrieval_mode
+    if mode == "hybrid":
+        try:
+            return _get_hybrid(backend, embedding_model).search_many(queries, k=k)
+        except Exception:  # 批量失败不连坐：退回逐条，让能查到的照常返回
+            pass
+    out: list[list[PolicyHit]] = []
+    for query in queries:
+        try:
+            out.append(retrieve_policies(query, k=k, backend=backend, embedding_model=embedding_model, mode=mode))
+        except Exception:
+            out.append([])
+    return out

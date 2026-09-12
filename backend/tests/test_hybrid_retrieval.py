@@ -39,6 +39,21 @@ def _docs() -> list[IndexDoc]:
     ]
 
 
+def test_hybrid_search_many_matches_single_search() -> None:
+    """批量检索与逐条检索必须逐字段一致：省掉的只是向量化往返，引用结果不能变。"""
+    store = MemoryStore(embedding_model=FakeEmbeddings())
+    store.insert(_docs())
+    retriever = HybridRetriever(store, _docs())
+    queries = ["预付款不得超过", "质保期不得少于", "数据出境", "预付款比例 60%"]
+
+    def shape(hits: list[PolicyHit]) -> list[tuple]:
+        return [(h.policy_ref, h.text, h.score) for h in hits]
+
+    batched = [shape(hits) for hits in retriever.search_many(queries, k=2)]
+    one_by_one = [shape(retriever.search(query, k=2)) for query in queries]
+    assert batched == one_by_one
+
+
 def test_tokenize_splits_chinese_terms() -> None:
     """分词能切开中文术语（BM25 依赖词元重叠）。"""
     tokens = _tokenize("预付款不得超过合同总额")

@@ -16,6 +16,9 @@ from decimal import Decimal, InvalidOperation
 from pydantic import BaseModel, Field
 
 from backend.app.llm import get_chat_model
+from backend.app.parser import split_clauses
+from backend.app.rules.constants import PAGE_MARK_RE
+from backend.app.rules.locator import _find_quote_pos
 from backend.app.schemas import ContractModel, Evidence, PaymentTerm
 from backend.app.usage import STAGE_EXTRACT, llm_call
 
@@ -526,6 +529,127 @@ def _recover_completion(exc: Exception) -> dict | None:
 DOUBLE_READ_FIELDS: tuple[str, ...] = ("payment_schedule",)
 
 
+# 第二读只比对付款期次，喂整份合同等于把最贵的 prefill 做两遍；片段上限按付款条款通常长度取，
+# 超了宁可退回全文，也不把一节切成半句让模型误读
+_SECOND_READ_MAX_CHARS = 3000
+# 挑片段的两档用词：先"写付款安排"的（付款方式/预付/进度款…），再退到"提到付款"的。
+# 分两档是因为"付款"这种泛词会先命中无关条款（实测"审核和签发付款凭证"），把预算吃光
+_STRONG_PAYMENT_MARKERS = (
+    "付款方式", "支付方式", "支付方法", "付款方法", "结算方式", "付款条件", "支付条款",
+    "预付", "首付", "备料款", "进度款", "尾款", "账期", "酬金",
+)
+_WEAK_PAYMENT_MARKERS = ("付款", "支付", "结算", "价款", "货款", "款项")
+
+
+def _flat(text: str) -> str:
+    """压掉空白与 OCR 页标记，用于"这段文字在不在那段正文里"的比对。"""
+    return PAGE_MARK_RE.sub("", re.sub(r"\s+", "", text or ""))
+
+
+def _clause_payment_score(clause_text: str) -> int:
+    """给条款打"像不像付款安排"的分：强标记权重高，带金额/百分比加分，名词解释类减分。
+
+    不排序会按文档顺序把预算吃在无关条款上——实测"第一条 名词和用语"（解释了酬金）
+    排在真正的付款条款前面，把片段预算占光。
+    """
+    score = 3 * sum(1 for marker in _STRONG_PAYMENT_MARKERS if marker in clause_text)
+    score += sum(1 for marker in _WEAK_PAYMENT_MARKERS if marker in clause_text)
+    if "%" in clause_text or "％" in clause_text or "元" in clause_text:
+        score += 2
+    head = clause_text[:40]
+    if any(word in head for word in ("名词和用语", "名词用语", "定义", "解释")):
+        score -= 6
+    return score
+
+
+def _payment_excerpt(
+    text: str, quotes: list[str] | None = None, max_chars: int = _SECOND_READ_MAX_CHARS
+) -> str:
+    """挑出第二读要喂的正文；一处都挑不出（无条文结构、也没有付款字样）返回空串。
+
+    优先取首读摘录所在的那一段——第二读要复核的就是它读到的那几句；首读没给摘录
+    时，再按"写付款安排"的条款挑。
+    """
+    picked: list[str] = []
+    total = 0
+    # 分支 1：首读给了摘录且能在正文里定位 → 取摘录前后各一段（连同上下文一起给模型）
+    for quote in quotes or []:
+        if total >= max_chars:
+            break
+        pos = _find_quote_pos(text, quote)
+        if pos < 0:
+            continue
+        start = text.rfind("\n", 0, max(0, pos - 300)) + 1
+        newline = text.find("\n", pos + len(quote) + 300)
+        end = len(text) if newline < 0 else newline
+        room = max_chars - total
+        # 窗口比预算还长 → 以摘录为中心截，保证要复核的句子一定落在片段里
+        if end - start > room:
+            start = max(start, pos - room // 2)
+            end = start + room
+        piece = text[start:end]
+        picked.append(piece)
+        total += len(piece)
+    if picked:
+        return "\n".join(picked)
+    # 分支 2：没有可用摘录 → 按"像不像付款安排"排序挑条款（同分按原文顺序）
+    ranked = [
+        (index, clause, _clause_payment_score(clause.text))
+        for index, clause in enumerate(split_clauses(text))
+    ]
+    ranked = [item for item in ranked if item[2] > 0]
+    ranked.sort(key=lambda item: (-item[2], item[0]))
+    for _, clause, _ in ranked:
+        room = max_chars - total
+        if room <= 0:
+            break
+        piece = clause.text[:room]
+        picked.append(piece)
+        total += len(piece)
+    return "\n".join(picked)
+
+
+def _digits_only(text: str) -> str:
+    """只留数字：同一笔金额在不同写法间比对（93.000.00 / 93,000.00 / 93000）。"""
+    return re.sub(r"\D", "", text or "")
+
+
+def _values_covered(excerpt: str, terms: list[PaymentTerm]) -> bool:
+    """片段是否覆盖首读抽到的期次数值。
+
+    不逐字比对摘录：模型会把 OCR 认错的词顺手改对（实测把"直付款"写成"首付款"），
+    逐字比对必然对不上。改比金额与比例——它们才是双读要比的东西。
+    """
+    flat = _flat(excerpt)
+    digits = _digits_only(excerpt)
+    for term in terms:
+        if term.percent is not None and f"{term.percent:g}%" in flat:
+            continue
+        if term.amount is not None and _digits_only(f"{term.amount}") in digits:
+            continue
+        return False
+    return True
+
+
+def _second_read_scope(first: ContractModel, text: str) -> str:
+    """第二次抽取要喂的正文：只喂写付款安排的那几段，挑不出就退回全文。
+
+    退回的条件是"首读的付款证据没全部落在片段里"（付款条款被切掉、金额写在附件等）——
+    宁可多花一次全额 prefill，也不让模型在残缺上下文里读出不同期次、把需人工核对标错。
+    首读压根没给摘录时没法核对覆盖，此时只能用"写付款安排"的条款挑出来的片段。
+    """
+    meta = first.extraction_meta.get("payment_schedule")
+    quotes = [meta.quote] if meta and meta.quote else []
+    quotes += [term.evidence for term in first.payment_schedule if term.evidence]
+    excerpt = _payment_excerpt(text, quotes)
+    if not excerpt:
+        return text
+    # 分支：首读抽到了期次 → 要求片段覆盖这些期次的金额/比例；覆盖不到就退回全文
+    if first.payment_schedule and not _values_covered(excerpt, list(first.payment_schedule)):
+        return text
+    return excerpt
+
+
 def _single_read(structured, text: str) -> ContractModel:
     """调一次结构化抽取并归一化（漂移输出兜底；异常上抛由调用方决定是否吞）。"""
     try:
@@ -603,7 +727,8 @@ def extract_contract(
     if not double_read_fields:
         return first
     try:
-        second = _single_read(structured, text)
+        # 第二读只喂付款相关片段（喂全文等于把最贵的一次 prefill 做两遍）
+        second = _single_read(structured, _second_read_scope(first, text))
     except Exception as exc:
         # 这种情况是：第二读失败（限流/超时）→ 以首读为准，不阻断审查
         return first

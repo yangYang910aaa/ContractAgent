@@ -19,7 +19,7 @@ from pathlib import Path
 from backend.app.config import BASE_DIR
 from backend.app.extractor import DOUBLE_READ_FIELDS, extract_contract
 from backend.app.parser import extract_text
-from backend.app.policy_rag import PolicyHit, load_policy_full, retrieve_policies
+from backend.app.policy_rag import PolicyHit, load_policy_full, retrieve_policies_many
 from backend.app.rules import (
     annotate_open_ended_risks,
     annotate_template_risks,
@@ -34,6 +34,14 @@ from backend.app.usage import track_usage
 DEFAULT_SAMPLES = sorted((BASE_DIR / "data" / "contracts").glob("*.md"))
 
 
+def _safe_retrieve(retriever, query: str) -> list:
+    """调一次注入的检索函数；检索不可用（服务未起/超时）返回空列表，不阻断整份报告。"""
+    try:
+        return retriever(query) or []
+    except Exception:
+        return []
+
+
 def enrich_policy_hits(
     risks: list[RiskItem],
     retriever=None,  # (query: str) -> list[PolicyHit]，测试可注入假检索器
@@ -42,8 +50,10 @@ def enrich_policy_hits(
     作用：让报告里的每条政策类风险都有"依据哪条政策"的原文可查
     （防 LLM/规则凭空判断；检索失败不阻断审查，该条留空）。
     """
-    retriever = retriever or (lambda query: retrieve_policies(query, k=1))
     hits: list[dict] = []
+    # 先收集"要查哪几条政策"（同一条政策只查一次），把 query 备齐再统一检索：
+    # 默认路径合并成一次批量向量化请求，省掉逐条往返的等待
+    wanted: list[tuple[str, str]] = []  # (政策编号, 检索用文本)
     seen: set[str] = set()
     for risk in risks:
         # 分支：多条风险可能引用同一条政策,只检索一次，避免重复向量检索
@@ -51,14 +61,16 @@ def enrich_policy_hits(
             continue
         seen.add(risk.policy_ref)
         #优先用证据原文作query,没有才用建议文本
-        query = risk.evidence or risk.suggestion
-        try:
-            # 检索一次就存下来：写在条件里会被调用两遍，而每次检索都要先调一次
-            # 向量化接口，等于每个政策引用白等一轮往返
-            found = retriever(query)
-            top = found[0] if found else None
-        except Exception:
-            top = None  # 检索服务不可用时不拖垮整份报告
+        wanted.append((risk.policy_ref, risk.evidence or risk.suggestion))
+
+    found_lists = (
+        retrieve_policies_many([query for _, query in wanted], k=1)
+        if retriever is None
+        else [_safe_retrieve(retriever, query) for _, query in wanted]
+    )
+
+    for (policy_ref, _), found in zip(wanted, found_lists):
+        top = found[0] if found else None
         if top is not None:
             hits.append(
                 {
@@ -72,7 +84,7 @@ def enrich_policy_hits(
                 }
             )
         else:
-            hits.append({"policy_ref": risk.policy_ref, "score": None, "snippet": ""})
+            hits.append({"policy_ref": policy_ref, "score": None, "snippet": ""})
     return hits
 
 

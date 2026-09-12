@@ -1,6 +1,7 @@
 """关键字段双读单测：二次抽取比对、不一致标人工、第二读失败不阻断。"""
 
 from backend.app.extractor import (
+    _second_read_scope,
     _field_equal,
     _merge_double_read,
     extract_contract,
@@ -98,6 +99,60 @@ def _raw_payment(terms: list[tuple[str, str, int]]) -> dict:
             for name, amount, percent in terms
         ],
     }
+
+
+class _RecordingStructured(_FakeStructured):
+    """假模型：额外记录每次调用收到的正文，用于验证"第二读只喂付款片段"。"""
+
+    def __init__(self, results) -> None:
+        super().__init__(results)
+        self.human_texts: list[str] = []
+
+    def invoke(self, messages) -> dict:
+        self.human_texts.append(messages[-1][1])
+        return super().invoke(messages)
+
+
+# 一份有条款结构、且付款条款与其它条款混在一起的小合同
+_PAYMENT_TEXT = (
+    "第一条 甲方为某采购方，乙方为某供应商。\n"
+    "第二条 交货地点为北京市通州区。\n"
+    "第三条 质保期为 24 个月。\n"
+    "第九条 付款方式：合同签订后 30 个工作日内支付合同总价的 60%。\n"
+)
+
+
+def test_second_read_only_gets_payment_excerpt() -> None:
+    """第二读只喂写付款安排的条款：它的作用是复核期次，重喂整份合同纯属重复 prefill。"""
+    fake = _RecordingStructured(
+        [_raw_payment([("预付款", None, 60)]), _raw_payment([("预付款", None, 60)])]
+    )
+    extract_contract(llm=fake, text=_PAYMENT_TEXT, double_read_fields=("payment_schedule",))
+    assert len(fake.human_texts) == 2
+    assert fake.human_texts[0] == _PAYMENT_TEXT  # 首读仍然吃全文
+    assert "付款方式" in fake.human_texts[1]
+    assert "质保期" not in fake.human_texts[1]  # 与付款无关的条款不进第二读
+
+
+def test_second_read_keeps_full_text_without_clause_structure() -> None:
+    """正文没有条款结构（挑不出付款片段）→ 退回全文，与改动前行为一致。"""
+    fake = _RecordingStructured([_raw_payment([("预付款", "93000", 60)])] * 2)
+    extract_contract(llm=fake, text="合同正文", double_read_fields=("payment_schedule",))
+    assert fake.human_texts[1] == "合同正文"
+
+
+def test_second_read_scope_falls_back_when_values_are_outside_excerpt() -> None:
+    """首读抽到的比例在片段里找不到 → 退回全文，不拿残缺上下文去比对期次。"""
+    first = _model_with_terms([("123456", 80.0)])  # 80% 与 123456 都不在付款条款里
+    assert _second_read_scope(first, _PAYMENT_TEXT) == _PAYMENT_TEXT
+
+
+def test_second_read_scope_uses_excerpt_when_evidence_is_covered() -> None:
+    """首读的期次数值落在片段里 → 第二读只喂该片段。"""
+    first = ContractModel(payment_schedule=[PaymentTerm(name="预付款", percent=60.0)])
+    scope = _second_read_scope(first, _PAYMENT_TEXT)
+    assert "付款方式" in scope
+    assert "质保期" not in scope
 
 
 def test_extract_contract_double_read_takes_majority_shape() -> None:

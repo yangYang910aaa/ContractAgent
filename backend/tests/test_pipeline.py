@@ -42,6 +42,28 @@ def test_enrich_policy_hits_dedup_and_skip_nonpolicy() -> None:
     assert "##" not in hits[0]["snippet"]
 
 
+def test_enrich_policy_hits_batch_path_matches_loop(monkeypatch) -> None:
+    """默认路径走批量检索，结果必须与逐条检索完全一致（加速不改引用内容）。"""
+    from backend.app import pipeline
+
+    risks = [_risk("P-01", evidence="预付款比例 60%"), _risk("P-04", evidence="保密期 60 个月")]
+    calls: list[list[str]] = []
+
+    def fake_many(queries, k=1, **kwargs):
+        calls.append(list(queries))
+        return [[PolicyHit(policy_ref="P-01" if "预付" in q else "P-04", source="", text="条文 " + q, score=0.9)] for q in queries]
+
+    monkeypatch.setattr(pipeline, "retrieve_policies_many", fake_many)
+    batch_hits = pipeline.enrich_policy_hits(risks)
+
+    # 逐条路径用等价的检索器 → 两者的引用条目应逐字段相同
+    loop_hits = pipeline.enrich_policy_hits(
+        risks, retriever=lambda q: [PolicyHit(policy_ref="P-01" if "预付" in q else "P-04", source="", text="条文 " + q, score=0.9)]
+    )
+    assert calls == [["预付款比例 60%", "保密期 60 个月"]]  # 一次批量、两条 query
+    assert batch_hits == loop_hits
+
+
 def test_enrich_policy_hits_calls_retriever_once_per_policy() -> None:
     """每个政策引用只检索一次：检索内部要调一次向量化接口，多调一次就是白等一轮往返。"""
     calls: list[str] = []
