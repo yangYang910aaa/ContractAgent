@@ -1,9 +1,10 @@
-from __future__ import annotations
+"""
+阈值常量、RISK_LABELS、FIELD_LABELS、品类基线、共用正则
+"""
 
+from __future__ import annotations
 import re
 from decimal import Decimal
-
-
 # ---- 政策阈值（百分比数值；金额单位：元）----
 PREPAY_MAX_PERCENT = 30.0  # P-01：预付款不超过总额 30%
 

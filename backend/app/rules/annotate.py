@@ -1,3 +1,9 @@
+"""
+开放式条款降级 + 定位编排 + 文案修正
+"""
+
+
+
 from __future__ import annotations
 
 import re

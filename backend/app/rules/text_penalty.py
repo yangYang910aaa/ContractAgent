@@ -1,3 +1,7 @@
+"""
+新规则:保密例外 / 违约金基数 / 违约金上限
+"""
+
 from __future__ import annotations
 
 import re

@@ -1,3 +1,7 @@
+"""
+文本级规则 P-06~P-09(验收 / 发票 / 担保 / 转包)
+"""
+
 from __future__ import annotations
 
 from decimal import Decimal

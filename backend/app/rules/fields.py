@@ -1,3 +1,6 @@
+"""
+字段级规则（必填 / 日期 / 金额 / 政策阈值 / IP 法律）+ evaluate()入口 + 生效日推断
+"""
 from __future__ import annotations
 
 from decimal import Decimal
