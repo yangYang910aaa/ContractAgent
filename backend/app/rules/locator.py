@@ -1,3 +1,6 @@
+"""
+定位编排:原文摘录、缺必填锚点、条款号纠正、OCR 页标记清洗
+"""
 from __future__ import annotations
 
 import re
@@ -23,12 +26,13 @@ def _sentence_quote(text: str, pos: int, max_chars: int = 120) -> str:
     return quote[:max_chars]
 
 
-def _locate_missing_field(text: str, field: str | None) -> tuple[str, str]:
-    """缺必填字段的"原文该去哪找"：返回 (clause_ref, evidence 摘录)。
+def _locate_missing_field(text: str, field: str | None, scope_ref: str = "") -> tuple[str, str]:
+    """缺字段原位的"原文该去哪找"：返回 (clause_ref, evidence 摘录)。
 
-    字段没抽到时证据天然为空、风险卡上就没有"原文定位"，而缺必填恰恰最需要指路。
+    字段没抽到时证据天然为空、风险卡上就没有"原文定位"，而缺字段恰恰最需要指路。
     这里按字段类型在正文里找最可能写该字段的句子（总额→"合同总价款"、币种→"人民币"、
     到期日→"有效期"）当定位锚点；找不到锚点返回空，不硬编造位置。
+    给了 scope_ref 则只在该条款范围内找——见下方分支说明。
     """
     anchors = _MISSING_FIELD_ANCHORS.get(field or "")
     if not anchors:
@@ -38,6 +42,21 @@ def _locate_missing_field(text: str, field: str | None) -> tuple[str, str]:
     fallback = _MISSING_FIELD_FALLBACK.get(field or "")
     if fallback and not any(re.search(k, text) for k in anchors):
         anchors = _MISSING_FIELD_ANCHORS.get(fallback, anchors)
+    # 分支：能定出条款范围 → 只在该条款里找锚点。锚点多为"付款"这类泛词，全篇取第一个
+    # 命中会落到毫不相干的条款上（风险说预付款超限，却定位到"审核和签发付款凭证"），
+    # 而条款内找不到时留空更可信：前端会退到该条款整块高亮，不会把人带偏。
+    spans = _clause_spans(text, scope_ref) if scope_ref else []
+    if spans:
+        # 同一条款号可能有好几处（通用条款与专用条款各编一套号）→ 取真能找到锚点的那处，
+        # 而不是第一处：先命中的可能是编号相同、内容完全无关的另一套条款
+        for span in spans:
+            for keyword in anchors:
+                match = re.search(keyword, text[span[0] : span[1]])
+                if match:
+                    pos = span[0] + match.start()
+                    return _clause_ref_at(text, pos), _sentence_quote(text, pos)
+        return "", ""
+    # 分支：没有可用条款号 → 全文找第一个锚点（缺字段类风险此时还没有条款号可依）
     for keyword in anchors:
         match = re.search(keyword, text)
         if match:
@@ -96,9 +115,11 @@ def _annotate_missing_locators(risks: list[RiskItem], text: str) -> list[RiskIte
         if not risk.evidence_quote and risk.evidence and risk.evidence in text:
             out.append(risk.model_copy(update={"evidence_quote": risk.evidence}))
             continue
-        # 分支：说明句不在正文里 → 按字段锚点找一句真正的原文当摘录
+        # 分支：说明句不在正文里 → 按字段锚点找一句真正的原文当摘录。
+        # 带上条款号限定范围：这类风险的证据句是规则拼的（正文里搜不到），
+        # 只有"该条款内"的命中才和这条风险对得上。
         if not risk.evidence_quote:
-            _, quote = _locate_missing_field(text, risk.field)
+            _, quote = _locate_missing_field(text, risk.field, risk.clause_ref or "")
             if quote:
                 out.append(risk.model_copy(update={"evidence_quote": quote}))
                 continue
@@ -186,3 +207,33 @@ def _clause_ref_at(text: str, pos: int) -> str:
         if _CLAUSE_HEADER_RE.match(line):
             return line.strip()
     return ""
+
+
+# 条款起始行（划某条款的正文范围用）：只看行首的"第X条"，不限长度——
+# 长度上限是"条款标题"的判定口径，拿来划范围会把写得长的条款拦腰截断
+_CLAUSE_START_RE = re.compile(r"(?m)^第[一二三四五六七八九十百\d]+条")
+
+
+def _clause_spans(text: str, ref: str) -> list[tuple[int, int]]:
+    """给一个条款号，返回它所有可能的正文区间 [起, 止)；定不出来返回空列表。
+
+    只认"行首就是该条款号"的那一处：正文里别处引用同一条款号（"…第十条、…第十四条…"）
+    不是条款起点，拿它划范围会圈进别的条款。区间到下一个行首"第X条"为止。
+    """
+    ref = (ref or "").strip()
+    spans: list[tuple[int, int]] = []
+    if not ref:
+        return spans
+    for match in re.finditer(re.escape(ref), text):
+        line_start = text.rfind("\n", 0, match.start()) + 1
+        # 条款号前面还有内容 → 是引用不是条款起点，跳过
+        if text[line_start : match.start()].strip():
+            continue
+        end = len(text)
+        for nxt in _CLAUSE_START_RE.finditer(text, match.start()):
+            if nxt.start() == match.start():
+                continue
+            end = nxt.start()
+            break
+        spans.append((match.start(), end))
+    return spans

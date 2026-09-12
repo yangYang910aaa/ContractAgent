@@ -268,6 +268,74 @@ def test_missing_field_locator_keeps_existing_evidence() -> None:
     assert out.evidence == "原有证据句"
 
 
+def test_field_rule_quote_stays_inside_referenced_clause() -> None:
+    """条款号能定位时摘录必须取自该条款：泛词锚点在全文的第一处命中常与本条风险无关。
+
+    实测预付款超限的定位跳到别处的"审核和签发付款凭证"，与预付款毫无关系。
+    """
+    text = (
+        "第八条委托人赋予监理人如下权利：\n"
+        "3、审核和签发付款凭证；\n"
+        "第十四条监理正常服务酬金支付方法：\n"
+        "直付款：合同签订后30个工作日，支付合同总价的60%。\n"
+    )
+    risks = [
+        RiskItem(
+            risk_type="prepayment_ratio_high",
+            label="预付款比例过高",
+            severity=Severity.high,
+            field="payment_schedule",
+            clause_ref="第十四条",
+            evidence="预付款比例 60%",  # 规则生成的说明句，正文里搜不到
+            suggestion="降至 30% 以内",
+        )
+    ]
+    out = annotate_open_ended_risks(risks, text)[0]
+    assert "60%" in out.evidence_quote
+    assert "付款凭证" not in out.evidence_quote
+
+
+def test_field_rule_quote_skips_same_numbered_clause_without_anchor() -> None:
+    """同一条款号出现两次（通用条款与专用条款各编一套号）→ 取真含锚点的那处。"""
+    text = (
+        "第十四条为监理机构指定具有检验、试验资质的机构。\n"
+        "第十五条维护监理机构工作的独立性。\n"
+        "第十四条监理正常服务酬金支付方法：\n"
+        "直付款：合同签订后30个工作日，支付合同总价的60%。\n"
+    )
+    risks = [
+        RiskItem(
+            risk_type="prepayment_ratio_high",
+            label="预付款比例过高",
+            severity=Severity.high,
+            field="payment_schedule",
+            clause_ref="第十四条",
+            evidence="预付款比例 60%",
+            suggestion="降至 30% 以内",
+        )
+    ]
+    out = annotate_open_ended_risks(risks, text)[0]
+    assert "60%" in out.evidence_quote
+
+
+def test_field_rule_quote_empty_when_referenced_clause_has_no_anchor() -> None:
+    """所引条款内找不到锚点就留空（前端退到整块高亮），不拿别处的同名泛词顶替。"""
+    text = "第八条审核和签发付款凭证；\n第十条本合同自签字之日起生效。\n"
+    risks = [
+        RiskItem(
+            risk_type="prepayment_ratio_high",
+            label="预付款比例过高",
+            severity=Severity.high,
+            field="payment_schedule",
+            clause_ref="第十条",
+            evidence="预付款比例 60%",
+            suggestion="降至 30% 以内",
+        )
+    ]
+    out = annotate_open_ended_risks(risks, text)[0]
+    assert out.evidence_quote == ""
+
+
 def test_rule_risk_gets_original_quote_for_locating() -> None:
     """规则说明句在正文里搜不到时，补 evidence_quote（真原文）供前端定位/高亮。"""
     text = (

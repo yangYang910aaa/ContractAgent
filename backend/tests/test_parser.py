@@ -178,6 +178,54 @@ def test_image_pdf_goes_through_ocr(tmp_path: Path, monkeypatch) -> None:
     assert text == "--- 第 1 页 ---\n甲方：某采购方"
 
 
+def test_ocr_result_cached_by_file_content(tmp_path: Path, monkeypatch) -> None:
+    """同一份扫描件第二次解析命中缓存，不再重跑 OCR（整条链路最慢的一步）。"""
+    monkeypatch.setattr(parser, "OCR_CACHE_DIR", tmp_path / "cache")
+    calls: list[bytes] = []
+
+    def fake_ocr(image: bytes) -> list[str]:
+        calls.append(image)
+        return ["甲方：某采购方"]
+
+    monkeypatch.setattr(parser, "_ocr_image_bytes", fake_ocr)
+    scan = _blank_pdf(tmp_path / "scan.pdf", pages=2)
+
+    first = extract_text(scan)
+    assert len(calls) == 2  # 两页各跑一次
+    assert "甲方：某采购方" in first
+
+    calls.clear()
+    second = extract_text(scan)
+    assert calls == []  # 命中缓存 → 一次 OCR 都没跑
+    assert second == first
+
+
+def test_ocr_cache_misses_when_content_changes(tmp_path: Path, monkeypatch) -> None:
+    """换了文件内容（内容哈希变了）→ 必须重算，不能拿旧结果顶替。"""
+    monkeypatch.setattr(parser, "OCR_CACHE_DIR", tmp_path / "cache")
+    seen: list[str] = []
+
+    def fake_ocr(image: bytes) -> list[str]:
+        seen.append("x")
+        return ["文本"]
+
+    monkeypatch.setattr(parser, "_ocr_image_bytes", fake_ocr)
+    pymupdf = pytest.importorskip("pymupdf")
+
+    before = _blank_pdf(tmp_path / "scan.pdf", pages=1)
+    extract_text(before)
+    assert len(seen) == 1
+
+    after = tmp_path / "scan.pdf"
+    doc = pymupdf.open()
+    doc.new_page()
+    doc.new_page()  # 页数不同 → 字节不同
+    doc.save(str(after))
+    doc.close()
+    extract_text(after)
+    assert len(seen) == 3  # 第二份重新算了 2 页
+
+
 def test_text_pdf_does_not_call_ocr(tmp_path: Path, monkeypatch) -> None:
     """有文字层的 PDF → 仍走 pypdf，一个 OCR 调用都不发（保证既有基线不受影响）。"""
     def boom(path: Path) -> str:

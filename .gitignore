@@ -18,6 +18,7 @@ frontend/dist/
 # 本地数据产物（合成合同、报告等临时输出）
 backend/eval/output/
 data/uploads/
+data/ocr_cache/
 
 # 素材目录（用户收集：官方示范文本原件 / 评测变体 / 真实合同 / OCR 文本）：
 # 合规红线，一律不入库不上传（2026-09-09，2026-09-11 合并为 data/素材/）

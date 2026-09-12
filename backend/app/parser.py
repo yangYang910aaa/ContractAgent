@@ -8,9 +8,12 @@ pdf文件走pypdf逐页抽取文本；**文本层为空的图片型 PDF（扫描
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
+from backend.app.config import BASE_DIR
 
 # 条款头：行首的「第X条[标题]」，X 支持阿拉伯数字与中文数字
 _CLAUSE_HEADER_RE = re.compile(r"(?m)^\s*(第[0-9一二三四五六七八九十百千万零〇]+条[^\n]*)")
@@ -27,6 +30,8 @@ PDF_OCR_MIN_CHARS = 40
 OCR_RENDER_SCALE = 2
 # OCR 引擎单例（首次调用建模型约 1s；None=尚未初始化）
 _OCR_ENGINE = None
+# OCR 文本缓存目录：同一份扫描件会被反复上传（走查、失败重试），重算一遍纯属白等
+OCR_CACHE_DIR = BASE_DIR / "data" / "ocr_cache"
 
 
 @dataclass
@@ -121,6 +126,42 @@ def _ocr_image_bytes(image: bytes) -> list[str]:
     return [item[1] for item in (result or []) if len(item) >= 2 and item[1]]
 
 
+def _ocr_cache_file(path: Path) -> Path:
+    """按文件内容 + 渲染倍率算缓存文件名：内容或倍率一变就失效，不看文件名与时间戳。"""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    digest.update(f"|scale={OCR_RENDER_SCALE}".encode())
+    return OCR_CACHE_DIR / f"{digest.hexdigest()}.txt"
+
+
+def _read_ocr_cache(path: Path) -> str | None:
+    """读缓存的 OCR 文本；没缓存或缓存读不出来（被清理、损坏）都返回 None 交给重算。"""
+    try:
+        cache_file = _ocr_cache_file(path)
+        return cache_file.read_text(encoding="utf-8") if cache_file.exists() else None
+    except OSError:
+        return None
+
+
+def _write_ocr_cache(path: Path, text: str) -> None:
+    """落盘 OCR 文本；写不进去（无权限/磁盘满）只影响下次是否重算，不改本次结果。
+
+    先写临时文件再改名：同一份文件被并发解析时，读到的要么是完整内容、要么是没命中。
+    """
+    if not text.strip():
+        return
+    try:
+        OCR_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_file = _ocr_cache_file(path)
+        tmp_file = cache_file.with_suffix(".tmp")
+        tmp_file.write_text(text, encoding="utf-8")
+        tmp_file.replace(cache_file)
+    except OSError:
+        pass
+
+
 def _ocr_pdf(path: Path) -> str:
     """图片型 PDF → 逐页渲染成图片再 OCR，拼接时插入"--- 第 N 页 ---"便于人工核对。
 
@@ -128,6 +169,14 @@ def _ocr_pdf(path: Path) -> str:
     再高倍率识别率提升有限但耗时翻倍。
     页级并行**不可取**：推理本身已吃满多核，多页并发只是抢核、反而更慢，故保持串行。
     """
+    # 先确认 OCR 依赖可用：缓存命中不能把"依赖没装"这件事盖过去（部署环境只跑文本件时，
+    # 报错比静默返回旧结果更有用）
+    _ocr_engine()
+    cached = _read_ocr_cache(path)
+    # 分支：命中缓存 → 直接返回，省掉整份重算（扫描件实测 7~22 秒/页）
+    if cached is not None:
+        return cached
+
     import pymupdf  # 延迟导入：只有扫描件才需要
 
     doc = pymupdf.open(str(path))
@@ -138,12 +187,20 @@ def _ocr_pdf(path: Path) -> str:
         body = "\n".join(lines) or "（本页无可识别文字）"
         pages.append(f"--- 第 {index + 1} 页 ---\n{body}")
     doc.close()
-    return "\n".join(pages)
+    text = "\n".join(pages)
+    _write_ocr_cache(path, text)
+    return text
 
 
 def _ocr_image_file(path: Path) -> str:
     """图片文件（.jpg/.png…）直接 OCR；不渲染、不加页标记（单页无页码意义）。"""
-    return "\n".join(_ocr_image_bytes(path.read_bytes()))
+    _ocr_engine()
+    cached = _read_ocr_cache(path)
+    if cached is not None:
+        return cached
+    text = "\n".join(_ocr_image_bytes(path.read_bytes()))
+    _write_ocr_cache(path, text)
+    return text
 
 
 def split_clauses(text: str) -> list[Clause]:

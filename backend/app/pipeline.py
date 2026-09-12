@@ -53,7 +53,10 @@ def enrich_policy_hits(
         #优先用证据原文作query,没有才用建议文本
         query = risk.evidence or risk.suggestion
         try:
-            top = retriever(query)[0] if retriever(query) else None
+            # 检索一次就存下来：写在条件里会被调用两遍，而每次检索都要先调一次
+            # 向量化接口，等于每个政策引用白等一轮往返
+            found = retriever(query)
+            top = found[0] if found else None
         except Exception:
             top = None  # 检索服务不可用时不拖垮整份报告
         if top is not None:

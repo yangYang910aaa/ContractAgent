@@ -42,6 +42,19 @@ def test_enrich_policy_hits_dedup_and_skip_nonpolicy() -> None:
     assert "##" not in hits[0]["snippet"]
 
 
+def test_enrich_policy_hits_calls_retriever_once_per_policy() -> None:
+    """每个政策引用只检索一次：检索内部要调一次向量化接口，多调一次就是白等一轮往返。"""
+    calls: list[str] = []
+
+    def counting(query: str) -> list[PolicyHit]:
+        calls.append(query)
+        return [PolicyHit(policy_ref="P-01", source="x.md", text="条文", score=0.9)]
+
+    hits = enrich_policy_hits([_risk("P-01"), _risk("P-01")], retriever=counting)
+    assert len(calls) == 1
+    assert hits[0]["policy_ref"] == "P-01"
+
+
 def test_policy_snippet_cuts_at_sentence_and_strips_markdown() -> None:
     """片段生成：去 # 标题、保留行结构、在句末截断而不是硬切半句。"""
     long_doc = (
