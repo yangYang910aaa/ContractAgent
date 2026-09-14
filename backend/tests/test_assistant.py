@@ -116,10 +116,10 @@ def _report() -> dict:
 
 
 def test_policy_directory_covers_all_policies_with_scope() -> None:
-    """政策目录要列全 14 份，并带上"这份政策管什么"的适用范围。"""
+    """政策目录要列全 15 份，并带上"这份政策管什么"的适用范围。"""
     directory = policy_directory()
     refs = [item["ref"] for item in directory]
-    assert refs == [f"P-{i:02d}" for i in range(1, 15)]
+    assert refs == [f"P-{i:02d}" for i in range(1, 16)]
     p01 = next(item for item in directory if item["ref"] == "P-01")
     assert p01["title"] == "预付款管理"
     assert "适用范围" not in p01["scope"] and "政府采购示范文本" in p01["scope"]

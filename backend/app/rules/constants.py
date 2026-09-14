@@ -67,6 +67,7 @@ RISK_LABELS: dict[str, str] = {
     "confidentiality_no_exception": "保密条款缺少例外",
     "penalty_basis_unclear": "违约金基数不明",
     "penalty_cap_missing": "违约金无上限",
+    "unfair_exemption_clause": "过度免责条款",  # 供方概括免责 medium/数据责任免除 high, P-15
 
 #特殊标注:预警提示，需要人工审核
     "blank_template_suspected": "疑似空白模板",  

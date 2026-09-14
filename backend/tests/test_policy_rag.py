@@ -51,8 +51,8 @@ def test_ingest_policies_into_memory() -> None:
     # 纵向分条后：9 个文件各含"文件头 + N 个第X条"检索单元（总数远大于文件数）
     assert store.doc_count > 5
     refs = {d.policy_ref for d in store.docs}
-    # 条款基线 + 数据合规 + 保密/违约金三组政策，共 14 份
-    assert refs == {f"P-{i:02d}" for i in range(1, 15)}
+    # 条款基线 + 数据合规 + 保密/违约金 + 格式条款免责四组政策，共 15 份
+    assert refs == {f"P-{i:02d}" for i in range(1, 16)}
     # 每个政策编号都应同时有"文件头/适用范围"与"第X条"两类单元（细粒度检索的前提）
     for ref in sorted(refs):
         same = [d for d in store.docs if d.policy_ref == ref]

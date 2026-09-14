@@ -73,6 +73,9 @@ class SampleSpec:
     confidentiality_exception: bool | None = None
     # True=违约金句只写费率不写基数（sample_22 缺陷：基数不明）
     penalty_basis_unclear: bool = False
+    # 免责条款形态：None=不渲染该节（存量样本文本不动）；
+    # "reasonable"=正当免责（正常对照）/"supplier_blanket"=供方概括免责+数据责任免除（P-15 缺陷）
+    exemption_clause: str | None = None
 
 
 SPECS: list[SampleSpec] = [
@@ -487,6 +490,8 @@ class DataSampleSpec:
     processing_terms: bool = True  # False=委托处理要件不全
     cross_border: bool = False  # True=约定数据出境（无合规路径 → high）
     deletion_and_breach: bool = True  # False=无删除/事件通知
+    # 免责条款形态：None=不渲染 / "reasonable"=正当免责 / "supplier_blanket"=供方概括免责+数据责任免除
+    exemption_clause: str | None = None
     note: str = ""  # 缺陷说明（写进生成清单）
 
 
@@ -638,6 +643,41 @@ DATA_SPECS: list[DataSampleSpec] = [
         confidentiality_exception=True,  # 正常：保密例外齐全
         note="正常对照：保密含法定/监管披露例外、违约金基数与上限齐全，应零风险 pass。",
     ),
+# sample_25：缺陷 = 供方概括免责 + 数据与个人信息安全责任免除（P-15，含唯一闸口点）
+    DataSampleSpec(
+        sample_id="sample_25",
+        filename="sample_25_运维数据服务合同_过度免责.md",
+        contract_no="HT-2026-DS-0127",
+        title="运维数据服务合同",
+        buyer="云枢信息科技有限公司",
+        supplier="恒通数据服务有限公司",
+        signature_date="2026年9月12日",
+        expiry_date="2027年9月11日",
+        total_amount="1,800,000",
+        payment_terms=[("首付款", "360,000", 20), ("服务期满验收后支付", "1,440,000", 80)],
+        exemption_clause="supplier_blanket",  # 缺陷：概括免责 + 数据责任免除
+        note="缺陷：供方概括免责（medium）+ 数据泄露与个人信息责任免除（high），P-15 应报。",
+    ),
+# sample_26：正常对照（免责写法正当，应零风险通过）
+    SampleSpec(
+        sample_id="sample_26",
+        filename="sample_26_办公设备采购合同_免责合理.md",
+        contract_no="HT-2026-0128",
+        title="办公设备采购合同",
+        buyer="嘉合实业有限公司",
+        supplier="万顺办公设备有限公司",
+        signature_date="2026年9月13日",
+        effective_date="2026年9月13日",
+        expiry_date="2027年9月12日",
+        total_amount="760,000",
+        payment_terms=[
+            ("预付款", "152,000", 20),
+            ("验收合格后支付", "608,000", 80),
+        ],
+        confidentiality_exception=True,  # 正常：保密例外齐全
+        exemption_clause="reasonable",  # 正常：不可抗力/对方违约在先/买方权利
+        note="正常对照：免责写法正当（不可抗力、对方违约在先、买方索赔范围、买方退货、解除后返还），应零风险 pass。",
+    ),
 ]
 
 
@@ -762,6 +802,12 @@ def render_data_service_contract(spec: DataSampleSpec) -> str:
                 f"1、乙方逾期交付的，每逾期一日按合同总价款的 {spec.penalty_daily_percent:g}% 向甲方支付违约金。",
                 f"2、乙方对甲方承担的赔偿责任总额以合同总价款的 {spec.liability_cap_percent:g}% 为上限。",
             ],
+        ),
+        # 免责与责任限制（仅配置了形态的样本渲染）
+        *(
+            [("免责与责任限制", _exemption_lines(spec.exemption_clause))]
+            if spec.exemption_clause
+            else []
         ),
         (
             "合同期限与终止",
@@ -1234,6 +1280,28 @@ def _penalty_lines(spec: SampleSpec) -> list[str]:
     return lines
 
 
+def _exemption_lines(mode: str) -> list[str]:
+    """免责与责任限制条款正文。
+
+    "reasonable" 是本批的防误报对照：不可抗力、对方违约在先、买方索赔范围、买方退货
+    与解除后返还——都属正当约定，规则不得报。`supplier_blanket` 才是缺陷形态。
+    """
+    # 分支：正当免责（正常对照）——把真实合同里常见的正当写法集中放进来
+    if mode == "reasonable":
+        return [
+            "因不可抗力导致合同不能履行的，双方互不承担违约责任。",
+            "一方违约在先致使对方不能履行相应义务的，对方就该部分不承担违约责任。",
+            "甲方就其遭受的全部损失向乙方索赔，包括但不限于直接损失、间接损失及维权费用。",
+            "乙方交付的货物不符合约定的，甲方有权全部或部分退货，并不承担相应费用。",
+            "合同解除或终止后，乙方应在十日内返还甲方已支付但尚未履行部分的款项。",
+        ]
+    # 分支：缺陷形态（sample_25）——概括免责 + 数据与个人信息安全责任免除
+    return [
+        "乙方对因本合同产生的任何损失概不负责。",
+        "乙方对数据泄露、个人信息被非法使用以及系统运行中的其他安全事件不承担赔偿责任。",
+    ]
+
+
 def _confidentiality_lines(spec: SampleSpec) -> list[str]:
     """生成保密条款正文；返回空列表表示该节不渲染（缺保密条款缺陷）。"""
     # 分支：confidentiality_clause=False（如 sample_04）→ 返回空，整节不渲染
@@ -1329,6 +1397,9 @@ def render_contract(spec: SampleSpec) -> str:
             )
         )
     sections.append(("违约责任", _penalty_lines(spec)))
+    # 分支：配置了免责条款形态才渲染该节（存量样本不渲染，文本不漂移）
+    if spec.exemption_clause:
+        sections.append(("免责与责任限制", _exemption_lines(spec.exemption_clause)))
     # 分支：需要保密条款才把该节加入，否则条款顺延（贴近真实"缺失"合同）
     if spec.confidentiality_clause:
         sections.append(("保密条款", _confidentiality_lines(spec)))
