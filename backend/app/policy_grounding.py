@@ -47,6 +47,7 @@ _EXPECTED_POLICY: dict[str, str] = {
     "confidentiality_no_exception": "P-13",
     "penalty_basis_unclear": "P-14",
     "penalty_cap_missing": "P-14",
+    "unfair_exemption_clause": "P-15",
 }
 
 # 数值型风险：判定依据的阈值必须能在被引政策原文里找到（阈值取自规则侧同一批常量）

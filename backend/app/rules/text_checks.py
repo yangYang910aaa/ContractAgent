@@ -13,6 +13,7 @@ from backend.app.rules.locator import _clause_ref_at, _text_excerpt, clean_rule_
 from backend.app.rules.template import is_blank_template_suspect, is_supplementary_agreement
 from backend.app.rules.text_data import _DATA_INVOLVED_RE, _check_cross_border, _check_data_deletion, _check_data_processing_terms, _check_personal_info_missing
 from backend.app.rules.text_penalty import _check_confidentiality_no_exception, _check_penalty_basis_unclear, _check_penalty_cap_missing
+from backend.app.rules.text_terms import _check_unfair_exemption
 
 
 # 判定"有验收安排"的信号：验收词出现后，其附近 ±_ACCEPT_WINDOW 内要有"标准/依据"类
@@ -259,6 +260,7 @@ def text_rules(text: str, kind: str | None) -> list[RiskItem]:
             risk = check(text)
             if risk:
                 supplement.append(risk)
+        supplement.extend(_check_unfair_exemption(text))
         return supplement
     out: list[RiskItem] = []
     # 分支收集：每条规则独立判定，命中才追加（顺序固定便于测试/展示）
@@ -296,4 +298,6 @@ def text_rules(text: str, kind: str | None) -> list[RiskItem]:
         risk = check(text)
         if risk:
             out.append(risk)
+    # 过度免责（P-15）：概括免责 / 数据安全责任免除 / 交付物风险整体推给买方
+    out.extend(_check_unfair_exemption(text))
     return out

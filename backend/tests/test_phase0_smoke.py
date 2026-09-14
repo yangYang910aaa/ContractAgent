@@ -21,9 +21,9 @@ def test_policy_docs_exist_and_readable() -> None:
 
 def test_sample_contracts_generated() -> None:
     files = sorted(OUTPUT_DIR.glob("sample_*.md"))
-    # 条款级缺陷样本 01~15，数据合规样本 16~20，保密/违约金样本 21 起
-    # 新增保密例外/违约金基数与上限 21~24 → 共 24 份
-    assert len(files) == 24, "应生成 24 份合成合同"
+    # 条款级缺陷样本 01~15，数据合规样本 16~20，保密/违约金样本 21~24，
+    # 格式条款免责样本 25/26 → 共 26 份
+    assert len(files) == 26, "应生成 26 份合成合同"
     for f in files:
         text = f.read_text(encoding="utf-8")
         assert "甲方" in text and "乙方" in text
