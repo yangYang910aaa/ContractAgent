@@ -437,7 +437,9 @@ class ReviewRunner:
         deleter = getattr(self.checkpointer, "delete_thread", None)
         if deleter is not None:
             try:
-                deleter(self._config(thread_id))
+                # 按线程删：接口收的是线程键本身，传调用配置会直接抛 TypeError 被吞掉，
+                # 结果检查点一条都清不掉（登记簿删了、线程状态还留着）
+                deleter(thread_id)
             except Exception:
                 pass
         self.store.delete(thread_id)

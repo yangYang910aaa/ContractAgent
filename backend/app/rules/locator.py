@@ -9,7 +9,7 @@ from backend.app.rules.constants import PAGE_MARK_RE
 from backend.app.schemas import RiskItem
 
 
-def _sentence_quote(text: str, pos: int, max_chars: int = 120) -> str:
+def sentence_quote(text: str, pos: int, max_chars: int = 120) -> str:
     """取 pos 所在**整句**的摘录（前后切到句读边界），供原文定位/高亮用。
 
     按最近的分句标点取整句，再折叠空白、限长——原来看固定宽度的窗口，摘录常从半句中间
@@ -54,13 +54,13 @@ def _locate_missing_field(text: str, field: str | None, scope_ref: str = "") -> 
                 match = re.search(keyword, text[span[0] : span[1]])
                 if match:
                     pos = span[0] + match.start()
-                    return _clause_ref_at(text, pos), _sentence_quote(text, pos)
+                    return _clause_ref_at(text, pos), sentence_quote(text, pos)
         return "", ""
     # 分支：没有可用条款号 → 全文找第一个锚点（缺字段类风险此时还没有条款号可依）
     for keyword in anchors:
         match = re.search(keyword, text)
         if match:
-            return _clause_ref_at(text, match.start()), _sentence_quote(text, match.start())
+            return _clause_ref_at(text, match.start()), sentence_quote(text, match.start())
     return "", ""
 
 
@@ -183,7 +183,7 @@ def _is_word_char(char: str) -> bool:
     return bool(char) and char.isascii() and char.isalnum()
 
 
-def _clean_rule_text(text: str) -> str:
+def clean_rule_text(text: str) -> str:
     """文本级规则的统一入口清洗：先去 OCR 页标记，再接回硬换行。
 
     页标记会占掉正则窗口预算，硬换行会把关键词与整句切开；两步都做，规则才在
@@ -192,7 +192,7 @@ def _clean_rule_text(text: str) -> str:
     return _unwrap_hard_wraps(_clean_page_marks(text))
 
 
-def _find_quote_pos(text: str, quote: str) -> int:
+def find_quote_pos(text: str, quote: str) -> int:
     """找摘录在原文里的起始下标，找不到返回 -1。
 
     先精确匹配，不中再丢掉空白与 OCR 页标记匹配一次：页标记会把同一句从中间截开，
@@ -237,7 +237,7 @@ def _normalize_clause_refs(risks: list[RiskItem], text: str) -> list[RiskItem]:
             continue
         # 分支：正文找不到 → 用摘录位置回推所在章节；回推不出就原样保留
         quote = (risk.evidence_quote or risk.evidence or "").strip()
-        pos = _find_quote_pos(text, quote) if quote else -1
+        pos = find_quote_pos(text, quote) if quote else -1
         derived = _clause_ref_at(text, pos) if pos >= 0 else ""
         # 回推出的章节空/与摘录同段但无章节头 → 保留原值，不做无依据的清空
         out.append(risk.model_copy(update={"clause_ref": derived}) if derived else risk)

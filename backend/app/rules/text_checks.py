@@ -9,7 +9,7 @@ import re
 
 from backend.app.schemas import RiskItem, Severity
 from backend.app.rules.constants import PERFORMANCE_BOND_MIN_TOTAL, RISK_LABELS, SUBCONTRACT_KINDS, TEXT_RULE_KINDS
-from backend.app.rules.locator import _clause_ref_at, _clean_rule_text, _text_excerpt
+from backend.app.rules.locator import _clause_ref_at, _text_excerpt, clean_rule_text
 from backend.app.rules.template import is_blank_template_suspect, is_supplementary_agreement
 from backend.app.rules.text_data import _DATA_INVOLVED_RE, _check_cross_border, _check_data_deletion, _check_data_processing_terms, _check_personal_info_missing
 from backend.app.rules.text_penalty import _check_confidentiality_no_exception, _check_penalty_basis_unclear, _check_penalty_cap_missing
@@ -240,7 +240,7 @@ def text_rules(text: str, kind: str | None) -> list[RiskItem]:
     三种情况整组不查：疑似空白模板、品类不在触发集、补充/变更协议（条款继承原合同）。
     """
     # 统一清洗：去 OCR 页标记 + 接回 PDF/OCR 硬换行，规则才在"同一条干净正文"上判定
-    text = _clean_rule_text(text)
+    text = clean_rule_text(text)
     # 这种情况是：原文疑似空白/未定稿模板 → 不谈条款完备性
     if is_blank_template_suspect(text or ""):
         return []

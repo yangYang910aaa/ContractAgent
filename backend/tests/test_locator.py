@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from backend.app.rules.locator import (
     _clause_ref_at,
-    _clean_rule_text,
     _clause_spans,
     _locate_missing_field,
     _unwrap_hard_wraps,
+    clean_rule_text,
 )
 
 
@@ -31,7 +31,7 @@ def test_unwrap_hard_wraps_keeps_clause_headers_on_own_line() -> None:
 def test_clean_rule_text_drops_page_marks_before_joining() -> None:
     """页标记先删再接折行：标记夹在词中间时，接回后词要复原。"""
     text = "合同价款--- 第 3 页 ---为人民\n币 1000 元。"
-    cleaned = _clean_rule_text(text)
+    cleaned = clean_rule_text(text)
     assert "人民币 1000 元" in cleaned
     assert "第 3 页" not in cleaned
 

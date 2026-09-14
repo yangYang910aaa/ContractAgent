@@ -1,11 +1,15 @@
 """FastAPI 任务路由（Phase 3）测试：上传/队列/详情/审批，全部离线（假抽取）。"""
 
+import json
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.outputs import ChatGenerationChunk
 
 from backend.app.config import BASE_DIR
 from backend.app.graph import ReviewRunner
@@ -328,3 +332,164 @@ def test_samples_enqueue_with_double_mode(client: TestClient) -> None:
     assert resp.status_code == 200
     tid = resp.json()["tasks"][0]["thread_id"]
     assert client.app.state.manager.runner.store.get(tid).review_mode == "double"
+
+
+# ---- 对话助手路由：假模型 + 假检索，全程离线 ----
+
+
+class _ScriptedChatModel(FakeMessagesListChatModel):
+    """脚本化假模型（可流式）：按顺序吐给定消息，工具绑定是空操作。
+
+    对话链路要逐 token 才有 on_chat_model_stream 事件，所以这里自己实现 _stream：
+    正文按小块吐、工具轮只吐一块 tool_call_chunks（工具轮没有正文，不吐这块框架会
+    报"流里没有内容"）。测试全程离线，不连模型接口。
+    """
+
+    def bind_tools(self, tools, **kwargs):
+        """接收工具绑定但不改行为，返回自身。"""
+        return self
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+        """按脚本吐片段：正文逐块（逐字效果），工具轮吐一块工具调用。"""
+        message = self.responses[self.i]
+        # 与基类 _generate 同口径推进下标：最后一条重复吐，脚本用尽不越界
+        if self.i < len(self.responses) - 1:
+            self.i += 1
+        # 分支：工具轮 → 只吐一块 tool_call_chunks，框架据此发起工具调用
+        if getattr(message, "tool_calls", None):
+            call = message.tool_calls[0]
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {
+                            "name": call["name"],
+                            "args": json.dumps(call["args"], ensure_ascii=False),
+                            "id": call["id"],
+                            "index": 0,
+                            "type": "tool_call_chunk",
+                        }
+                    ],
+                )
+            )
+            return
+        text = message.content if isinstance(message.content, str) else ""
+        for start in range(0, len(text), 4):
+            yield ChatGenerationChunk(message=AIMessageChunk(content=text[start : start + 4]))
+
+
+def _install_chat_stub(monkeypatch, responses: list) -> None:
+    """把对话图的模型与政策检索换成离线的：路由测试不发任何外部请求。
+
+    脚本共用一个模型实例，按调用顺序往后走，多轮问答的应答才排得出先后。
+    替身要打在真正用到这两个名字的模块上（模型在 graph、检索在 tools）。
+    """
+    from backend.app.assistant import graph as assistant_graph
+    from backend.app.assistant import tools as assistant_tools
+
+    model = _ScriptedChatModel(responses=responses)
+    monkeypatch.setattr(assistant_graph, "get_chat_model", lambda *a, **k: model)
+    monkeypatch.setattr(
+        assistant_tools,
+        "retrieve_policies",
+        lambda query, k=3: [PolicyHit(policy_ref="P-01", source="P-01_预付款比例.md", text="## 第二条 上限\n30%", score=0.9)],
+    )
+
+
+def _chat_tool_call(keyword: str = "质保") -> AIMessage:
+    """假模型的一轮工具调用（框架按 tool_calls 驱动工具）。"""
+    return AIMessage(content="", tool_calls=[{"name": "find_clauses", "args": {"keyword": keyword}, "id": "c1"}])
+
+
+def _gate_task(client: TestClient) -> str:
+    """上传样本并跑到闸口（停闸口时也该能问"为什么判高风险"）。"""
+    tid = client.post("/api/tasks", files={"file": ("c.md", _sample_bytes(), "text/markdown")}).json()["thread_id"]
+    client.app.state.manager.run_one(tid)
+    return tid
+
+
+def _parse_sse(text: str) -> list[tuple[str, dict]]:
+    """SSE 文本 → [(事件名, 数据)]，用来核对事件序列与载荷。"""
+    events: list[tuple[str, dict]] = []
+    for block in text.strip().split("\n\n"):
+        name, data = "", None
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                name = line[len("event: ") :]
+            # 分支：数据行 → 解析 JSON（事件载荷）
+            elif line.startswith("data: "):
+                data = json.loads(line[len("data: ") :])
+        if name:
+            events.append((name, data))
+    return events
+
+
+def test_chat_stream_emits_tokens_citations_and_usage(client: TestClient, monkeypatch) -> None:
+    """流式问答：过程状态 → 逐 token → 引用 → 用量 → done，引用来自工具返回记录。"""
+    _install_chat_stub(monkeypatch, [_chat_tool_call(), AIMessage("质保只有 6 个月，低于 P-02 的 12 个月下限。")])
+    tid = _gate_task(client)
+    resp = client.post(
+        f"/api/tasks/{tid}/chat",
+        json={"message": "为什么判高风险？", "session_id": "s1"},
+        headers={"accept": "text/event-stream"},
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    events = _parse_sse(resp.text)
+    names = [name for name, _ in events]
+    assert names[0] == "status" and names[-1] == "done"
+    assert "tool" in names and "citations" in names and "usage" in names
+    assert names.index("citations") < names.index("usage") < names.index("done")
+    # 逐 token：拼起来的正文就是最终答案
+    answer = "".join(data["text"] for name, data in events if name == "token")
+    assert answer == events[-1][1]["answer"]
+    assert answer.startswith("质保只有 6 个月")
+    citations = next(data for name, data in events if name == "citations")
+    assert [c["kind"] for c in citations["citations"]] and citations["citations"][0]["ref"]
+    usage = next(data for name, data in events if name == "usage")
+    assert usage["calls"] >= 1 and usage["seconds"] >= 0
+
+
+def test_chat_returns_whole_answer_as_json_without_stream_accept(client: TestClient, monkeypatch) -> None:
+    """不要事件流（前端读流失败降级）→ 同一路由回整段 JSON：回答 + 引用 + 用量。"""
+    _install_chat_stub(monkeypatch, [_chat_tool_call(), AIMessage("质保只有 6 个月。")])
+    tid = _gate_task(client)
+    resp = client.post(f"/api/tasks/{tid}/chat", json={"message": "为什么判高风险？", "session_id": "s1"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["answer"].startswith("质保只有 6 个月")
+    assert body["citations"] and body["unverified"] == []
+    assert body["usage"]["calls"] >= 1
+
+
+def test_chat_history_reads_back_turns(client: TestClient, monkeypatch) -> None:
+    """历史回读：刷新页面后再打开面板，问答与引用都在（不用重新问一遍）。"""
+    _install_chat_stub(monkeypatch, [_chat_tool_call(), AIMessage("质保只有 6 个月。")])
+    tid = _gate_task(client)
+    client.post(f"/api/tasks/{tid}/chat", json={"message": "为什么判高风险？", "session_id": "s1"})
+    body = client.get(f"/api/tasks/{tid}/chat/s1").json()
+    assert [turn["question"] for turn in body["turns"]] == ["为什么判高风险？"]
+    assert body["turns"][0]["answer"] == "质保只有 6 个月。"
+    assert body["turns"][0]["citations"][0]["kind"] == "clause"
+
+
+def test_chat_history_is_per_session_and_cleared(client: TestClient, monkeypatch) -> None:
+    """会话互相隔离；清空会话后回到空态（换个角度重新问/演示前重置）。"""
+    _install_chat_stub(monkeypatch, [AIMessage("第一答。"), AIMessage("第二答。")])
+    tid = _gate_task(client)
+    client.post(f"/api/tasks/{tid}/chat", json={"message": "第一问", "session_id": "s1"})
+    client.post(f"/api/tasks/{tid}/chat", json={"message": "第二问", "session_id": "s2"})
+    assert client.get(f"/api/tasks/{tid}/chat/s1").json()["turns"][0]["answer"] == "第一答。"
+    assert client.get(f"/api/tasks/{tid}/chat/s2").json()["turns"][0]["answer"] == "第二答。"
+    assert client.delete(f"/api/tasks/{tid}/chat/s1").json()["cleared"] is True
+    assert client.get(f"/api/tasks/{tid}/chat/s1").json()["turns"] == []
+
+
+def test_chat_rejects_empty_question_and_unknown_task(client: TestClient, monkeypatch) -> None:
+    """边界：空问题 400（不白花调用）、任务不存在 404。"""
+    _install_chat_stub(monkeypatch, [AIMessage("答。")])
+    tid = _gate_task(client)
+    assert client.post(f"/api/tasks/{tid}/chat", json={"message": "   "}).status_code == 400
+    assert client.post("/api/tasks/not-exist/chat", json={"message": "问"}).status_code == 404
+    assert client.get("/api/tasks/not-exist/chat/s1").status_code == 404
+    assert client.delete("/api/tasks/not-exist/chat/s1").status_code == 404

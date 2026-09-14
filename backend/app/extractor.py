@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from backend.app.llm import get_chat_model
 from backend.app.parser import split_clauses
 from backend.app.rules.constants import PAGE_MARK_RE
-from backend.app.rules.locator import _find_quote_pos
+from backend.app.rules.locator import find_quote_pos
 from backend.app.schemas import ContractModel, Evidence, PaymentTerm
 from backend.app.usage import STAGE_EXTRACT, llm_call
 
@@ -580,7 +580,7 @@ def _payment_excerpt(
     for quote in quotes or []:
         if total >= max_chars:
             break
-        pos = _find_quote_pos(text, quote)
+        pos = find_quote_pos(text, quote)
         if pos < 0:
             continue
         start = text.rfind("\n", 0, max(0, pos - 300)) + 1
