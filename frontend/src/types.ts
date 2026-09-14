@@ -110,6 +110,7 @@ export interface Report {
   grade?: Grade
   risks?: RiskItem[]
   policy_hits?: PolicyHit[]
+  policy_library?: PolicyLibrary | null
   extracted?: Record<string, unknown> | null
   approval?: Approval | null
   review_mode?: string // single/double/parallel（多智能体决策钩子）
@@ -117,6 +118,14 @@ export interface Report {
   llm?: LlmUsage | null // 大模型用量（calls/stages/seconds；老报告可能没有）
   error?: string
   status?: string
+}
+
+/** 政策库版本段：本次报告依据的语料版本（内容指纹）与份数/条数。 */
+export interface PolicyLibrary {
+  version: string // 语料内容指纹（如 PL-3f9a1c8b2d4e）
+  files: number // 政策文件份数
+  units: number // 检索单元（分条后的条文）条数
+  revisions: string[] // 各份政策的编号与版本号（如 "P-01 V2.0"）
 }
 
 /** LLM 用量段：只计 chat 调用（抽取首读/二读、盲审），不含本地规则与检索。 */

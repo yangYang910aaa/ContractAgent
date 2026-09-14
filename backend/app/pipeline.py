@@ -19,6 +19,7 @@ from pathlib import Path
 from backend.app.config import BASE_DIR
 from backend.app.extractor import DOUBLE_READ_FIELDS, extract_contract
 from backend.app.parser import NO_TEXT_ERROR, extract_text
+from backend.app.policy_corpus import report_policy_library
 from backend.app.policy_rag import PolicyHit, load_policy_full, retrieve_policies_many
 from backend.app.rules import (
     annotate_open_ended_risks,
@@ -153,6 +154,7 @@ def build_report(
         "grade": grade_report(risks).value, #high/medium/low的等级评分
         "risks": [risk.model_dump(mode="json") for risk in risks],  # date/Decimal → JSON 类型
         "policy_hits": policy_hits, #政策引用清单
+        "policy_library": report_policy_library(), #政策库版本（本次报告依据的是哪一版语料）
         "extracted": extracted.model_dump(mode="json"),
     }
     report["review"] = review
@@ -185,6 +187,7 @@ def run_review(
                 "grade": None,
                 "risks": [],
                 "policy_hits": [],
+                "policy_library": report_policy_library(),
                 "extracted": ContractModel().model_dump(),
                 "review": None,
                 "llm": usage.to_dict(),
@@ -206,6 +209,7 @@ def run_review(
                 "grade": None,
                 "risks": [],
                 "policy_hits": [],
+                "policy_library": report_policy_library(),
                 "extracted": extracted.model_dump(),
                 "review": None,
                 # 抽取失败也可能已发出调用（限流/超时），成本口径照实带出

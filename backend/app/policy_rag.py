@@ -132,15 +132,36 @@ class MemoryStore:
         return len(self._docs)
 
     def insert(self, docs: list[IndexDoc]) -> None:
-        """向量化并入库存量；文本为空的行跳过。"""
-        texts = [d.text for d in docs if d.text.strip()]
-        vectors = self._embedding.embed_documents(texts)
-        for doc, vec in zip(docs, vectors):
-            if not doc.text.strip():
-                continue
+        """启动路径的入库：内存库无条件写入（与 add_docs 同义）。"""
+        self.add_docs(docs)
+
+    def add_docs(self, docs: list[IndexDoc]) -> int:
+        """无条件向量化并入库存量（按份替换用），返回写入条数；文本为空的行跳过。"""
+        rows = [d for d in docs if d.text.strip()]
+        vectors = self._embedding.embed_documents([d.text for d in rows])
+        for doc, vec in zip(rows, vectors):
             self._docs.append(doc)
             #入库时归一化向量   
             self._vectors.append(_normalize(vec))
+        return len(rows)
+
+    def delete_source(self, source: str) -> int:
+        """删除某个来源文件的全部单元，返回删除条数。
+
+        正文与向量按下标一一对应，过滤时必须同步过滤，否则后续检索会串行取错向量。
+        """
+        kept = [(doc, vec) for doc, vec in zip(self._docs, self._vectors) if doc.source != source]
+        removed = len(self._docs) - len(kept)
+        self._docs = [doc for doc, _ in kept]
+        self._vectors = [vec for _, vec in kept]
+        return removed
+
+    def iter_rows(self) -> list[dict]:
+        """只读回读全部入库单元（字段与 Milvus 相同），供"文件 ↔ 索引"一致性核对。"""
+        return [
+            {"text": doc.text, "source": doc.source, "policy_ref": doc.policy_ref}
+            for doc in self._docs
+        ]
 
     def similarity_search(self, query: str, k: int = 2) -> list[PolicyHit]:
         """把 query 向量化，与库内全部向量算余弦相似度取前 k。"""
@@ -231,14 +252,22 @@ class MilvusStore:
         self.client.load_collection(self.collection_name)
 
     def insert(self, docs: list[IndexDoc]) -> None:
-        """向量化 + 入库 + flush; 集合已有数据时跳过(防重复累积)。"""
+        """启动路径的入库：向量化 + 入库 + flush; 集合已有数据时跳过(防重复累积)。"""
         self._ensure_collection()
         count = self.client.get_collection_stats(self.collection_name).get("row_count", 0)
         # 分支：已有数据 → 不再重复灌入（可手动清集合后重灌）
         if count > 0:
             print(f"{self.collection_name} 已有 {count} 条，跳过导入")
             return
+        self.add_docs(docs)
+
+    def add_docs(self, docs: list[IndexDoc]) -> int:
+        """无条件向量化 + 入库 + flush，返回写入条数（按份替换时必须绕过非空跳过）。"""
+        self._ensure_collection()
         rows = [d for d in docs if d.text.strip()]
+        # 分支：没有可写正文 → 不发起向量化请求
+        if not rows:
+            return 0
         vectors = self._embedding.embed_documents([d.text for d in rows])
         data = [
             {"text": d.text, "source": d.source, "policy_ref": d.policy_ref, "vector": v}
@@ -246,6 +275,39 @@ class MilvusStore:
         ]
         self.client.insert(self.collection_name, data)
         self.client.flush(self.collection_name)  # 关键：不 flush 检索不到
+        return len(data)
+
+    def delete_source(self, source: str) -> int:
+        """按来源文件名删除该文件的全部单元，返回删除条数。
+
+        易错点：集合必须处于 loaded 状态，否则删除直接报 collection not loaded；
+        也不要拿 get_collection_stats 的 row_count 验证结果——删除后它不回落。
+        """
+        self.client.load_collection(self.collection_name)
+        result = self.client.delete(
+            self.collection_name, filter=f"source == {_quote_literal(source)}"
+        )
+        self.client.flush(self.collection_name)
+        return int(result.get("delete_count", 0))
+
+    def iter_rows(self, batch_size: int = 200) -> list[dict]:
+        """只读回读全部入库单元（text/source/policy_ref），供"文件 ↔ 索引"一致性核对。"""
+        self.client.load_collection(self.collection_name)
+        rows: list[dict] = []
+        iterator = self.client.query_iterator(
+            collection_name=self.collection_name,
+            batch_size=batch_size,
+            filter="",
+            output_fields=["text", "source", "policy_ref"],
+        )
+        while True:
+            batch = iterator.next()
+            # 分支：迭代器吐空批 → 已读完
+            if not batch:
+                iterator.close()
+                break
+            rows.extend(batch)
+        return rows
 
     def similarity_search(self, query: str, k: int = 2) -> list[PolicyHit]:
         """query 向量化后在 Milvus 检索 top-k, 返回带政策编号的命中。"""
@@ -429,6 +491,11 @@ def _get_hybrid(backend: str | None, embedding_model) -> HybridRetriever:
 
 
 # ---- 向量工具（纯函数）----
+
+
+def _quote_literal(value: str) -> str:
+    """Milvus 过滤表达式里的字符串字面量：双引号包裹，转义内部引号与反斜杠。"""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _normalize(vec: list[float]) -> list[float]:

@@ -91,6 +91,15 @@ function policyRowClass(index: number, line: string): string {
     <!-- 政策引用：policy_ref + 相似度 + 制度原文片段 -->
     <template v-if="detail.report?.policy_hits?.length">
       <h4>政策引用</h4>
+      <!-- 语料版本：答复"依据出自哪里"的语料层面，悬浮可看各份政策的版本号 -->
+      <p
+        v-if="detail.report?.policy_library"
+        class="lib-meta muted"
+        :title="detail.report.policy_library.revisions.join('、')"
+      >
+        政策库版本 <span class="mono-num">{{ detail.report.policy_library.version }}</span>
+        · {{ detail.report.policy_library.files }} 份 / {{ detail.report.policy_library.units }} 条
+      </p>
       <div v-for="(h, i) in detail.report.policy_hits" :key="i" class="card pad hit">
         <!-- 逐行排版：编号 / 相似度 / 标题 / 元信息 / 条文各占一行 -->
         <p class="pl pl-ref"><span class="mono-num ref">{{ h.policy_ref }}</span></p>
@@ -264,6 +273,13 @@ h4 {
 
 .hit {
   margin: 8px 0;
+}
+
+/* 政策库版本行：贴"政策引用"标题的元信息，悬浮显示各份政策的版本号 */
+.lib-meta {
+  margin: 4px 0 10px;
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
 }
 
 /* 政策卡逐行排版：标题=靛蓝、相似度=琥珀、元信息=灰蓝、适用范围标签=靛蓝、条文头=墨色加粗 */

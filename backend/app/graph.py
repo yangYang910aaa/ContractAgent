@@ -17,6 +17,7 @@ from langgraph.types import Command, interrupt
 
 from backend.app.parser import NO_TEXT_ERROR, extract_text
 from backend.app.pipeline import enrich_policy_hits, infer_effective_from_signature
+from backend.app.policy_corpus import report_policy_library
 from backend.app.reviewer import BlindReviewOutput, blind_review, merge_review
 from backend.app.rules import (
     annotate_open_ended_risks,
@@ -244,6 +245,7 @@ def build_review_graph(
                 "grade": state.get("grade"),
                 "risks": state.get("risks", []),
                 "policy_hits": state.get("policy_hits", []),
+                "policy_library": report_policy_library(),
                 "extracted": state.get("extracted"),
                 "review": state.get("review"),
                 "approval": state.get("approval"),
@@ -262,6 +264,7 @@ def build_review_graph(
                 "grade": None,
                 "risks": [],
                 "policy_hits": [],
+                "policy_library": report_policy_library(),
                 "extracted": state.get("extracted"),
                 "error": state.get("error", "未知错误"),
                 # 抽取失败也可能已经发出调用（超时/限流），用量照实带出

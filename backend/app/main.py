@@ -20,6 +20,7 @@ from fastapi import FastAPI, Request
 from backend.app import llm
 from backend.app.config import settings
 from backend.app.graph import ReviewRunner
+from backend.app.policy_corpus import report_policy_library
 from backend.app.routes_tasks import router as tasks_router
 from backend.app.store_pg import PgPersistence
 from backend.app.tasks import TaskManager
@@ -79,12 +80,19 @@ def create_app(manager: TaskManager | None = None) -> FastAPI:
     def health(request: Request) -> dict:
         """健康检查：报告配置就绪状态与外部依赖可达性。"""
         store = request.app.state.manager.runner.store
+        library = report_policy_library()
         return {
             "status": "ok",
             "config": llm.check_env_ready(),
             "database": "postgres" if request.app.state.persistence else "memory",
             "database_ready": store.ping(),
             "queued_tasks": len(store.list_records()),
+            # 政策库版本：报告与前端都按这个版本号对齐"依据的是哪一版语料"
+            "policy_library": {
+                "version": library["version"],
+                "files": library["files"],
+                "units": library["units"],
+            },
         }
 
     return app
