@@ -44,6 +44,8 @@ class ContractContext:
     extracted: dict = field(default_factory=dict)  # 抽取字段（报告 extracted）
     text: str = ""  # 解析后的合同正文（找条款用）
     declared_refs: list[str] = field(default_factory=list)  # 报告声明过的政策编号（确定性依据）
+    # 报告里每条政策引用的原文（编号 → 标题/正文）：回答提到这些编号时补一条"报告依据"芯片
+    declared_hits: dict[str, dict] = field(default_factory=dict)
 
 
 def build_context(record: Any) -> ContractContext:
@@ -63,6 +65,7 @@ def build_context(record: Any) -> ContractContext:
         extracted=dict(report.get("extracted") or {}),
         text=getattr(record, "source_text", "") or "",
         declared_refs=declared_policy_refs(report, payload),
+        declared_hits=declared_policy_hits(report),
     )
 
 
@@ -84,6 +87,23 @@ def declared_policy_refs(*sources: dict | None) -> list[str]:
             if ref:
                 refs.append(str(ref))
     return list(dict.fromkeys(refs))
+
+
+def declared_policy_hits(report: dict | None) -> dict[str, dict]:
+    """报告里的政策引用 → {编号: {title, text}}，去重后返回（同一编号只留第一条）。
+
+    用来给"回答提到、但这轮没检索"的编号补一条可点的芯片：正文用报告当时检索到的原文，
+    所以点开看到的依据与报告页一致，不依赖模型配合。
+    """
+    out: dict[str, dict] = {}
+    for hit in (report or {}).get("policy_hits") or []:
+        ref = str(hit.get("policy_ref") or "")
+        # 分支：没有编号或这个编号已经收过 → 跳过
+        if not ref or ref in out:
+            continue
+        text = str(hit.get("text") or hit.get("snippet") or "").strip()
+        out[ref] = {"title": first_line_title(text), "text": text}
+    return out
 
 
 # ---- 条款与政策的小工具（拼上下文、查条款共用）----

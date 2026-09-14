@@ -11,7 +11,7 @@ import json
 import time
 from typing import Any, AsyncIterator, Iterable
 
-from langchain_core.callbacks import BaseCallbackHandler, UsageMetadataCallbackHandler
+from langchain_core.callbacks import BaseCallbackHandler
 
 from backend.app.assistant.citations import artifact_items, citation_from
 from backend.app.assistant.graph import answer_from_state, message_text
@@ -40,11 +40,13 @@ def sse_frame(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _usage_payload(calls: int, started: float, handler: Any = None) -> dict:
-    """成本行数据：模型调用次数、耗时秒数、token 数（回调拿不到 token 时为 0）。"""
-    metadata = getattr(handler, "usage_metadata", None) or {}
-    tokens = sum(int((item or {}).get("total_tokens") or 0) for item in metadata.values())
-    return {"calls": calls, "seconds": round(time.perf_counter() - started, 1), "tokens": tokens}
+def _usage_payload(calls: int, started: float) -> dict:
+    """成本行数据：模型调用次数 + 耗时秒数。
+
+    只报这两项：厂商回调给的 token 数在真跑里出现过明显不合理的量级（单次问答报出上百万），
+    与其显示一个不能信的数字，不如不显示（调用次数与秒数是实测口径）。
+    """
+    return {"calls": calls, "seconds": round(time.perf_counter() - started, 1)}
 
 
 def _tool_status(name: str) -> str:
@@ -69,6 +71,7 @@ async def stream_chat(
     question: str,
     config: dict,
     declared_refs: Iterable[str] = (),
+    declared_hits: dict[str, dict] | None = None,
 ) -> AsyncIterator[str]:
     """逐 token 跑一轮问答，按固定六类事件推 SSE 帧。
 
@@ -78,8 +81,7 @@ async def stream_chat(
     """
     started = time.perf_counter()
     usage = ChatUsage()
-    tokens = UsageMetadataCallbackHandler()
-    run_config = {**config, "callbacks": [usage, tokens]}
+    run_config = {**config, "callbacks": [usage]}
     try:
         async for event in agent.astream_events(
             {"messages": [{"role": "user", "content": question}]}, run_config, version="v2"
@@ -99,9 +101,9 @@ async def stream_chat(
             if kind == "on_tool_end":
                 yield sse_frame("tool", _tool_event(event))
         state = await agent.aget_state(config)
-        result = answer_from_state(getattr(state, "values", {}) or {}, declared_refs)
+        result = answer_from_state(getattr(state, "values", {}) or {}, declared_refs, declared_hits)
         yield sse_frame("citations", {"citations": result["citations"], "unverified": result["unverified"]})
-        yield sse_frame("usage", _usage_payload(usage.calls, started, tokens))
+        yield sse_frame("usage", _usage_payload(usage.calls, started))
         yield sse_frame("done", {"status": "done", "answer": result["answer"]})
     except Exception as exc:  # 流中途失败：把原因推给前端，由它给"重试"按钮
         yield sse_frame("error", {"message": f"回答失败：{exc}"})
@@ -113,13 +115,13 @@ async def chat_once(
     question: str,
     config: dict,
     declared_refs: Iterable[str] = (),
+    declared_hits: dict[str, dict] | None = None,
 ) -> dict:
     """非流式跑一轮：回答 + 引用 + 用量（前端读流失败时降级到这一个）。"""
     started = time.perf_counter()
     usage = ChatUsage()
-    tokens = UsageMetadataCallbackHandler()
     state = await agent.ainvoke(
         {"messages": [{"role": "user", "content": question}]},
-        {**config, "callbacks": [usage, tokens]},
+        {**config, "callbacks": [usage]},
     )
-    return {**answer_from_state(state, declared_refs), "usage": _usage_payload(usage.calls, started, tokens)}
+    return {**answer_from_state(state, declared_refs, declared_hits), "usage": _usage_payload(usage.calls, started)}

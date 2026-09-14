@@ -186,6 +186,7 @@ export interface ChatCitation {
   title?: string // 条文标题 / 条款标题（芯片标题位）
   text?: string // 引用正文（芯片预览与展开）
   source?: string // 政策来源文件名（条款引用为空）
+  origin?: 'tool' | 'report' // tool=这轮工具检索到的 / report=报告里本来就有的这条依据
 }
 
 /** 对话助手一轮问答：历史回读时引用由后端重算，与当时页面上的芯片一致。 */

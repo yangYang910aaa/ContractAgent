@@ -207,7 +207,14 @@ def test_find_clauses_returns_clause_ref_title_and_quote() -> None:
     assert "第二条" in message.content
     assert "合同签订后30日内支付预付款60%。" in message.content
     assert message.artifact == [
-        {"kind": "clause", "ref": "第二条", "title": "第二条 付款方式", "text": "合同签订后30日内支付预付款60%。", "source": ""}
+        {
+            "kind": "clause",
+            "ref": "第二条",
+            "title": "第二条 付款方式",
+            "text": "合同签订后30日内支付预付款60%。",
+            "source": "",
+            "origin": "tool",
+        }
     ]
 
 
@@ -299,6 +306,50 @@ def test_collect_citations_caps_the_chip_list() -> None:
         {"kind": "clause", "ref": f"第{i}条", "text": f"原句 {i}"} for i in range(MAX_CITATIONS + 3)
     ]
     assert len(collect_citations([_tool_message("x", artifact=artifact)])) == MAX_CITATIONS
+
+
+def test_collect_citations_merges_same_ref_instead_of_repeating() -> None:
+    """同一编号命中多段条文 → 合成一条芯片（正文拼起来），否则"找条款"命中同一条两次会出两个同名芯片。"""
+    first = {"kind": "clause", "ref": "第二条", "title": "第二条 付款方式", "text": "预付款 60%。"}
+    second = {"kind": "clause", "ref": "第二条", "title": "", "text": "尾款 40%。"}
+    citations = collect_citations([_tool_message("x", artifact=[first, second])])
+    assert len(citations) == 1
+    assert citations[0].title == "第二条 付款方式"
+    assert "预付款 60%。" in citations[0].text and "尾款 40%。" in citations[0].text
+
+
+def test_summarize_citations_backs_mentioned_ref_with_report_text() -> None:
+    """回答提到报告里本来就有的依据、但这轮没检索 → 用报告原文补一条芯片，且不算"未检索到"。
+
+    真跑里最常出现的情形：模型直接拿上下文回答（不调工具），正文写着"依据 P-01"，
+    引用栏却空着——用户想点开依据点不了。补这条芯片后，依据可点、内容与报告页一致。
+    """
+    context = build_context(_record(report=_report()))
+    summary = summarize_citations(
+        [HumanMessage("这条为什么是高风险？"), AIMessage("依据 P-01，预付款不得超过 30%。")],
+        "依据 P-01，预付款不得超过 30%。",
+        context.declared_refs,
+        context.declared_hits,
+    )
+    assert [c["ref"] for c in summary["citations"]] == ["P-01"]
+    assert summary["citations"][0]["origin"] == "report"
+    assert "30%" in summary["citations"][0]["text"]
+    assert summary["unverified"] == []
+
+
+def test_summarize_citations_keeps_tool_citation_when_both_present() -> None:
+    """这轮检索到了同一条 → 保留检索到的那条（origin=tool），不再拿报告里的重复补一条。"""
+    context = build_context(_record(report=_report()))
+    tool_citation = {"kind": "policy", "ref": "P-01", "title": "第二条 上限", "text": "30% 上限"}
+    summary = summarize_citations(
+        [_tool_message("x", artifact=[tool_citation])],
+        "依据 P-01。",
+        context.declared_refs,
+        context.declared_hits,
+    )
+    assert len(summary["citations"]) == 1
+    assert summary["citations"][0]["origin"] == "tool"
+    assert summary["citations"][0]["text"] == "30% 上限"
 
 
 def test_summarize_citations_flags_only_unbacked_policy_refs() -> None:

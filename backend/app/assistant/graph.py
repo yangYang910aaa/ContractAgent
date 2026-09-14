@@ -99,19 +99,38 @@ def final_answer(state: dict) -> str:
     return ""
 
 
-def answer_from_state(state: dict, declared_refs: Iterable[str] = ()) -> dict:
-    """图状态 → 本轮结果：回答文本 + 引用汇总 + 无法核实的政策编号。"""
+def answer_from_state(
+    state: dict,
+    declared_refs: Iterable[str] = (),
+    declared_hits: dict[str, dict] | None = None,
+) -> dict:
+    """图状态 → 本轮结果：回答文本 + 引用汇总 + 查不到出处的政策编号。"""
     answer = final_answer(state)
-    return {"answer": answer, **summarize_citations(state.get("messages"), answer, declared_refs)}
+    return {
+        "answer": answer,
+        **summarize_citations(state.get("messages"), answer, declared_refs, declared_hits),
+    }
 
 
-def ask(agent: Any, question: str, config: dict, declared_refs: Iterable[str] = ()) -> dict:
+def ask(
+    agent: Any,
+    question: str,
+    config: dict,
+    declared_refs: Iterable[str] = (),
+    declared_hits: dict[str, dict] | None = None,
+) -> dict:
     """同步问一句（离线测试与脚本用）：跑图并汇总回答与引用。"""
     state = agent.invoke({"messages": [{"role": "user", "content": question}]}, config)
-    return answer_from_state(state, declared_refs)
+    return answer_from_state(state, declared_refs, declared_hits)
 
 
-async def ask_async(agent: Any, question: str, config: dict, declared_refs: Iterable[str] = ()) -> dict:
+async def ask_async(
+    agent: Any,
+    question: str,
+    config: dict,
+    declared_refs: Iterable[str] = (),
+    declared_hits: dict[str, dict] | None = None,
+) -> dict:
     """异步问一句：流式失败时的降级路径用（同一路由按 Accept 决定走流还是走这里）。"""
     state = await agent.ainvoke({"messages": [{"role": "user", "content": question}]}, config)
-    return answer_from_state(state, declared_refs)
+    return answer_from_state(state, declared_refs, declared_hits)

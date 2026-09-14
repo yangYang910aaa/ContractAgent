@@ -31,6 +31,7 @@ class Citation:
     title: str = ""  # 条文标题 / 条款标题（芯片标题位）
     text: str = ""  # 引用正文（芯片预览与展开）
     source: str = ""  # 政策来源文件名（合同条款引用留空）
+    origin: str = "tool"  # tool=这轮工具检索到的 / report=报告里本来就有的这条依据
 
     def to_dict(self) -> dict:
         """JSON 形态：键固定存在，前端与流式事件都不必判空。"""
@@ -40,6 +41,7 @@ class Citation:
             "title": self.title,
             "text": self.text,
             "source": self.source,
+            "origin": self.origin,
         }
 
 
@@ -100,13 +102,14 @@ def artifact_items(artifact: Any) -> list[Any]:
 
 
 def collect_citations(messages: Sequence[BaseMessage] | None) -> list[Citation]:
-    """汇总这轮工具真正返回过的引用（按返回顺序，同一条只留一次）。
+    """汇总这轮工具真正返回过的引用（按返回顺序，同一编号只留一条）。
 
     只看 ToolMessage 的 artifact——那是工具实际返回给框架的记录。用户消息与模型消息
-    一概不看，所以模型在回答里写出的引用不会变成芯片。
+    一概不看，所以模型在回答里写出的引用不会变成芯片。同一个编号命中多段条文时合并成
+    一条（正文拼起来），否则"找条款"命中同一条两次就会出两个同名芯片。
     """
     out: list[Citation] = []
-    seen: set[tuple[str, str, str]] = set()
+    index: dict[tuple[str, str], int] = {}
     for message in messages or []:
         # 分支：只认工具返回的消息，其余（用户/模型/系统）不含工具返回记录
         if not isinstance(message, ToolMessage):
@@ -115,27 +118,65 @@ def collect_citations(messages: Sequence[BaseMessage] | None) -> list[Citation]:
             citation = citation_from(item)
             if citation is None:
                 continue
-            key = (citation.kind, citation.ref, citation.text)
-            if key in seen:
+            key = (citation.kind, citation.ref)
+            # 分支：这个编号已经收过 → 合并正文，不再新增芯片
+            if key in index:
+                out[index[key]] = _merge_citations(out[index[key]], citation)
                 continue
-            seen.add(key)
+            index[key] = len(out)
             out.append(citation)
     return out[:MAX_CITATIONS]
+
+
+def _merge_citations(first: Citation, another: Citation) -> Citation:
+    """同一编号的两次引用合成一条：标题取先有的，正文不重不漏地拼起来。"""
+    text = first.text
+    # 分支：这段正文已经包含在已有引用里（重复返回）→ 不再拼接
+    if another.text and another.text not in text:
+        text = f"{text}\n\n{another.text}" if text else another.text
+    return Citation(
+        kind=first.kind,
+        ref=first.ref,
+        title=first.title or another.title,
+        text=text,
+        source=first.source or another.source,
+        origin=first.origin,
+    )
 
 
 def summarize_citations(
     messages: Sequence[BaseMessage] | None,
     answer: str = "",
     declared_refs: Iterable[str] = (),
+    declared_hits: dict[str, dict] | None = None,
 ) -> dict:
     """回答后的引用汇总：本轮引用 + 回答里查不到出处的政策编号。
 
-    返回 {"citations": [...], "unverified": [...]}。unverified 只装"既不在工具返回记录、
-    也不在报告已声明依据里"的编号——那才是模型自己编的政策；报告里的编号是确定性数据，
-    照抄它不该被标成无法核实。
+    返回 {"citations": [...], "unverified": [...]}。citations 除了这轮工具返回过的条目，
+    还会为"回答里提到、报告里本来就有原文"的政策编号补一条芯片（origin=report）——
+    模型常直接拿上下文回答而不检索，若不补，用户就会看到正文写着"依据 P-03"却点不到条文。
+    unverified 只装"既不在工具返回记录、也不在报告已声明依据里"的编号：那才是模型自己编的政策。
     """
     citations = collect_citations(messages)
-    grounded = {c.ref.upper() for c in citations if c.kind == "policy"}
+    tool_refs = {c.ref.upper() for c in citations if c.kind == "policy"}
+    hits = declared_hits or {}
+    mentioned = mentioned_policy_refs(answer)
+    for ref in mentioned:
+        # 分支：这轮检索到过（已有芯片）或报告里没有这条依据 → 不补
+        if ref in tool_refs or ref not in hits:
+            continue
+        info = hits[ref]
+        citations.append(
+            Citation(
+                kind="policy",
+                ref=ref,
+                title=str(info.get("title") or ""),
+                text=clip_text(str(info.get("text") or "")),
+                origin="report",
+            )
+        )
+        tool_refs.add(ref)
+    grounded = set(tool_refs)
     grounded.update(str(ref).upper() for ref in declared_refs if ref)
-    unverified = [ref for ref in mentioned_policy_refs(answer) if ref not in grounded]
-    return {"citations": [c.to_dict() for c in citations], "unverified": unverified}
+    unverified = [ref for ref in mentioned if ref not in grounded]
+    return {"citations": [c.to_dict() for c in citations[:MAX_CITATIONS]], "unverified": unverified}

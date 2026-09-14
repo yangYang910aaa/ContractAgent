@@ -423,8 +423,8 @@ onMounted(() => {
                 v-for="(c, ci) in turn.citations"
                 :key="citationKey(c, ci)"
                 class="cp-chip"
-                :class="c.kind"
-                :title="preview(c)"
+                :class="[c.kind, c.origin === 'report' ? 'report' : '']"
+                :title="c.origin === 'report' ? `${preview(c)}（依据来自报告）` : preview(c)"
                 @click="onCitation(c, citationKey(c, ci))"
               >
                 <span class="cp-chip-glyph" aria-hidden="true">{{ c.kind === 'policy' ? '§' : '条' }}</span>{{ chipLabel(c) }}
@@ -433,9 +433,9 @@ onMounted(() => {
                 v-for="ref in turn.unverified"
                 :key="ref"
                 class="cp-chip unverified"
-                title="回答里提到但政策库没检索到，无法核实"
+                title="回答里提到了这个编号，但这轮没有检索到它的条文（可能只是提议去查），无法核实"
               >
-                <span class="cp-chip-glyph" aria-hidden="true">!</span>{{ ref }} 无法核实
+                <span class="cp-chip-glyph" aria-hidden="true">!</span>未检索到 {{ ref }}
               </span>
             </div>
             <div v-for="(c, ci) in turn.citations" :key="`full-${ci}`">
@@ -1017,6 +1017,19 @@ onMounted(() => {
 .cp-chip.clause:hover {
   border-color: var(--ink-2);
   box-shadow: 0 3px 8px rgba(28, 36, 51, 0.1);
+}
+
+/* 报告依据（这轮没检索、但报告里本来就有这条）：描边淡一点，表示出处是报告而不是本轮检索 */
+.cp-chip.report {
+  border-color: var(--line-strong);
+  border-style: dashed;
+  background: var(--card);
+  color: var(--ink-2);
+}
+
+.cp-chip.report:hover {
+  border-color: var(--pri);
+  color: var(--pri-deep);
 }
 
 /* 查不到出处的编号：琥珀虚线，明说"无法核实" */

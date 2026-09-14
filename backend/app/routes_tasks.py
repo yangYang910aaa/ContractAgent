@@ -505,11 +505,11 @@ async def chat_with_task(
     # 分支：前端要流式（SSE）→ 逐 token 推；浏览器 fetch 读流，不用只能发 GET 的 EventSource
     if "text/event-stream" in (request.headers.get("accept") or ""):
         return StreamingResponse(
-            assistant.stream_chat(agent, question, config, context.declared_refs),
+            assistant.stream_chat(agent, question, config, context.declared_refs, context.declared_hits),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
-    return await assistant.chat_once(agent, question, config, context.declared_refs)
+    return await assistant.chat_once(agent, question, config, context.declared_refs, context.declared_hits)
 
 
 @router.get("/tasks/{thread_id}/chat/{session_id}")
