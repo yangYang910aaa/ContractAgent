@@ -470,9 +470,10 @@ class ChatIn(BaseModel):
 
 
 def _chat_agent(manager: TaskManager, record) -> tuple:
-    """按这份合同造对话图：与审查图共用检查点，工具与系统提示都绑这份合同的上下文。
+    """按这份合同造对话图：工具与系统提示都绑这份合同的上下文，历史按会话键存检查点。
 
-    图按合同构造（上下文不同），历史按会话键存在检查点里，所以刷新页面不丢。
+    图按合同构造（上下文不同），检查点与审查图共用一个（Postgres 版同时支持同步与异步调用），
+    会话键带 chat 前缀，所以刷新页面不丢、也不会读写到审查状态。
     """
     context = assistant.build_context(record)
     return assistant.build_chat_agent(context, checkpointer=manager.runner.checkpointer), context
@@ -517,7 +518,11 @@ def chat_history(
     session_id: str,
     manager: TaskManager = Depends(get_manager),
 ) -> dict:
-    """回读某个会话的历史（关掉面板、刷新页面、后端重启后再打开靠它恢复气泡）。"""
+    """回读某个会话的历史（关掉面板、刷新页面、后端重启后再打开靠它恢复气泡）。
+
+    这里是普通同步路由：只有"逐字回复"那条需要异步（SSE + 异步图事件流），本路由够用
+    检查点的同步接口，留同步实现更好懂（FastAPI 会把它丢线程池执行，不阻塞事件循环）。
+    """
     record = manager.runner.store.get(thread_id)
     # 这种情况是：任务不存在 → 404
     if record is None:
@@ -541,16 +546,16 @@ def clear_chat(
     """清空这个会话（删对话检查点线程）：面板回到空态、重新显示建议问题。
 
     只删对话线程，不动任务、报告与审查检查点；会话键带 chat 前缀，不会误删到审查状态。
+    同样是同步路由：检查点的同步删除接口就够（见 chat_history 的说明）。
     """
     record = manager.runner.store.get(thread_id)
     # 这种情况是：任务不存在 → 404
     if record is None:
         raise HTTPException(status_code=404, detail=f"任务不存在: {thread_id}")
-    config = assistant.chat_config(thread_id, session_id)
     deleter = getattr(manager.runner.checkpointer, "delete_thread", None)
-    # 分支：检查点不支持按线程删除（老版本/内存实现）→ 照实回报，前端提示"清不掉"
+    # 分支：检查点不支持按线程删除（老版本）→ 照实回报，前端提示"清不掉"
     if deleter is None:
         return {"cleared": False, "reason": "当前检查点不支持删除会话"}
     # 按线程删：检查点接口收的是会话键本身（不是调用配置）
-    deleter(config["configurable"]["thread_id"])
+    deleter(assistant.chat_session_key(thread_id, session_id))
     return {"cleared": True}

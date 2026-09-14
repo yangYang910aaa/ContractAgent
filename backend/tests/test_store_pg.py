@@ -11,12 +11,17 @@ public 里的 contract_tasks 一行不动。
 """
 
 import uuid
+import asyncio
 from datetime import date
 from decimal import Decimal
 
 import psycopg
 import pytest
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.messages import AIMessage
 
+from backend.app.assistant import build_chat_agent, chat_config, chat_session_key
+from backend.app.assistant.context import ContractContext
 from backend.app.config import settings
 from backend.app.graph import ReviewRunner, build_review_graph
 from backend.app.schemas import ContractModel, PaymentTerm
@@ -187,3 +192,40 @@ def test_runner_with_pg_store_reports_status(pg: PgPersistence) -> None:
     assert state.get("__interrupt__")
     # 清理本用例数据, 不影响其他用例计数
     pg.store.update(tid, status="done", report={"grade": "fail"})
+
+
+def test_chat_graph_runs_on_pg_checkpointer(pg: PgPersistence) -> None:
+    """对话图要能在 Postgres 检查点上跑异步调用。
+
+    真跑暴露过的坑：生产用的检查点原先是纯同步实现，而对话走 SSE（异步），
+    一调 aget_tuple 就 NotImplementedError；内存检查点同步异步都支持，离线测不出来。
+    这里直接在生产同款检查点上跑一遍对话图（读/写都走异步接口）。
+    """
+
+    class _Scripted(FakeMessagesListChatModel):
+        """脚本化假模型：不连模型接口。"""
+
+        def bind_tools(self, tools, **kwargs):
+            """接收工具绑定但不改行为。"""
+            return self
+
+    context = ContractContext(
+        thread_id="t-async",
+        file_name="示例.pdf",
+        text="第一条 付款\n合同签订后 30 日内付款。",
+    )
+    agent = build_chat_agent(
+        context,
+        model=_Scripted(responses=[AIMessage("收到。")]),
+        retriever=lambda query: [],
+        checkpointer=pg.checkpointer,
+    )
+    config = chat_config("t-async", "s1")
+    state = asyncio.run(agent.ainvoke({"messages": [{"role": "user", "content": "问一句"}]}, config))
+    assert state["messages"][-1].content == "收到。"
+
+    # 回读走异步读，清空走异步删——两条都得能在生产检查点上工作
+    snapshot = asyncio.run(agent.aget_state(config))
+    assert len(snapshot.values["messages"]) == 2
+    asyncio.run(pg.checkpointer.adelete_thread(chat_session_key("t-async", "s1")))
+    assert asyncio.run(agent.aget_state(config)).values.get("messages") in (None, [])

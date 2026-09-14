@@ -7,6 +7,7 @@ PgThreadStore 与内存 ThreadStore 接口一致, 路由与队列层无感切换
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -196,9 +197,36 @@ class PgPersistence:
             kwargs={"autocommit": True, "row_factory": dict_row},
         )
         self.store = PgThreadStore(self.pool)
-        self.checkpointer = PostgresSaver(self.pool)
+        self.checkpointer = PgCheckpointSaver(self.pool)
         self.checkpointer.setup()  # 幂等: 建 checkpoints/checkpoint_writes 等表
 
     def close(self) -> None:
         """释放连接池(服务退出/测试收尾)。"""
         self.pool.close()
+
+
+class PgCheckpointSaver(PostgresSaver):
+    """Postgres 检查点：同步实现照旧，另补一套异步接口。
+
+    审查链路走同步调用（invoke），对话链路走 SSE（异步）——同一个检查点要同时伺候两种调用方式。
+    不另接异步驱动：Windows 上 psycopg 的异步连接池跑不了 uvicorn 默认的 Proactor 事件循环
+    （真跑报 PoolTimeout，日志里写明"cannot use the 'ProactorEventLoop'"）。所以异步接口只把
+    同步实现丢线程池执行——连接池本身线程安全，跨线程用没问题。
+    易错点：框架会按签名探测 aput_writes 的 task_path 参数，名字不能改。
+    """
+
+    async def aget_tuple(self, config: dict):
+        """异步读检查点。"""
+        return await asyncio.to_thread(PostgresSaver.get_tuple, self, config)
+
+    async def aput(self, config: dict, checkpoint: dict, metadata: dict, new_versions: dict):
+        """异步写检查点。"""
+        return await asyncio.to_thread(PostgresSaver.put, self, config, checkpoint, metadata, new_versions)
+
+    async def aput_writes(self, config: dict, writes: list, task_id: str, task_path: str = ""):
+        """异步写待执行任务。"""
+        return await asyncio.to_thread(PostgresSaver.put_writes, self, config, writes, task_id, task_path)
+
+    async def adelete_thread(self, thread_id: str) -> None:
+        """异步删会话（清空对话用）。"""
+        return await asyncio.to_thread(PostgresSaver.delete_thread, self, thread_id)
