@@ -25,6 +25,10 @@ CONFIDENTIALITY_MAX_MONTHS = 36  # P-04：保密期不超过 36 个月
 PENALTY_DAILY_MAX_PERCENT = 1.0  # 违约金日利率上限
 
 
+# 违约金"无累计上限"的日费率门槛：日费率低于该量级的不算失控敞口（P-14 口径）
+PENALTY_CAP_MIN_DAILY_PERCENT = 0.1
+
+
 AMOUNT_TOLERANCE_RATIO = Decimal("0.01")  # 分项加总 vs 总额允许偏差 1%
 
 

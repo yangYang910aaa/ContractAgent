@@ -21,6 +21,10 @@
 - 风险类型级 macro-F1: 以 (文件, 某次运行) 为样本, 按 risk_type 累加 high 级
   TP/FP/FN 后宏平均(类型未在任何期望/预测出现则跳过);
 - 评级准确率: expected_grade == 实测 grade。
+- 引用正确率: 报告里带政策引用的风险中, 引用能对上政策原文(编号存在、正文可读、
+  与该风险类型对应、判定阈值在原文里能找到)的比例——量的是"报告写的引用站不站得住",
+  与 run_retrieval_eval 的检索命中金标是两件事。按全部引用算(规则侧多数引用挂在
+  medium 上, 只算 high 会让分母经常为空), 另给 high 分项供单独观察。
 每份文件跑 N 次, 头部指标取 N 次(每次=全语料一遍)的均值与 [min,max] 波动区间。
 增列模型调用成本(metrics.llm_calls): 每次全语料跑一遍的调用总次数/每份均值/耗时/
 分阶段次数, 与四项主指标并列, 供成本口径回填。
@@ -156,6 +160,7 @@ def _observed(entry: GtEntry, report: dict) -> dict:
         "high_types": {r["risk_type"] for r in risks if r.get("severity") == Severity.high.value},
         "error": report.get("error"),
         "fields": _fields_observed(entry, report),  # 字段级判定（无 GT 的文件为 None）
+        "citations": report.get("citation_checks") or {},  # 引用核对段（老报告没有则为空）
         "llm_calls": int(llm.get("calls") or 0),  # 本次审查的 chat 调用次数（成本口径）
         "llm_seconds": float(llm.get("seconds") or 0.0),  # 调用累计耗时（秒）
         "llm_stages": dict(llm.get("stages") or {}),  # 阶段名 → 次数（extract/review）
@@ -343,12 +348,41 @@ def _run_level_metrics(entries: list[GtEntry], observed: list[dict]) -> dict:
     grade_ok = sum(1 for e, obs in graded if obs["grade"] == e.expected_grade)
     grade_acc = grade_ok / len(graded) if graded else None
 
+    citations = _citation_metrics(observed)
     return {
         "detection_rate": round(detection, 4) if detection is not None else None,
         "zero_fp_rate": round(zero_fp, 4) if zero_fp is not None else None,
         "macro_f1": round(macro_f1, 4) if macro_f1 is not None else None,
         "grade_accuracy": round(grade_acc, 4) if grade_acc is not None else None,
+        "citation_accuracy": citations["citation_accuracy"],
+        "citation_cited": citations["citation_cited"],
+        "citation_high_accuracy": citations["citation_high_accuracy"],
         "per_type": per_type,
+    }
+
+
+def _citation_metrics(observed: list[dict]) -> dict:
+    """引用正确率：报告里的政策引用能对上政策原文的比例(纯函数)。
+
+    分母是报告里全部带引用的风险——规则侧的引用多数挂在 medium 上，只算 high 常常
+    没有分母；同时给出 high 分项，需要只看高风险引用时用它。无引用时两份都返回 None。
+    """
+    cited = grounded = high_cited = high_grounded = 0
+    for obs in observed:
+        for item in (obs.get("citations") or {}).get("items") or []:
+            cited += 1
+            grounded += 1 if item.get("ok") else 0
+            # 分支：高风险项的引用另记一份，供"只看高风险"的口径对照
+            if item.get("severity") == Severity.high.value:
+                high_cited += 1
+                high_grounded += 1 if item.get("ok") else 0
+    return {
+        "citation_cited": cited,
+        "citation_grounded": grounded,
+        "citation_accuracy": round(grounded / cited, 4) if cited else None,
+        "citation_high_cited": high_cited,
+        "citation_high_grounded": high_grounded,
+        "citation_high_accuracy": round(high_grounded / high_cited, 4) if high_cited else None,
     }
 
 
@@ -449,6 +483,24 @@ def _summary_line(entry: GtEntry, states: list[dict]) -> str:
         ok = sum(1 for s in states for o in (s.get("fields") or {}).values() if o == "ok")
         total = sum(len(s.get("fields") or {}) for s in states)
         parts.append(f"字段{ok}/{total}")
+    # 引用核对：跨运行合并"能对上政策原文的引用条数/总条数"，不通过的列出类型与编号
+    cited = grounded = 0
+    for state in states:
+        for item in (state.get("citations") or {}).get("items") or []:
+            cited += 1
+            grounded += 1 if item.get("ok") else 0
+    if cited:
+        parts.append(f"引用{grounded}/{cited}")
+        bad = sorted(
+            {
+                f"{item.get('risk_type')}@{item.get('policy_ref')}"
+                for state in states
+                for item in (state.get("citations") or {}).get("items") or []
+                if not item.get("ok")
+            }
+        )
+        if bad:
+            parts.append(f"引用不通过={bad}")
     errors = [s["error"] for s in states if s["error"]]
     if errors:
         parts.append(f"错误x{len(errors)}:{errors[0][:60]}")
@@ -512,6 +564,7 @@ def _aggregate(
         "zero_fp_rate": _collapse([m["zero_fp_rate"] for m in headline.values()]),
         "macro_f1": _collapse([m["macro_f1"] for m in headline.values()]),
         "grade_accuracy": _collapse([m["grade_accuracy"] for m in headline.values()]),
+        "citation_accuracy": _collapse([m["citation_accuracy"] for m in headline.values()]),
     }
 
     print(f"\n===== 汇总 {mode}(每次=全语料跑一遍) =====")
@@ -550,6 +603,51 @@ def _print_single_summaries(per_file: list[dict], mode: str | None = None) -> No
     print(f"\n===== 单份明细{label} =====")
     for row in per_file:
         print(" -", row["summary"])
+
+
+def _citation_section(per_file: list[dict]) -> dict:
+    """汇总逐文件的引用核对：带引用条数/通过条数 + 不通过明细（同一问题跨运行只留一条）。"""
+    section: dict[str, dict] = {}
+    for row in per_file:
+        cited = grounded = 0
+        issues: dict[tuple, dict] = {}
+        for state in row["states"]:
+            for item in (state.get("citations") or {}).get("items") or []:
+                cited += 1
+                grounded += 1 if item.get("ok") else 0
+                # 分支：不通过的引用连原因一起记，便于分清是模型乱引还是规则映射写错
+                if not item.get("ok"):
+                    key = (item.get("risk_type"), item.get("policy_ref"), tuple(item.get("issues") or []))
+                    issues.setdefault(key, {
+                        "risk_type": item.get("risk_type"),
+                        "policy_ref": item.get("policy_ref"),
+                        "origin": item.get("origin"),
+                        "issues": item.get("issues"),
+                    })
+        if cited:
+            section[row["file"]] = {
+                "cited": cited,
+                "grounded": grounded,
+                "issues": list(issues.values()),
+            }
+    return section
+
+
+def _print_citation_section(section: dict, mode: str | None = None) -> None:
+    """打印引用核对：没有不通过的就只报一行合计，不占屏。"""
+    label = f" [{mode}]" if mode else ""
+    cited = sum(row["cited"] for row in section.values())
+    grounded = sum(row["grounded"] for row in section.values())
+    print(f"\n===== 引用核对{label} =====")
+    # 分支：整批都没有带引用的风险 → 这项指标本次没有分母
+    if not cited:
+        print("  本次没有带政策引用的风险，无可核对项")
+        return
+    print(f"  引用 {grounded}/{cited} 条能对上政策原文")
+    for file, row in sorted(section.items()):
+        for issue in row["issues"]:
+            print(f"  - {file}: {issue['risk_type']} 引 {issue['policy_ref']}（{issue['origin']}）→ "
+                  f"{'；'.join(issue['issues'])}")
 
 
 def _mode_label(mode: str) -> str:
@@ -598,18 +696,21 @@ def _main_compare(entries: list[GtEntry], judged: list[GtEntry], runs: int, out_
         print(f"\n########## review_mode={mode} ##########")
         per_file, run_metrics = _run_mode(entries, judged, runs, mode, label=f"[{mode}]")
         metrics, merged_per_type, field_col = _aggregate(judged, run_metrics, mode)
+        citations = _citation_section(per_file)
+        _print_citation_section(citations, mode)
         results[mode] = {
             "per_file": per_file,
             "run_metrics": run_metrics,
             "metrics": metrics,
             "per_type_merged": merged_per_type,
             "field_accuracy": field_col,
+            "citations": citations,
         }
 
     # ---- 并列对比表(mean 列; 波动区间同单跑) ----
     print("\n===== single vs double 头部指标对比(mean) =====")
-    names = ("detection_rate", "zero_fp_rate", "macro_f1", "grade_accuracy")
-    labels = ("检出率", "零误报率", "macro-F1", "评级准确率")
+    names = ("detection_rate", "zero_fp_rate", "macro_f1", "grade_accuracy", "citation_accuracy")
+    labels = ("检出率", "零误报率", "macro-F1", "评级准确率", "引用正确率")
     for name, label in zip(names, labels):
         cols = []
         for mode in _REVIEW_MODES:
@@ -663,6 +764,7 @@ def _main_compare(entries: list[GtEntry], judged: list[GtEntry], runs: int, out_
         "field_accuracy": {
             mode: results[mode]["field_accuracy"] for mode in _REVIEW_MODES
         },
+        "citations": {mode: results[mode]["citations"] for mode in _REVIEW_MODES},
         "per_type_merged": {
             mode: results[mode]["per_type_merged"] for mode in _REVIEW_MODES
         },
@@ -751,6 +853,8 @@ def main(argv: list[str] | None = None) -> int:
         judged, run_metrics, _mode_label(args.review_mode)
     )
     _print_single_summaries(per_file)
+    citations = _citation_section(per_file)
+    _print_citation_section(citations, _mode_label(args.review_mode))
 
     args.out.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
@@ -762,6 +866,7 @@ def main(argv: list[str] | None = None) -> int:
         "metrics": metrics,
         "per_type_merged": merged_per_type,
         "field_accuracy": field_col,
+        "citations": citations,
         "files": per_file,
     }
     out_json = args.out / f"run_eval_{args.review_mode}_{stamp}.json"

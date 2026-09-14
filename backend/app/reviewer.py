@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from backend.app.llm import get_chat_model
 from backend.app.parser import Clause, split_clauses
 from backend.app.policy_rag import IndexDoc, load_policies
-from backend.app.rules import RISK_LABELS
+from backend.app.rules import PENALTY_CAP_MIN_DAILY_PERCENT, RISK_LABELS
 from backend.app.schemas import RiskItem, Severity
 from backend.app.usage import STAGE_REVIEW, llm_call
 
@@ -203,7 +203,7 @@ def _verify_high(f: ReviewFinding) -> tuple[bool, str]:
             return False, "原文看不出按日计罚"
         if has_cap:
             return False, "原文已写累计上限"
-        ok = pct >= 0.1
+        ok = pct >= PENALTY_CAP_MIN_DAILY_PERCENT
         return ok, f"原文日费率 {pct:g}%（无上限需 ≥0.1%/日）" if not ok else ""
     # 责任上限过低：品类底线 50/30 视品类而定，evidence 无品类信息 → 只认 <30 的铁证
     if f.risk_type == "liability_cap_too_low":
