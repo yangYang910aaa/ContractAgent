@@ -119,3 +119,72 @@ export function prettyField(text: string): string {
   }
   return out
 }
+
+// ---- 风险等级 / 评级 / 复核结论的展示映射（详情页各面板共用，放一处免得各写一份）----
+
+/** 风险等级 → 中文（与 style.css 的 .stamp-* 印章族配套）。 */
+export const SEVERITY_TEXT: Record<string, string> = { high: '高风险', medium: '中风险', low: '低风险' }
+
+/** 风险等级 → 印章样式类。 */
+export const SEVERITY_CLASS: Record<string, string> = {
+  high: 'stamp-seal',
+  medium: 'stamp-warn',
+  low: 'stamp-mute',
+}
+
+/** 评级机器码 → 中文。 */
+export const GRADE_TEXT: Record<string, string> = {
+  pass: '通过',
+  conditional_pass: '有条件通过',
+  fail: '不通过',
+}
+
+/** 评级 → 大圆章样式（.ring 系列，见 style.css）。 */
+export const RING_CLASS: Record<string, string> = {
+  pass: 'ring-ok',
+  conditional_pass: 'ring-warn',
+  fail: 'ring-seal',
+}
+
+/** 审查模式机器码 → 中文（导出 JSON 仍是机器码，属预期）。 */
+export const REVIEW_MODE_TEXT: Record<string, string> = {
+  single: '单审',
+  double: '主审 + 盲审复核',
+  parallel: '多智能体并行',
+}
+
+/** 复核发现的处理结果 → 徽标文案（与后端 merge_review 的 outcome 对齐）。
+ *  noted 不用"仅提示"——太含糊，直接写清是"只记录、不进风险清单"。 */
+export const OUTCOME_TEXT: Record<string, string> = {
+  agreed: '与主审一致',
+  added: '复核新增',
+  upgraded: '取高升级',
+  noted: '仅记录不并入',
+}
+
+/** 复核处理结果 → 徽标样式类（底色定义在复核面板里）。 */
+export const OUTCOME_CLASS: Record<string, string> = {
+  agreed: 'rv-agree',
+  added: 'rv-added',
+  upgraded: 'rv-upgrade',
+  noted: 'rv-note',
+}
+
+/** 复核统计 → 非零项 chips（报告段与闸口段共用）。 */
+export function outcomeChips(
+  stats: Record<string, number> | undefined | null,
+): { key: string; label: string; count: number }[] {
+  if (!stats) return []
+  return [
+    { key: 'added', label: OUTCOME_TEXT.added, count: stats.added },
+    { key: 'upgraded', label: OUTCOME_TEXT.upgraded, count: stats.upgraded },
+    { key: 'agreed', label: OUTCOME_TEXT.agreed, count: stats.agreed },
+    { key: 'noted', label: OUTCOME_TEXT.noted, count: stats.noted },
+  ].filter((chip) => chip.count > 0)
+}
+
+/** 评级展示文案：疑似空白模板的"有条件通过"展示为"待确认"（避免"已完成"的误导）。 */
+export function gradeDisplay(grade: string | null | undefined, template = false): string {
+  if (template && grade === 'conditional_pass') return '待确认'
+  return GRADE_TEXT[grade ?? ''] ?? grade ?? '—'
+}

@@ -4,7 +4,7 @@
  * 约定：非 2xx 统一抛 Error(detail)，页面 catch 后展示即可。
  */
 
-import type { SourceDoc, TaskDetail, TaskList } from './types'
+import type { ChatCitation, ChatTurn, ChatUsage, SourceDoc, TaskDetail, TaskList } from './types'
 
 /** 解包响应：失败时优先取后端的 detail 文案（FastAPI HTTPException）。 */
 async function j<T>(resp: Response): Promise<T> {
@@ -102,5 +102,115 @@ export async function editFields(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ patches, note }),
     }),
+  )
+}
+
+// ---- 对话助手：逐字流式（SSE）+ 历史回读 + 清空会话 + 非流式降级 ----
+
+/** 对话流的事件名：与后端 stream_chat 推的帧一一对应。 */
+export type ChatEvent = 'status' | 'tool' | 'token' | 'citations' | 'usage' | 'error' | 'done'
+
+/** 对话回答结果（非流式/降级路径的响应）。 */
+export interface ChatAnswer {
+  answer: string
+  citations: ChatCitation[]
+  unverified: string[]
+  usage: ChatUsage
+}
+
+/** 一轮问答的流式入口：逐帧回调事件名与数据，读完即返回。
+ *
+ * 用 fetch 读流而不是 EventSource——后者只能发 GET，带不了消息体；
+ * signal 用于"停止生成"：中止后已收到的内容保留在前端。
+ */
+export async function streamChat(
+  threadId: string,
+  message: string,
+  sessionId: string,
+  onEvent: (event: ChatEvent, data: any) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const resp = await fetch(`/api/tasks/${encodeURIComponent(threadId)}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({ message, session_id: sessionId }),
+    signal,
+  })
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null)
+    throw new Error(body?.detail ?? `请求失败 (HTTP ${resp.status})`)
+  }
+  // 分支：后端没给流式体（异常/代理改写）→ 抛错让调用方走非流式降级
+  if (!resp.body) throw new Error('浏览器未收到流式响应')
+
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    // SSE 帧之间用空行分隔；逐帧解析，避免把半截 JSON 当数据
+    let split = buffer.indexOf('\n\n')
+    while (split >= 0) {
+      const frame = buffer.slice(0, split)
+      buffer = buffer.slice(split + 2)
+      const parsed = parseFrame(frame)
+      if (parsed) onEvent(parsed.event, parsed.data)
+      split = buffer.indexOf('\n\n')
+    }
+  }
+}
+
+/** 解析一个 SSE 帧 → 事件名与数据；空帧或数据不合法时返回 null。 */
+function parseFrame(frame: string): { event: ChatEvent; data: any } | null {
+  let event = 'message'
+  const dataLines: string[] = []
+  for (const line of frame.split('\n')) {
+    if (line.startsWith('event: ')) event = line.slice('event: '.length).trim()
+    // 分支：数据行可能有多行，按 SSE 约定拼起来再解析
+    else if (line.startsWith('data: ')) dataLines.push(line.slice('data: '.length))
+  }
+  if (!dataLines.length) return null
+  try {
+    return { event: event as ChatEvent, data: JSON.parse(dataLines.join('\n')) }
+  } catch {
+    return null
+  }
+}
+
+/** 非流式问一句：前端读流失败时降级用它，拿到整段回答而不是逐字。 */
+export async function askChat(
+  threadId: string,
+  message: string,
+  sessionId: string,
+): Promise<ChatAnswer> {
+  return j(
+    await fetch(`/api/tasks/${encodeURIComponent(threadId)}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, session_id: sessionId }),
+    }),
+  )
+}
+
+/** 回读某个会话的历史：刷新页面/后端重启后再打开面板，问答与引用都还在。 */
+export async function fetchChatHistory(threadId: string, sessionId: string): Promise<ChatTurn[]> {
+  const body = await j<{ turns: ChatTurn[] }>(
+    await fetch(`/api/tasks/${encodeURIComponent(threadId)}/chat/${encodeURIComponent(sessionId)}`),
+  )
+  return body.turns
+}
+
+/** 清空这个会话（后端删对话检查点线程），面板回到空态并显示建议问题。 */
+export async function clearChat(
+  threadId: string,
+  sessionId: string,
+): Promise<{ cleared: boolean; reason?: string }> {
+  return j(
+    await fetch(
+      `/api/tasks/${encodeURIComponent(threadId)}/chat/${encodeURIComponent(sessionId)}`,
+      { method: 'DELETE' },
+    ),
   )
 }

@@ -405,7 +405,10 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 删除确认弹窗：单删/批量共用（替换原生 confirm） -->
+    <!-- 删除确认弹窗：单删/批量共用（替换原生 confirm）。
+         Teleport 到 body：本视图根节点带 .rise 进场动画，会把 position: fixed 的包含块
+         锁在这个区块上——不 Teleport 就变成"相对整个任务列表居中"，得往下滑才看得见。 -->
+    <Teleport to="body">
     <div v-if="showConfirm" class="modal-mask" @click.self="closeConfirm">
       <div class="modal" role="dialog" aria-modal="true" aria-label="删除确认">
         <h3>删除{{ pendingIds.length > 1 ? ` ${pendingIds.length} 项任务` : '任务' }}</h3>
@@ -435,6 +438,7 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+    </Teleport>
   </section>
 </template>
 

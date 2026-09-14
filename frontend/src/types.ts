@@ -46,6 +46,21 @@ export interface RiskItem {
   origin?: 'rules' | 'review' | null // 来源：rules=主审 / review=复核新增（报告徽标）
 }
 
+/** 风险卡的输入形态：闸口待审项与报告风险共用。
+ *  闸口项不带 severity（那一屏全是 high），展示时按 high 处理。 */
+export interface RiskCardItem {
+  risk_type: string
+  label?: string | null
+  severity?: Severity
+  clause_ref?: string
+  evidence?: string
+  evidence_quote?: string
+  policy_ref?: string | null
+  suggestion?: string
+  field?: string | null
+  origin?: 'rules' | 'review' | null
+}
+
 /** 政策引用：报告里 policy_ref 对应的政策原文片段与相似度。 */
 export interface PolicyHit {
   policy_ref: string
@@ -161,4 +176,29 @@ export interface SourceAnchor {
   clause?: string
   evidence?: string
   seq: number
+}
+
+/** 对话助手的一条引用：政策条文或合同条款。
+ *  由后端按"这一轮工具真正返回过的条目"汇总，不是模型复述出来的内容。 */
+export interface ChatCitation {
+  kind: 'policy' | 'clause' // policy=政策库条文 / clause=合同条款
+  ref: string // 政策编号（P-XX）或条款号（如"第五条"）
+  title?: string // 条文标题 / 条款标题（芯片标题位）
+  text?: string // 引用正文（芯片预览与展开）
+  source?: string // 政策来源文件名（条款引用为空）
+}
+
+/** 对话助手一轮问答：历史回读时引用由后端重算，与当时页面上的芯片一致。 */
+export interface ChatTurn {
+  question: string
+  answer: string
+  citations: ChatCitation[]
+  unverified: string[] // 回答提到但查不到出处的政策编号（面板标"无法核实"）
+}
+
+/** 对话用量：成本行"本次 N 次调用 · M 秒"；token 由框架回调提供（拿不到时为 0）。 */
+export interface ChatUsage {
+  calls: number
+  seconds: number
+  tokens?: number
 }
