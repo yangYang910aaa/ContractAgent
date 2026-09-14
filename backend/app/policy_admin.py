@@ -22,45 +22,27 @@ from backend.app.policy_corpus import (
     corpus_fingerprint,
     corpus_units,
 )
-from backend.app.policy_rag import get_store
+from backend.app.config import settings
+from backend.app.policy_rag import MilvusStore, get_store, unit_id
+
+# 业务键改造后的物理集合与回滚用旧名：检索侧一直认 settings.milvus_collection（别名）
+REBUILD_COLLECTION = "contract_policies_biz"
+LEGACY_COLLECTION = "contract_policies_legacy"
 
 
-def build_sync_plan(state: dict, units_by_source: dict[str, list]) -> list[dict]:
-    """按核对结果列同步动作：变化的文件整份替换，磁盘上已无的文件清库内行。
+def plan_unit_sync(disk_units: list, index_rows: list[dict]) -> dict:
+    """按业务键算增量：要写的单元（磁盘有、索引没有）与要删的单元（索引有、磁盘没有）。
 
-    输入是 compare_corpus_and_index 的结果与按文件分组的磁盘单元；返回动作清单，
-    未变化的文件不进清单——这是"不覆盖"的落点。
+    有业务键之后同步的最小单位是"单元"：改一条条文只重算那一条的向量，
+    同文件里没变的条文一个都不动（旧口径是按整份文件删掉重插）。
     """
-    steps: list[dict] = []
-    for item in state["files_detail"]:
-        # 分支：这份文件磁盘与索引逐单元一致 → 一个单元都不动
-        if item["same"]:
-            continue
-        steps.append(
-            {
-                "action": "replace" if item["disk_units"] else "drop",
-                "source": item["source"],
-                "disk_units": item["disk_units"],
-                "index_units": item["index_units"],
-                "units": units_by_source.get(item["source"], []),
-            }
-        )
-    return steps
-
-
-def apply_sync(store, steps: list[dict]) -> list[dict]:
-    """执行同步动作：先删该文件旧单元再重插新单元，逐份报告删除与写入条数。"""
-    results: list[dict] = []
-    for step in steps:
-        removed = store.delete_source(step["source"])
-        written = 0
-        # 分支：文件还在磁盘上 → 删完接着把新版单元写回去；已被删除的文件就到此为止
-        if step["action"] == "replace":
-            written = store.add_docs(step["units"])
-        results.append(
-            {"source": step["source"], "removed": removed, "written": written}
-        )
-    return results
+    index_keys = {row.get("unit_id") for row in index_rows if row.get("unit_id")}
+    disk_keys = {unit_id(unit.source, unit.text) for unit in disk_units}
+    return {
+        "write": [unit for unit in disk_units if unit_id(unit.source, unit.text) not in index_keys],
+        "delete": sorted(index_keys - disk_keys),
+        "index_source": {row.get("unit_id"): row.get("source", "") for row in index_rows},
+    }
 
 
 def _print_check(state: dict, documents: list[dict]) -> None:
@@ -82,18 +64,67 @@ def _print_check(state: dict, documents: list[dict]) -> None:
     print(f"索引核对：{verdict}（磁盘 {state['disk_units']} 条 / 索引 {state['index_units']} 条）")
 
 
-def _print_plan(steps: list[dict]) -> None:
-    """打印同步计划：哪些文件会被替换、哪些会被清行。"""
-    if not steps:
-        print("无需同步：文件与索引逐单元一致")
-        return
-    print(f"同步计划（{len(steps)} 份文件）：")
-    for step in steps:
-        # 分支：文件还在磁盘上 → 整份替换；磁盘上已删 → 只清库内行
-        if step["action"] == "replace":
-            print(f"  替换 {step['source']}：删旧 {step['index_units']} 条 → 写新 {step['disk_units']} 条")
-        else:
-            print(f"  清除 {step['source']}：磁盘已无此文件，删库内 {step['index_units']} 条")
+def _rebuild(confirmed: bool, as_json: bool) -> int:
+    """一次性重建为业务键集合，并用别名接管检索用的名字（可回滚）。
+
+    顺序刻意如此：新集合建好并核对通过之后才动检索名字——中途失败时线上仍指向旧集合；
+    旧集合改名保留，回滚就是"删别名 + 把旧名改回来"。别名可读可写（已实测），
+    所以检索与同步都能照旧走 settings.milvus_collection。
+    """
+    alias = settings.milvus_collection
+    client = MilvusStore(collection_name=alias).client
+    units = corpus_units()
+    steps = [
+        f"新建集合 {REBUILD_COLLECTION}（业务键主键 unit_id + 标量字段）",
+        f"灌入磁盘语料 {len(units)} 个单元并核对一致",
+        f"把现有集合 {alias} 改名为 {LEGACY_COLLECTION}（保留作回滚点）",
+        f"建别名 {alias} → {REBUILD_COLLECTION}（代码与 .env 都不改）",
+        f"回滚办法：drop_alias {alias}，再把 {LEGACY_COLLECTION} 改回 {alias}",
+    ]
+    # 分支：检索名字已经是别名 → 说明已经迁移过，不再动
+    if alias in client.list_aliases().get("aliases", []):
+        message = {"alias": alias, "migrated": True, "steps": ["已经是别名形态，无需重建"]}
+        print(json.dumps(message, ensure_ascii=False, indent=2) if as_json else f"{alias} 已经是别名形态，无需重建")
+        return 0
+    if as_json:
+        print(json.dumps({"alias": alias, "target": REBUILD_COLLECTION, "units": len(units), "steps": steps},
+                         ensure_ascii=False, indent=2))
+    else:
+        print(f"重建计划（{alias} → {REBUILD_COLLECTION}，{len(units)} 个单元）：")
+        for step in steps:
+            print(f"  - {step}")
+    # 分支：没给 --yes → 只出计划，不动库
+    if not confirmed:
+        print("（未执行：确认无误后加 --yes）")
+        return 0
+
+    # 1) 新集合建好并核对通过之后才动线上名字
+    if client.has_collection(REBUILD_COLLECTION):
+        print(f"{REBUILD_COLLECTION} 已存在（上次失败残留），先删除重建")
+        client.drop_collection(REBUILD_COLLECTION)
+    new_store = MilvusStore(collection_name=REBUILD_COLLECTION)
+    written = new_store.add_docs(units)
+    check = compare_corpus_and_index(store=new_store)
+    print(f"新集合写入 {written} 条，核对{'一致' if check['ok'] else '不一致'}")
+    # 分支：新集合与磁盘对不上 → 中止，检索名字不动（线上仍是旧集合）
+    if not check["ok"]:
+        print("新集合核对不通过，已中止；检索名字未动，线上不受影响")
+        return 1
+
+    # 2) 改名 + 别名接管
+    if client.has_collection(LEGACY_COLLECTION):
+        print(f"{LEGACY_COLLECTION} 已存在，需人工确认后再重建（避免覆盖回滚点）")
+        return 1
+    client.rename_collection(alias, LEGACY_COLLECTION)
+    client.create_alias(collection_name=REBUILD_COLLECTION, alias=alias)
+    print(f"已切换：{alias} 现在指向 {REBUILD_COLLECTION}（旧集合为 {LEGACY_COLLECTION}）")
+
+    # 3) 经别名再核对一次 + 冒烟检索（都走线上真实入口）
+    live = MilvusStore(collection_name=alias)
+    live_check = compare_corpus_and_index(store=live)
+    hits = live.similarity_search("预付款上限是多少", k=1)
+    print(f"经别名核对：{'一致' if live_check['ok'] else '不一致'}；冒烟检索命中 {[(h.policy_ref, h.score) for h in hits]}")
+    return 0 if live_check["ok"] else 1
 
 
 def _check(store, policy_dir, as_json: bool) -> int:
@@ -107,45 +138,70 @@ def _check(store, policy_dir, as_json: bool) -> int:
 
 
 def _sync(store, policy_dir, confirmed: bool, as_json: bool) -> int:
-    """同步入口：默认只打印计划（dry-run），加 --yes 才真正改库，改完自动再核对一次。"""
+    """同步入口：默认只打印计划（dry-run），加 --yes 才真正改库，改完自动再核对一次。
+
+    动作按业务键精确到单元——只写新增/变化的那几条、只删消失的那几条；
+    同文件里没变的条文不重算向量（旧口径是整份文件删掉重插）。
+    """
     state = compare_corpus_and_index(store=store, policy_dir=policy_dir)
-    units_by_source: dict[str, list] = {}
-    for unit in corpus_units(policy_dir=policy_dir):
-        units_by_source.setdefault(unit.source, []).append(unit)
-    steps = build_sync_plan(state, units_by_source)
-    # JSON 里不带单元列表（那是完整正文，没必要输出）
-    brief = [{k: v for k, v in step.items() if k != "units"} for step in steps]
+    units = corpus_units(policy_dir=policy_dir)
+    plan = plan_unit_sync(units, store.iter_rows())
+    write_sources = sorted({unit.source for unit in plan["write"]})
+    delete_sources = sorted({plan["index_source"].get(key, "") for key in plan["delete"]})
+    brief = {
+        "write_units": len(plan["write"]),
+        "delete_units": len(plan["delete"]),
+        "write_sources": write_sources,
+        "delete_sources": delete_sources,
+    }
     # 分支：没有给 --yes 或本来就没有差异 → 只出计划，不动库
-    if not steps or not confirmed:
+    if not plan["write"] and not plan["delete"]:
+        if as_json:
+            print(json.dumps({"version": state["version"], "applied": False, "plan": brief}, ensure_ascii=False, indent=2))
+        else:
+            print("无需同步：文件与索引逐单元一致")
+        return 0
+    if not confirmed:
         if as_json:
             print(json.dumps(
-                {"version": state["version"], "applied": False, "steps": brief},
+                {"version": state["version"], "applied": False, "plan": brief},
                 ensure_ascii=False, indent=2,
             ))
         else:
-            _print_plan(steps)
-            if steps:
-                print("（未执行：确认无误后加 --yes）")
+            _print_unit_plan(plan)
         return 0
-    results = apply_sync(store, steps)
+    written = store.add_docs(plan["write"])
+    removed = store.delete_units(plan["delete"])
     after = compare_corpus_and_index(store=store, policy_dir=policy_dir)
     if as_json:
         print(json.dumps(
             {
                 "version": state["version"],
                 "applied": True,
-                "steps": brief,
-                "results": results,
+                "plan": brief,
+                "written": written,
+                "removed": removed,
                 "check": after["ok"],
             },
             ensure_ascii=False, indent=2,
         ))
     else:
-        _print_plan(steps)
-        for result in results:
-            print(f"已处理 {result['source']}：删除 {result['removed']} 条 / 写入 {result['written']} 条")
+        _print_unit_plan(plan)
+        print(f"已写入 {written} 条 / 删除 {removed} 条")
         print(f"同步后核对：{'一致' if after['ok'] else '仍不一致'}")
     return 0 if after["ok"] else 1
+
+
+def _print_unit_plan(plan: dict) -> None:
+    """打印按单元的同步计划：新增/变化的文件与消失的文件各一行。"""
+    print(f"同步计划（按单元）：写 {len(plan['write'])} 条 / 删 {len(plan['delete'])} 条")
+    for source in sorted({unit.source for unit in plan["write"]}):
+        count = sum(1 for unit in plan["write"] if unit.source == source)
+        print(f"  写入 {source}：{count} 条单元")
+    for source in sorted({plan["index_source"].get(key, "") for key in plan["delete"]}):
+        count = sum(1 for key in plan["delete"] if plan["index_source"].get(key) == source)
+        print(f"  清除 {source}：{count} 条单元（磁盘上已无对应正文）")
+    print("（未执行：确认无误后加 --yes）")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -154,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="核对文件与索引是否一致（默认动作）")
     parser.add_argument("--sync", action="store_true", help="按份同步有变化的语料")
     parser.add_argument("--fingerprint", action="store_true", help="只打印政策库版本号")
+    parser.add_argument("--rebuild", action="store_true", help="重建为业务键集合并用别名接管检索名字")
     parser.add_argument("--yes", action="store_true", help="与 --sync 同用：确认执行，否则只打印计划")
     parser.add_argument("--json", action="store_true", help="以 JSON 输出（脚本/评测引用）")
     parser.add_argument("--backend", default=None, choices=["auto", "memory", "milvus"], help="检索后端")
@@ -172,6 +229,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     store = get_store(backend=args.backend)
+    if args.rebuild:
+        return _rebuild(args.yes, args.json)
     if args.sync:
         return _sync(store, policy_dir, args.yes, args.json)
     return _check(store, policy_dir, args.json)

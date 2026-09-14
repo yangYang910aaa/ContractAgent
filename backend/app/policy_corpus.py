@@ -113,7 +113,8 @@ def compare_corpus_and_index(store=None, policy_dir: Path | None = None) -> dict
     store = get_store() if store is None else store
     disk = Counter((doc.source, _unit_sha256(doc.text)) for doc in _scan(policy_dir)[1])
     index = Counter(
-        (row.get("source", ""), _unit_sha256(row.get("text", "")))
+        # 业务键集合里写作 sha256 标量字段，先读它（省掉整篇正文传输）；老集合回落到按正文算
+        (row.get("source", ""), row.get("sha256") or _unit_sha256(row.get("text", "")))
         for row in store.iter_rows()
     )
     missing = disk - index

@@ -113,27 +113,29 @@ def test_compare_reports_missing_and_orphan(corpus_dir: Path) -> None:
     assert state["orphan_sources"] == ["P-09_已删除.md"]
 
 
-def test_sync_plan_only_contains_changed_files(corpus_dir: Path) -> None:
+def test_unit_sync_plan_only_touches_changed_units(corpus_dir: Path) -> None:
+    """增量口径精确到单元：改一条条文只重写那一条，同文件里没变的条文不动。"""
     store = _store_with_corpus(corpus_dir)
-    units_by_source: dict[str, list] = {}
-    for unit in policy_corpus.corpus_units(policy_dir=corpus_dir):
-        units_by_source.setdefault(unit.source, []).append(unit)
-
-    # 完全一致 → 没有动作可做（"不覆盖"的第一层：一致的文件根本不进计划）
-    state = policy_corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)
-    assert policy_admin.build_sync_plan(state, units_by_source) == []
+    units = policy_corpus.corpus_units(policy_dir=corpus_dir)
+    plan = policy_admin.plan_unit_sync(units, store.iter_rows())
+    assert plan["write"] == [] and plan["delete"] == []
 
     (corpus_dir / "P-02_质量保证期.md").write_text(
         _POLICY_B.replace("12 个月", "24 个月"), encoding="utf-8"
     )
-    state = policy_corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)
-    plan = policy_admin.build_sync_plan(state, units_by_source)
-    assert [step["source"] for step in plan] == ["P-02_质量保证期.md"]
-    assert plan[0]["action"] == "replace"
-    assert plan[0]["units"]
+    plan = policy_admin.plan_unit_sync(
+        policy_corpus.corpus_units(policy_dir=corpus_dir), store.iter_rows()
+    )
+    # 只写"改过的那一条"：P-02 的文件头单元正文没变，不该被重写
+    assert {unit.source for unit in plan["write"]} == {"P-02_质量保证期.md"}
+    assert len(plan["write"]) == 1
+    assert "24 个月" in plan["write"][0].text
+    # 旧条文一条，按业务键精确删除
+    assert len(plan["delete"]) == 1
+    assert plan["index_source"][plan["delete"][0]] == "P-02_质量保证期.md"
 
 
-def test_apply_sync_restores_consistency_and_touches_only_changed(corpus_dir: Path) -> None:
+def test_unit_sync_restores_consistency_and_touches_only_changed(corpus_dir: Path) -> None:
     store = _store_with_corpus(corpus_dir)
     # 动两份：改 P-01 正文，另伪造一份磁盘上已无的孤儿行；P-02 保持不变做对照
     store.add_docs([IndexDoc(text="旧条文", source="P-07_已删除.md", policy_ref="P-07")])
@@ -142,27 +144,33 @@ def test_apply_sync_restores_consistency_and_touches_only_changed(corpus_dir: Pa
     )
     before_untouched = [row for row in store.iter_rows() if row["source"] == "P-02_质量保证期.md"]
 
-    units_by_source: dict[str, list] = {}
-    for unit in policy_corpus.corpus_units(policy_dir=corpus_dir):
-        units_by_source.setdefault(unit.source, []).append(unit)
-
-    state = policy_corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)
-    plan = policy_admin.build_sync_plan(state, units_by_source)
-    results = policy_admin.apply_sync(store, plan)
-    assert {result["source"] for result in results} == {
-        "P-01_预付款比例.md",
-        "P-07_已删除.md",
-    }
+    plan = policy_admin.plan_unit_sync(
+        policy_corpus.corpus_units(policy_dir=corpus_dir), store.iter_rows()
+    )
+    assert store.add_docs(plan["write"]) == 1  # 只有改过的那一条要重写
+    assert store.delete_units(plan["delete"]) == 2  # 旧条文 + 孤儿行
 
     after = policy_corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)
     assert after["ok"] is True
     assert after["orphan_sources"] == []
-    # 替换后的 P-01 是新正文，旧正文一条不剩（先删后写，不会新旧并存）
+    # 替换后的 P-01 是新正文，旧正文一条不剩（业务键变了：新写一条 + 删掉旧的一条）
     rows = [row for row in store.iter_rows() if row["source"] == "P-01_预付款比例.md"]
     assert "20%" in "".join(row["text"] for row in rows)
     assert "30%" not in "".join(row["text"] for row in rows)
     # 没变化的文件一个单元都没被碰过
     assert [row for row in store.iter_rows() if row["source"] == "P-02_质量保证期.md"] == before_untouched
+
+
+def test_unit_id_stable_and_rewrite_is_idempotent(corpus_dir: Path) -> None:
+    """业务键由内容决定：同内容同主键，重复写入不累积（upsert 语义）。"""
+    store = _store_with_corpus(corpus_dir)
+    before = store.doc_count
+    units = policy_corpus.corpus_units(policy_dir=corpus_dir)
+    assert policy_admin.unit_id(units[0].source, units[0].text) == policy_admin.unit_id(
+        units[0].source, units[0].text
+    )
+    store.add_docs(units)  # 再灌一遍完全相同的内容
+    assert store.doc_count == before
 
 
 def test_cli_check_and_sync_exit_codes(corpus_dir: Path, monkeypatch, capsys) -> None:

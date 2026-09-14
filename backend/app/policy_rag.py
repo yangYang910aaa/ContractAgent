@@ -12,10 +12,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 import socket
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -45,6 +47,16 @@ class PolicyHit:
     source: str
     text: str
     score: float  # 余弦相似度（0~1，越高越相关）
+
+
+def unit_id(source: str, text: str) -> str:
+    """检索单元的业务主键：文件名 + 正文的内容哈希（同内容同主键）。
+
+    内容不变主键就不变，写入天然幂等（重复灌同一批只会覆盖同一行）；内容变了主键变，
+    旧行由"消失单元清理"删除。比 `P-01#第二条` 这类可读键稳：条号会随条文增删整体漂移。
+    """
+    joined = f"{source}\x00{text.strip()}".encode("utf-8")
+    return hashlib.sha256(joined).hexdigest()[:32]
 
 
 def _split_doc_articles(
@@ -136,14 +148,37 @@ class MemoryStore:
         self.add_docs(docs)
 
     def add_docs(self, docs: list[IndexDoc]) -> int:
-        """无条件向量化并入库存量（按份替换用），返回写入条数；文本为空的行跳过。"""
+        """按业务键写入（同主键覆盖旧行），返回写入条数；文本为空的行跳过。"""
         rows = [d for d in docs if d.text.strip()]
+        # 先按 unit_id 去掉旧行：与 Milvus 的 upsert 同语义，重复写入不会累积
+        keys = {unit_id(d.source, d.text) for d in rows}
+        if keys:
+            kept = [
+                (doc, vec)
+                for doc, vec in zip(self._docs, self._vectors)
+                if unit_id(doc.source, doc.text) not in keys
+            ]
+            self._docs = [doc for doc, _ in kept]
+            self._vectors = [vec for _, vec in kept]
         vectors = self._embedding.embed_documents([d.text for d in rows])
         for doc, vec in zip(rows, vectors):
             self._docs.append(doc)
             #入库时归一化向量   
             self._vectors.append(_normalize(vec))
         return len(rows)
+
+    def delete_units(self, keys: list[str]) -> int:
+        """按业务键删除指定单元，返回删除条数（同步"消失的单元"用）。"""
+        targets = set(keys)
+        kept = [
+            (doc, vec)
+            for doc, vec in zip(self._docs, self._vectors)
+            if unit_id(doc.source, doc.text) not in targets
+        ]
+        removed = len(self._docs) - len(kept)
+        self._docs = [doc for doc, _ in kept]
+        self._vectors = [vec for _, vec in kept]
+        return removed
 
     def delete_source(self, source: str) -> int:
         """删除某个来源文件的全部单元，返回删除条数。
@@ -159,7 +194,12 @@ class MemoryStore:
     def iter_rows(self) -> list[dict]:
         """只读回读全部入库单元（字段与 Milvus 相同），供"文件 ↔ 索引"一致性核对。"""
         return [
-            {"text": doc.text, "source": doc.source, "policy_ref": doc.policy_ref}
+            {
+                "unit_id": unit_id(doc.source, doc.text),
+                "text": doc.text,
+                "source": doc.source,
+                "policy_ref": doc.policy_ref,
+            }
             for doc in self._docs
         ]
 
@@ -220,7 +260,7 @@ class MilvusStore:
         return len(self._embedding.embed_query("测试"))
 
     def _ensure_collection(self) -> None:
-        """建集合 + 索引并加载；已存在则跳过（幂等）。"""
+        """建集合 + 索引并加载；已存在（含别名指向的集合）则跳过（幂等）。"""
         from pymilvus import DataType
 
         # 分支：集合已存在 → 无需重建 schema
@@ -228,12 +268,17 @@ class MilvusStore:
             return
         dim = self._probe_dim()
 
-        #幂等建表：若集合已存在则跳过
-        schema = self.client.create_schema(auto_id=True, enable_dynamic_field=True)
-        schema.add_field("pk", DataType.INT64, is_primary=True, auto_id=True)
+        # 业务键主键：内容哈希，写入幂等；标量字段供核对与"按生效日期检索"留口
+        schema = self.client.create_schema(auto_id=False, enable_dynamic_field=True)
+        schema.add_field("unit_id", DataType.VARCHAR, max_length=64, is_primary=True)
         schema.add_field("text", DataType.VARCHAR, max_length=65535)
         schema.add_field("source", DataType.VARCHAR, max_length=512)
         schema.add_field("policy_ref", DataType.VARCHAR, max_length=16)
+        schema.add_field("sha256", DataType.VARCHAR, max_length=64)  # 单元正文哈希
+        schema.add_field("doc_sha256", DataType.VARCHAR, max_length=64)  # 整份文件哈希
+        schema.add_field("version", DataType.VARCHAR, max_length=32)  # 政策版本号（如 V2.0）
+        schema.add_field("effective_date", DataType.VARCHAR, max_length=32)  # 生效日期
+        schema.add_field("updated_at", DataType.VARCHAR, max_length=32)  # 写入时间
         schema.add_field("vector", DataType.FLOAT_VECTOR, dim=dim)
         self.client.create_collection(self.collection_name, schema=schema)
 
@@ -262,20 +307,47 @@ class MilvusStore:
         self.add_docs(docs)
 
     def add_docs(self, docs: list[IndexDoc]) -> int:
-        """无条件向量化 + 入库 + flush，返回写入条数（按份替换时必须绕过非空跳过）。"""
+        """按业务键 upsert（同主键覆盖）+ flush，返回写入条数。
+
+        upsert 让写入幂等：同一批内容重复灌只会覆盖同一行，不再有"半灌/重复累积"。
+        标量字段（单元哈希/文件哈希/版本/生效日期）顺带写上，核对时可直接读标量列。
+        """
         self._ensure_collection()
         rows = [d for d in docs if d.text.strip()]
         # 分支：没有可写正文 → 不发起向量化请求
         if not rows:
             return 0
+        meta = _doc_meta()
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         vectors = self._embedding.embed_documents([d.text for d in rows])
         data = [
-            {"text": d.text, "source": d.source, "policy_ref": d.policy_ref, "vector": v}
+            {
+                "unit_id": unit_id(d.source, d.text),
+                "text": d.text,
+                "source": d.source,
+                "policy_ref": d.policy_ref,
+                "sha256": _sha256_text(d.text),
+                "doc_sha256": meta.get(d.source, {}).get("sha256", ""),
+                "version": meta.get(d.source, {}).get("version", ""),
+                "effective_date": meta.get(d.source, {}).get("effective_date", ""),
+                "updated_at": stamp,
+                "vector": v,
+            }
             for d, v in zip(rows, vectors)
         ]
-        self.client.insert(self.collection_name, data)
+        self.client.upsert(self.collection_name, data)
         self.client.flush(self.collection_name)  # 关键：不 flush 检索不到
         return len(data)
+
+    def delete_units(self, keys: list[str]) -> int:
+        """按业务键删除指定单元，返回删除条数（同步"消失的单元"用；删完要 flush 才可见）。"""
+        if not keys:
+            return 0
+        self.client.load_collection(self.collection_name)
+        joined = ", ".join(_quote_literal(key) for key in keys)
+        result = self.client.delete(self.collection_name, filter=f"unit_id in [{joined}]")
+        self.client.flush(self.collection_name)
+        return int(result.get("delete_count", 0))
 
     def delete_source(self, source: str) -> int:
         """按来源文件名删除该文件的全部单元，返回删除条数。
@@ -291,14 +363,17 @@ class MilvusStore:
         return int(result.get("delete_count", 0))
 
     def iter_rows(self, batch_size: int = 200) -> list[dict]:
-        """只读回读全部入库单元（text/source/policy_ref），供"文件 ↔ 索引"一致性核对。"""
+        """只读回读全部入库单元，供"文件 ↔ 索引"一致性核对。"""
         self.client.load_collection(self.collection_name)
         rows: list[dict] = []
         iterator = self.client.query_iterator(
             collection_name=self.collection_name,
             batch_size=batch_size,
             filter="",
-            output_fields=["text", "source", "policy_ref"],
+            output_fields=[
+                "unit_id", "text", "source", "policy_ref",
+                "sha256", "doc_sha256", "version", "effective_date", "updated_at",
+            ],
         )
         while True:
             batch = iterator.next()
@@ -496,6 +571,25 @@ def _get_hybrid(backend: str | None, embedding_model) -> HybridRetriever:
 def _quote_literal(value: str) -> str:
     """Milvus 过滤表达式里的字符串字面量：双引号包裹，转义内部引号与反斜杠。"""
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _sha256_text(text: str) -> str:
+    """单元正文哈希（与核对口径一致：去首尾空白后算 utf-8 字节的 sha256）。"""
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+
+
+def _doc_meta() -> dict[str, dict]:
+    """磁盘语料台账：来源文件名 → {sha256, version, effective_date}。
+
+    延迟导入 policy_corpus（它反过来要 import 本模块，模块级导入会成环）；拿不到就写空值，
+    写入本身不受影响——标量字段只是让核对与将来的按日期检索少读正文。
+    """
+    try:
+        from backend.app.policy_corpus import policy_documents
+
+        return {doc["source"]: doc for doc in policy_documents()}
+    except Exception:  # noqa: BLE001  台账缺失不该阻断入库
+        return {}
 
 
 def _normalize(vec: list[float]) -> list[float]:
