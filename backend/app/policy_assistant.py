@@ -228,8 +228,17 @@ def run_assist(path: str | Path, retriever=None, out_dir: Path | None = None) ->
     return write_draft(extract_text(source), source=source.name, retriever=retriever, out_dir=out_dir)
 
 
-def write_draft(text: str, source: str, retriever=None, out_dir: Path | None = None) -> dict:
-    """按一段政策正文起稿并落盘：解析 → 重叠 → 冲突 → 草稿/重叠记录/清单/meta。"""
+def write_draft(
+    text: str,
+    source: str,
+    retriever=None,
+    out_dir: Path | None = None,
+    extra: dict | None = None,
+) -> dict:
+    """按一段政策正文起稿并落盘：解析 → 重叠 → 冲突 → 草稿/重叠记录/清单/meta。
+
+    extra 是额外写进 meta 的字段（起草来源与模型产出走这里，人工起稿不带）。
+    """
     parsed = parse_policy(text, source=source)
     overlaps = find_overlaps(parsed, retriever=retriever)
     conflicts = detect_conflicts(parsed, overlaps)
@@ -243,23 +252,21 @@ def write_draft(text: str, source: str, retriever=None, out_dir: Path | None = N
     (target / "checklist.md").write_text(
         build_checklist(parsed, overlaps, conflicts), encoding="utf-8"
     )
+    meta = {
+        "draft_id": target.name,
+        "source": source,
+        "ref": parsed["ref"],
+        "title": parsed["title"],
+        "draft_file": draft.name,
+        "suggested_file": suggest_file_name(parsed),
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "parsed": parsed,
+        "conflicts": conflicts,
+    }
+    meta.update(extra or {})
     # 回读靠 meta：草稿文件名可能随编号变化，冲突条目也只在这里留原始形态
     (target / "meta.json").write_text(
-        json.dumps(
-            {
-                "draft_id": target.name,
-                "source": source,
-                "ref": parsed["ref"],
-                "title": parsed["title"],
-                "draft_file": draft.name,
-                "suggested_file": suggest_file_name(parsed),
-                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "parsed": parsed,
-                "conflicts": conflicts,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
+        json.dumps(meta, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return {
@@ -289,6 +296,8 @@ def load_draft(draft_id: str) -> dict | None:
         "title": meta.get("title", ""),
         # 老草稿没存建议名 → 按解析结果现算，页面一律拿得到
         "suggested_file": meta.get("suggested_file") or suggest_file_name(meta.get("parsed") or {}),
+        "origin": meta.get("origin", "manual"),  # manual=人工起稿 / ai=模型起草
+        "ai": meta.get("ai"),  # 模型起草段（解释/要点/护栏/新引入的数字）
         "created_at": meta.get("created_at", ""),
         "applied": meta.get("applied"),  # 入库记录（没入过库为 None）
         "parsed": meta.get("parsed", {}),

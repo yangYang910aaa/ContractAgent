@@ -53,6 +53,24 @@ class _FakeEmbeddings:
         return vec
 
 
+def _fake_drafter(brief: str, meta_line: str) -> dict:
+    """假起草器：按固定产出回一份条文，验证接口链路而不真调模型。"""
+    return {
+        "title": "采购合同审核制度 · 细则 P-32：预付款与担保",
+        "scope": "本集团对外签署的采购合同。",
+        "articles": [
+            {
+                "heading": "预付款比例上限",
+                "body": "预付款合计不得超过合同总额的 40%。",
+                "explanation": "控制资金占用与履约风险。",
+                "checkpoints": ["按预付款金额除以合同总额"],
+                "guards": ["未约定预付款的不报"],
+            }
+        ],
+        "notes": ["生效日期待填"],
+    }
+
+
 def _retriever(query: str, k: int) -> list[PolicyHit]:
     """假检索器：预付款那条给高分（触发高度重叠），其余给低分。"""
     # 这种情况是：命中的既有条文阈值与新政策不一样 → 顺带触发"阈值不一致"
@@ -79,6 +97,7 @@ def client(tmp_path: Path, monkeypatch, library) -> TestClient:
     policy_dir, store = library
     monkeypatch.setattr(policy_assistant, "DRAFTS_DIR", drafts)
     monkeypatch.setattr(policy_assistant, "_default_retriever", lambda: _retriever)
+    monkeypatch.setattr(routes_policy, "_drafter", lambda: _fake_drafter)
     monkeypatch.setattr(routes_policy, "INCOMING_DIR", drafts / "_incoming")
     monkeypatch.setattr(routes_policy, "_policy_dir", lambda: policy_dir)
     monkeypatch.setattr(routes_policy, "_publish_store", lambda: store)
@@ -213,3 +232,28 @@ def test_apply_rejects_bad_file_name_and_unknown_draft(client: TestClient) -> No
     bad = client.post(f"/api/policy/drafts/{draft_id}/apply", json={"confirm": True, "file_name": "../x.md"})
     assert bad.status_code == 400 and "文件名不合法" in bad.json()["detail"]
     assert client.post("/api/policy/drafts/没有这份/apply", json={"confirm": True}).status_code == 404
+
+
+def test_ai_draft_returns_draft_with_ai_section(client: TestClient) -> None:
+    """模型起草：返回摘要（标注来源）与草稿 id，详情里带解释/要点与待确认数字。"""
+    resp = client.post(
+        "/api/policy/ai-drafts",
+        data={"brief": "预付款要限制比例，按合同总额计算。", "ref": "P-32"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["origin"] == "ai" and body["ref"] == "P-32" and body["articles"] == 2
+    assert body["suggested_file"] == "P-32_预付款与担保.md"
+    # 需求里没有 40% → 数字护栏要把它挑出来等人确认
+    assert body["new_numbers"] and body["new_numbers"][0]["percent"] == ["40"]
+
+    detail = client.get(f"/api/policy/drafts/{body['draft_id']}").json()
+    assert detail["origin"] == "ai"
+    assert detail["ai"]["articles"][0]["heading"] == "预付款比例上限"
+    assert "## 第二条 审查提示" in detail["draft"]
+
+
+def test_ai_draft_rejects_empty_brief(client: TestClient) -> None:
+    """需求为空时直接 400，不白花一次模型调用。"""
+    resp = client.post("/api/policy/ai-drafts", data={"brief": "   "})
+    assert resp.status_code == 400

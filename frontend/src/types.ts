@@ -262,8 +262,12 @@ export interface PolicyDraftSummary {
   title: string
   articles: number // 条文数
   missing: string[]
+  suggested_file: string // 建议的入库文件名
   overlap: { high: number; medium: number; low: number }
   conflicts: PolicyConflict[]
+  origin?: 'manual' | 'ai' // 正文来源：人工上传/粘贴，还是模型起草
+  new_numbers?: AiNumberFinding[] // 模型起草时新引入的数字（等人确认）
+  llm?: { calls: number; stages: Record<string, number>; seconds: number } // 起草花的调用量
 }
 
 /** 草稿详情（GET /api/policy/drafts/{id}）：草稿全文 + 重叠 + 冲突 + 配套清单。 */
@@ -272,6 +276,8 @@ export interface PolicyDraftDetail {
   source: string
   ref: string
   title: string
+  origin: 'manual' | 'ai' // 正文来源
+  ai: AiDraftSection | null // 模型起草段（人工起稿为 null）
   suggested_file: string // 建议的入库文件名（编号 + 标题短名）
   applied: DraftApplied | null // 已入库记录（没入过库为 null）
   created_at: string // 起稿时间（本地时间字符串）
@@ -281,6 +287,30 @@ export interface PolicyDraftDetail {
   draft: string // 规范化草稿（markdown 文本）
   checklist: string // 配套改动清单（markdown 文本）
   files: string[] // 草稿目录里的产物文件名
+}
+
+/** 模型起草的一条条文：正文 + 语义解释 + 判定要点 + 误报护栏。 */
+export interface AiDraftArticle {
+  heading: string
+  body: string
+  explanation: string
+  checkpoints: string[]
+  guards: string[]
+}
+
+/** 模型在成文里新引入的数字（需求里没给），逐条列出等人确认。 */
+export interface AiNumberFinding {
+  article: string
+  percent: string[]
+  months: string[]
+}
+
+/** 模型起草段：当时提的需求、模型产出的结构化条文、待确认的数字与说明。 */
+export interface AiDraftSection {
+  brief: string
+  notes: string[]
+  articles: AiDraftArticle[]
+  new_numbers: AiNumberFinding[]
 }
 
 // ---- 政策入库（B2：会用真库，所以计划与执行分成两步）----

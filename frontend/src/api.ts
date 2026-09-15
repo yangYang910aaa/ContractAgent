@@ -247,6 +247,21 @@ export async function getPolicyDraft(draftId: string): Promise<PolicyDraftDetail
   return j(await fetch(`/api/policy/drafts/${encodeURIComponent(draftId)}`))
 }
 
+/** 让模型按需求起草一份政策（花 1 次 chat 调用）：产出仍是草稿，不自动入库。 */
+export async function createAiPolicyDraft(input: {
+  brief: string
+  ref?: string
+  group?: string
+  effective_date?: string
+}): Promise<PolicyDraftSummary> {
+  const form = new FormData()
+  form.append('brief', input.brief)
+  if (input.ref) form.append('ref', input.ref)
+  if (input.group) form.append('group', input.group)
+  if (input.effective_date) form.append('effective_date', input.effective_date)
+  return j(await fetch('/api/policy/ai-drafts', { method: 'POST', body: form }))
+}
+
 /** 入库入参：file_name 留空用建议名，content 留空用草稿原文。 */
 export interface PublishInput {
   file_name?: string

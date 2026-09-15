@@ -10,12 +10,14 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from backend.app import policy_assistant, policy_publish
+from backend.app import policy_assistant, policy_drafter, policy_publish
 from backend.app.parser import extract_text
 from backend.app.policy_corpus import corpus_fingerprint
 from backend.app.policy_rag import POLICY_DIR, get_store
+from backend.app.usage import track_usage
 
 router = APIRouter(prefix="/api/policy", tags=["policy"])
 
@@ -37,6 +39,11 @@ def _publish_store():
     return get_store()
 
 
+def _drafter():
+    """模型起草器：默认真调模型；单独成函数便于离线测试注入假起草器。"""
+    return None
+
+
 class PublishIn(BaseModel):
     """入库入参：confirm=false 只算计划；content 留空就用草稿原文。"""
 
@@ -44,6 +51,22 @@ class PublishIn(BaseModel):
     content: str = Field(default="", description="人工修订后的正文（留空则用草稿原文）")
     confirm: bool = Field(default=False, description="false=只预览计划；true=落盘并同步入库")
     allow_missing_meta: bool = Field(default=False, description="缺元信息时是否仍入库")
+
+
+def _draft_summary(result: dict) -> dict:
+    """起稿产物 → 页面摘要（人工起稿与模型起草共用一份口径）。"""
+    parsed = result["parsed"]
+    return {
+        "draft_id": result["draft_id"],
+        "source": parsed["source"],
+        "ref": parsed["ref"],
+        "title": parsed["title"],
+        "articles": len(parsed["articles"]),
+        "missing": parsed["missing"],
+        "suggested_file": policy_assistant.suggest_file_name(parsed),
+        "overlap": _overlap_counts(result["overlaps"]),
+        "conflicts": result["conflicts"],
+    }
 
 
 def _overlap_counts(overlaps: list[dict]) -> dict:
@@ -75,7 +98,8 @@ async def _read_input(file: UploadFile | None, text: str, name: str) -> tuple[st
         temp = INCOMING_DIR / f"{uuid4().hex}{suffix}"
         try:
             temp.write_bytes(await file.read())
-            return extract_text(temp), _source_name(file.filename)
+            # 解析（含 OCR）是阻塞活：丢到线程池，别占住事件循环
+            return await run_in_threadpool(extract_text, temp), _source_name(file.filename)
         finally:
             temp.unlink(missing_ok=True)  # 原件不留库：草稿目录只存起稿产物
             # 暂存目录空了就一并删掉，免得草稿目录里留个空壳
@@ -100,18 +124,40 @@ async def create_draft(
     # 这种情况是：读不出正文（空文件/加密 PDF）→ 400，不落一份空草稿
     if not content.strip():
         raise HTTPException(status_code=400, detail="没有读到政策正文（文件为空或无法解析）")
-    result = policy_assistant.write_draft(content, source=source)
-    parsed = result["parsed"]
-    return {
-        "draft_id": result["draft_id"],
-        "source": source,
-        "ref": parsed["ref"],
-        "title": parsed["title"],
-        "articles": len(parsed["articles"]),
-        "missing": parsed["missing"],
-        "overlap": _overlap_counts(result["overlaps"]),
-        "conflicts": result["conflicts"],
-    }
+    # 起稿里的逐条向量检索是阻塞活（每条一次 embedding 往返）→ 同样丢线程池
+    result = await run_in_threadpool(policy_assistant.write_draft, content, source)
+    return _draft_summary(result)
+
+
+@router.post("/ai-drafts")
+def create_ai_draft(
+    brief: str = Form(..., description="需求或半成品条文；模型据此按体例起草"),
+    ref: str = Form("", description="政策编号（如 P-16）；留空则草稿里写「待填」"),
+    group: str = Form("", description="归口部门（可选）"),
+    effective_date: str = Form("", description="生效日期（可选）"),
+) -> dict:
+    """模型起草：按需求写条文 + 配解释与判定要点，产出照旧走起稿管线（重叠/冲突/清单）。
+
+    与人工起稿的区别只在正文来源；模型不自动入库，成文里的新数字会单独列出来等人确认。
+    """
+    # 这种情况是：需求为空 → 400 明确提示，别白花一次调用
+    if not brief.strip():
+        raise HTTPException(status_code=400, detail="请先写清要起草什么（需求或要点）")
+    with track_usage() as usage:
+        result = policy_drafter.draft_policy(
+            brief.strip(),
+            ref=ref.strip(),
+            group=group.strip(),
+            effective_date=effective_date.strip(),
+            drafter=_drafter(),
+        )
+    summary = _draft_summary(result)
+    detail = policy_assistant.load_draft(result["draft_id"]) or {}
+    summary["origin"] = "ai"
+    summary["new_numbers"] = (detail.get("ai") or {}).get("new_numbers", [])
+    # 用量：页面显示"这份草稿花了几次调用"，与报告的成本口径一致
+    summary["llm"] = usage.to_dict()
+    return summary
 
 
 @router.get("/drafts/{draft_id}")

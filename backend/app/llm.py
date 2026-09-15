@@ -17,13 +17,19 @@ def get_chat_model(
     model: str | None = None,
     temperature: float | None = None,
     enable_thinking: bool | None = None,
+    timeout: float | None = None,
 ) -> ChatOpenAI:
-    """硅基流动 DeepSeek chat 模型。抽取消掉 thinking 以控制时延/成本。"""
+    """硅基流动 DeepSeek chat 模型。抽取消掉 thinking 以控制时延/成本。
+
+    timeout=None 沿用 SDK 默认（不设上限）——长调用（如政策起草）要显式传超时，
+    否则一次卡住的连接会把调用方一起拖住。
+    """
     return ChatOpenAI(
         model=model or settings.chat_model,
         temperature=settings.chat_temperature if temperature is None else temperature,
         api_key=SecretStr(settings.siliconflow_api_key),
         base_url=settings.siliconflow_base_url,
+        timeout=timeout,
         extra_body={
             "enable_thinking": (
                 settings.chat_enable_thinking

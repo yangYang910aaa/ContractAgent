@@ -27,6 +27,7 @@ _ACTIVE: ContextVar["Usage | None"] = ContextVar("llm_usage", default=None)
 # 阶段名常量：与计数处一致，报告与输出文件里按这两个键分组
 STAGE_EXTRACT = "extract"  # 结构化抽取（双读时同一阶段计两次）
 STAGE_REVIEW = "review"  # 双审盲审复核
+STAGE_DRAFT = "draft"  # 政策起草（模型按体例写条文，一次一份）
 
 
 @dataclass

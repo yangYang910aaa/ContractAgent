@@ -4,19 +4,25 @@
 -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { createPolicyDraft, getPolicyDraft, getPolicyLibrary } from '../api'
+import { createAiPolicyDraft, createPolicyDraft, getPolicyDraft, getPolicyLibrary } from '../api'
 import { missingMetaText } from '../labels'
 import type { PolicyDraftDetail, PolicyDraftSummary, PolicyLibrary, PublishResult } from '../types'
+import AiNotesPane from '../components/policy/AiNotesPane.vue'
 import ConflictPane from '../components/policy/ConflictPane.vue'
 import OverlapPane from '../components/policy/OverlapPane.vue'
 import PublishCard from '../components/policy/PublishCard.vue'
 import TextPane from '../components/policy/TextPane.vue'
 
-// 两种输入方式：文件走解析器（含 pdf/docx），粘贴用于从别处抄来的条文
-const mode = ref<'file' | 'paste'>('file')
+// 三种输入方式：文件走解析器（含 pdf/docx）、粘贴用于抄来的条文、模型起草按需求写条文
+const mode = ref<'file' | 'paste' | 'ai'>('file')
 const picked = ref<File | null>(null)
 const pastedName = ref('')
 const pastedText = ref('')
+// 模型起草的输入：编号 + 需求（归口与生效日期可选，填了就不用事后补）
+const aiRef = ref('')
+const aiBrief = ref('')
+const aiGroup = ref('')
+const aiDate = ref('')
 const busy = ref(false)
 const error = ref('')
 const summary = ref<PolicyDraftSummary | null>(null)
@@ -24,8 +30,15 @@ const detail = ref<PolicyDraftDetail | null>(null)
 const library = ref<PolicyLibrary | null>(null) // 政策库现状（版本 + 份数），入库后刷新
 
 const canSubmit = computed(() =>
-  mode.value === 'file' ? Boolean(picked.value) : Boolean(pastedText.value.trim()),
+  mode.value === 'file'
+    ? Boolean(picked.value)
+    : mode.value === 'paste'
+      ? Boolean(pastedText.value.trim())
+      : Boolean(aiRef.value.trim() && aiBrief.value.trim()),
 )
+
+// 起稿按钮文案：模型起草要花钱，写清花费比"开始起稿"更实在
+const submitLabel = computed(() => (mode.value === 'ai' ? '让模型起草（1 次调用）' : '开始起稿'))
 
 /** 取政策库现状：纯读盘，用来给页面标"依据的是哪一版语料"。 */
 async function loadLibrary() {
@@ -60,10 +73,7 @@ async function runDraft() {
   summary.value = null
   detail.value = null
   try {
-    const created =
-      mode.value === 'file'
-        ? await createPolicyDraft({ file: picked.value! })
-        : await createPolicyDraft({ text: pastedText.value, name: pastedName.value })
+    const created = await startDraft()
     summary.value = created
     detail.value = await getPolicyDraft(created.draft_id)
   } catch (err) {
@@ -73,11 +83,27 @@ async function runDraft() {
   }
 }
 
+/** 按当前输入方式起稿：文件 / 粘贴 / 模型起草。 */
+async function startDraft(): Promise<PolicyDraftSummary> {
+  if (mode.value === 'file') return createPolicyDraft({ file: picked.value! })
+  if (mode.value === 'paste') return createPolicyDraft({ text: pastedText.value, name: pastedName.value })
+  return createAiPolicyDraft({
+    brief: aiBrief.value,
+    ref: aiRef.value.trim(),
+    group: aiGroup.value,
+    effective_date: aiDate.value,
+  })
+}
+
 /** 清空输入与结果，接着起下一份草稿。 */
 function reset() {
   picked.value = null
   pastedName.value = ''
   pastedText.value = ''
+  aiRef.value = ''
+  aiBrief.value = ''
+  aiGroup.value = ''
+  aiDate.value = ''
   summary.value = null
   detail.value = null
   error.value = ''
@@ -106,6 +132,9 @@ function reset() {
         <button type="button" :class="{ on: mode === 'paste' }" :disabled="busy" @click="mode = 'paste'">
           粘贴文本
         </button>
+        <button type="button" :class="{ on: mode === 'ai' }" :disabled="busy" @click="mode = 'ai'">
+          让模型起草
+        </button>
       </div>
       <p class="tip muted">
         放进来的是<b>政策正文</b>（新政策稿、Word/PDF 政策文本、一段条文都行），不是本页生成过的草稿文件；
@@ -118,7 +147,7 @@ function reset() {
         <span class="drop-sub mono-num">md / txt / pdf / docx · 图片型扫描件请先转成文本</span>
       </label>
 
-      <div v-else class="paste">
+      <div v-else-if="mode === 'paste'" class="paste">
         <input v-model="pastedName" class="name" type="text" placeholder="来源名（可留空，如 P-16_解除与善后.md）" />
         <textarea
           v-model="pastedText"
@@ -128,14 +157,31 @@ function reset() {
         ></textarea>
       </div>
 
+      <!-- 模型起草：给需求和编号，模型按体例写条文并配解释与要点 -->
+      <div v-else class="paste">
+        <div class="ai-line">
+          <input v-model="aiRef" class="name ref" type="text" placeholder="政策编号，如 P-16" />
+          <input v-model="aiGroup" class="name" type="text" placeholder="归口部门（可留空）" />
+          <input v-model="aiDate" class="name" type="text" placeholder="生效日期（可留空，如 2026年10月1日）" />
+        </div>
+        <textarea
+          v-model="aiBrief"
+          class="text"
+          rows="8"
+          placeholder="要起草什么：可以是一段需求（如「预付款要限制比例，且未提供担保时应更严」），也可以是已写好的半成品条文（模型会补全并保留你的表述）。&#10;数字请写清（比例/月数）：需求里没给的阈值，模型会写成「按公司制度确定」并标出来等你定。"
+        ></textarea>
+      </div>
+
       <div class="actions">
         <button class="btn btn-primary" type="button" :disabled="!canSubmit || busy" @click="runDraft">
-          {{ busy ? '起稿中（逐条检索现有政策）…' : '开始起稿' }}
+          {{ busy ? '处理中（模型起草或逐条检索现有政策）…' : submitLabel }}
         </button>
         <button v-if="summary || error" class="btn btn-ghost" type="button" :disabled="busy" @click="reset">
           清空
         </button>
-        <span class="hint muted">起稿只花检索的向量化调用，不改政策库</span>
+        <span class="hint muted">
+          {{ mode === 'ai' ? '模型起草会用 1 次 chat 调用；产出仍是草稿，入库要你确认' : '起稿只花检索的向量化调用，不改政策库' }}
+        </span>
       </div>
 
       <p v-if="error" class="err">{{ error }}</p>
@@ -144,6 +190,7 @@ function reset() {
     <!-- 概览：摘要先到，四块结果随后补全 -->
     <div v-if="summary" class="card pad brief">
       <div class="b-line">
+        <span v-if="summary.origin === 'ai'" class="stamp stamp-info">模型起草</span>
         <span class="b-ref mono-num">{{ summary.ref || '未编号' }}</span>
         <span class="b-title">{{ summary.title || summary.source }}</span>
       </div>
@@ -155,6 +202,9 @@ function reset() {
         <span class="fact">冲突 <b class="mono-num">{{ summary.conflicts.length }}</b></span>
       </div>
       <p v-if="summary.missing.length" class="miss">元信息待补：{{ missingMetaText(summary.missing) }}</p>
+      <p v-if="summary.llm" class="muted dir mono-num">
+        起草用量：{{ summary.llm.calls }} 次调用 · {{ summary.llm.seconds }} 秒
+      </p>
       <p class="muted dir mono-num">草稿目录：{{ summary.draft_id }}</p>
     </div>
 
@@ -176,6 +226,9 @@ function reset() {
           note="范围卡体例骨架，待定项与样本计划由人补全"
           :text="detail.checklist"
         />
+      </div>
+      <div v-if="detail.ai" class="full">
+        <AiNotesPane :ai="detail.ai" :new-numbers="detail.ai.new_numbers" />
       </div>
       <div class="full">
         <PublishCard
@@ -294,6 +347,15 @@ function reset() {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.ai-line {
+  display: flex;
+  gap: 8px;
+}
+
+.ai-line .ref {
+  max-width: 200px;
 }
 
 .name,
