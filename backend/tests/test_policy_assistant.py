@@ -113,3 +113,19 @@ def test_draft_dir_name_strips_draft_suffix(tmp_path: Path, monkeypatch) -> None
     source.write_text(_DRAFT, encoding="utf-8")
     result = policy_assistant.run_assist(source, retriever=_retriever({"其他": []}))
     assert re.fullmatch(r"P-29_\d{6}", result["draft_id"])
+
+
+def test_placeholder_meta_counts_as_missing() -> None:
+    """草稿里的「（待填）」不是真值：回读时按缺项处理，否则占位符会被当成填好的版本号。"""
+    parsed = policy_assistant.parse_policy("## 第一条 正文\n\n一句话。\n", source="P-29_示例政策.md")
+    again = policy_assistant.parse_policy(
+        policy_assistant.render_draft(parsed), source="P-29_示例政策.md"
+    )
+    assert again["ref"] == "P-29"  # 编号从来源名兜底
+    assert set(again["missing"]) == {"version", "effective_date", "owner", "scope"}
+
+
+def test_suggest_file_name_from_title() -> None:
+    """建议入库文件名 = 编号 + 标题冒号后的短名（语料文件名就是这个形态）。"""
+    parsed = policy_assistant.parse_policy(_DRAFT)
+    assert policy_assistant.suggest_file_name(parsed) == "P-29_示例政策.md"

@@ -272,6 +272,8 @@ export interface PolicyDraftDetail {
   source: string
   ref: string
   title: string
+  suggested_file: string // 建议的入库文件名（编号 + 标题短名）
+  applied: DraftApplied | null // 已入库记录（没入过库为 null）
   created_at: string // 起稿时间（本地时间字符串）
   parsed: PolicyParsed
   conflicts: PolicyConflict[]
@@ -279,4 +281,59 @@ export interface PolicyDraftDetail {
   draft: string // 规范化草稿（markdown 文本）
   checklist: string // 配套改动清单（markdown 文本）
   files: string[] // 草稿目录里的产物文件名
+}
+
+// ---- 政策入库（B2：会用真库，所以计划与执行分成两步）----
+
+/** 入库计划（confirm=false 时返回）：要写/要删几条、版本号怎么变、有没有硬冲突。 */
+export interface PublishPlan {
+  file_name: string
+  ref: string
+  exists: boolean // 目标文件已存在 → 这次是"更新那份政策"
+  write_units: number // 要写入（或重写）的检索单元数
+  delete_units: number // 要删掉的消失单元数
+  delete_sources: string[] // 被删单元来自哪些文件
+  missing: string[] // 缺哪些元信息（补齐或显式放行）
+  version: string // 当前政策库版本
+  next_version: string // 落盘后的政策库版本（预估）
+  blockers: PolicyConflict[] // 硬冲突：撞号、文件名不合法
+}
+
+/** 入库结果（confirm=true）：落盘并同步后的回执。 */
+export interface PublishResult {
+  applied: boolean
+  file_name: string
+  ref: string
+  updated: boolean // true=更新已有政策 / false=新增
+  written: number
+  removed: number
+  check_ok: boolean // 执行后核对是否一致
+  previous_version: string
+  version: string
+  units: number // 入库后语料单元总数
+}
+
+/** 草稿的入库记录（页面据此显示"已入库"徽标）。 */
+export interface DraftApplied {
+  file_name: string
+  version: string
+  updated: boolean
+  written: number
+  removed: number
+  at: string
+}
+
+/** 政策库现状（GET /api/policy/library）：版本 + 逐份清单，纯读盘。 */
+export interface PolicyLibrary {
+  version: string
+  files: number
+  units: number
+  documents: {
+    ref: string
+    source: string
+    title: string
+    version: string
+    effective_date: string
+    units: number
+  }[]
 }

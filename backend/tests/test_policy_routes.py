@@ -9,7 +9,8 @@ from fastapi.testclient import TestClient
 
 from backend.app import policy_assistant, routes_policy
 from backend.app.main import create_app
-from backend.app.policy_rag import POLICY_DIR, PolicyHit
+from backend.app.policy_corpus import corpus_units
+from backend.app.policy_rag import POLICY_DIR, MemoryStore, PolicyHit
 from backend.app.tasks import TaskManager
 
 _DRAFT_TEXT = """# 采购合同审核制度 · 细则 P-29：示例政策
@@ -27,6 +28,30 @@ _DRAFT_TEXT = """# 采购合同审核制度 · 细则 P-29：示例政策
 预付款合计不得超过合同总额的 40%。
 """
 
+_EXISTING_POLICY = """# 采购合同审核制度 · 细则 P-01：预付款比例
+
+文件编号：P-01　　版本：V1.0　　生效日期：2026年9月1日
+归口部门：集团采购管理中心
+适用范围：本集团对外签署的采购合同。
+
+## 第一条 预付款上限
+
+预付款合计不得超过合同总额的 30%。
+"""
+
+
+class _FakeEmbeddings:
+    """离线假向量：只要确定性与非零，够内存库算相似度即可。"""
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self.embed_query(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        vec = [0.0] * 8
+        for char in text or "空":
+            vec[ord(char) % 8] += 1.0
+        return vec
+
 
 def _retriever(query: str, k: int) -> list[PolicyHit]:
     """假检索器：预付款那条给高分（触发高度重叠），其余给低分。"""
@@ -37,12 +62,26 @@ def _retriever(query: str, k: int) -> list[PolicyHit]:
 
 
 @pytest.fixture()
-def client(tmp_path: Path, monkeypatch) -> TestClient:
-    """app：草稿目录指到临时路径、检索器换成假的——测试不连向量库、不花调用、不写真语料。"""
+def library(tmp_path: Path) -> tuple[Path, MemoryStore]:
+    """临时语料目录（含一份既有政策）+ 已按该目录灌好的内存库：入库接口的离线依赖。"""
+    policy_dir = tmp_path / "policies"
+    policy_dir.mkdir()
+    (policy_dir / "P-01_预付款比例.md").write_text(_EXISTING_POLICY, encoding="utf-8")
+    store = MemoryStore(embedding_model=_FakeEmbeddings())
+    store.add_docs(corpus_units(policy_dir=policy_dir))
+    return policy_dir, store
+
+
+@pytest.fixture()
+def client(tmp_path: Path, monkeypatch, library) -> TestClient:
+    """app：草稿目录/语料目录/检索库全指到临时与内存对象——不连向量库、不花调用、不写真语料。"""
     drafts = tmp_path / "_drafts"
+    policy_dir, store = library
     monkeypatch.setattr(policy_assistant, "DRAFTS_DIR", drafts)
     monkeypatch.setattr(policy_assistant, "_default_retriever", lambda: _retriever)
     monkeypatch.setattr(routes_policy, "INCOMING_DIR", drafts / "_incoming")
+    monkeypatch.setattr(routes_policy, "_policy_dir", lambda: policy_dir)
+    monkeypatch.setattr(routes_policy, "_publish_store", lambda: store)
     return TestClient(create_app(manager=TaskManager(worker=False)))
 
 
@@ -114,3 +153,63 @@ def test_draft_does_not_touch_policy_library(client: TestClient) -> None:
     before = sorted(path.name for path in POLICY_DIR.glob("*.md"))
     assert client.post("/api/policy/drafts", data={"text": _DRAFT_TEXT}).status_code == 200
     assert sorted(path.name for path in POLICY_DIR.glob("*.md")) == before
+
+
+def test_apply_previews_then_publishes(client: TestClient, library) -> None:
+    """入库两步：预览只算计划，确认后才落盘同步，页面随后能回看到已入库记录。"""
+    policy_dir, _store = library
+    draft_id = client.post(
+        "/api/policy/drafts", data={"text": _DRAFT_TEXT, "name": "P-29_示例政策.md"}
+    ).json()["draft_id"]
+    assert client.get(f"/api/policy/drafts/{draft_id}").json()["suggested_file"] == "P-29_示例政策.md"
+
+    preview = client.post(f"/api/policy/drafts/{draft_id}/apply", json={"confirm": False}).json()
+    plan = preview["plan"]
+    assert preview["applied"] is False
+    assert plan["file_name"] == "P-29_示例政策.md" and plan["blockers"] == [] and plan["missing"] == []
+    assert plan["write_units"] == 3 and plan["delete_units"] == 0 and plan["exists"] is False
+    assert not (policy_dir / plan["file_name"]).exists()  # 预览不落盘
+
+    done = client.post(f"/api/policy/drafts/{draft_id}/apply", json={"confirm": True}).json()
+    assert done["applied"] is True and done["written"] == 3 and done["check_ok"] is True
+    assert done["version"] == plan["next_version"] and done["version"] != done["previous_version"]
+    assert (policy_dir / plan["file_name"]).is_file()
+
+    # 回看：草稿记上了入库结果，政策库现状里多出这一份
+    assert client.get(f"/api/policy/drafts/{draft_id}").json()["applied"]["file_name"] == plan["file_name"]
+    status = client.get("/api/policy/library").json()
+    assert status["version"] == done["version"]
+    assert {doc["ref"] for doc in status["documents"]} == {"P-01", "P-29"}
+
+
+def test_apply_blocks_duplicate_ref_and_missing_meta(client: TestClient) -> None:
+    """撞号硬阻止；缺元信息默认阻止、显式放行才入库。"""
+    # 拿现有政策的正文起稿、却想用另一个文件名入库 → 编号撞号
+    dup = client.post("/api/policy/drafts", data={"text": _EXISTING_POLICY}).json()["draft_id"]
+    dup_resp = client.post(
+        f"/api/policy/drafts/{dup}/apply", json={"confirm": True, "file_name": "P-01_另一份.md"}
+    )
+    assert dup_resp.status_code == 400 and "编号重复" in dup_resp.json()["detail"]
+
+    thin = client.post(
+        "/api/policy/drafts",
+        data={
+            "text": "# 采购合同审核制度 · 细则 P-31：无元信息\n\n## 第一条 正文\n\n一句话。\n",
+            # 正文里没写「文件编号」→ 靠来源名认编号，元信息缺项仍应被拦下
+            "name": "P-31_无元信息.md",
+        },
+    ).json()["draft_id"]
+    blocked = client.post(f"/api/policy/drafts/{thin}/apply", json={"confirm": True})
+    assert blocked.status_code == 400 and "元信息缺失" in blocked.json()["detail"]
+    allowed = client.post(
+        f"/api/policy/drafts/{thin}/apply", json={"confirm": True, "allow_missing_meta": True}
+    )
+    assert allowed.status_code == 200 and allowed.json()["applied"] is True
+
+
+def test_apply_rejects_bad_file_name_and_unknown_draft(client: TestClient) -> None:
+    """文件名形态不对拦下；草稿不存在回 404。"""
+    draft_id = client.post("/api/policy/drafts", data={"text": _DRAFT_TEXT}).json()["draft_id"]
+    bad = client.post(f"/api/policy/drafts/{draft_id}/apply", json={"confirm": True, "file_name": "../x.md"})
+    assert bad.status_code == 400 and "文件名不合法" in bad.json()["detail"]
+    assert client.post("/api/policy/drafts/没有这份/apply", json={"confirm": True}).status_code == 404

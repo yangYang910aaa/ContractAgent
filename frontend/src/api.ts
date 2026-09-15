@@ -10,6 +10,9 @@ import type {
   ChatUsage,
   PolicyDraftDetail,
   PolicyDraftSummary,
+  PolicyLibrary,
+  PublishPlan,
+  PublishResult,
   SourceDoc,
   TaskDetail,
   TaskList,
@@ -242,4 +245,44 @@ export async function createPolicyDraft(input: {
 /** 草稿详情：草稿全文 / 重叠分级 / 冲突 / 配套清单（刷新页面后回看也用它）。 */
 export async function getPolicyDraft(draftId: string): Promise<PolicyDraftDetail> {
   return j(await fetch(`/api/policy/drafts/${encodeURIComponent(draftId)}`))
+}
+
+/** 入库入参：file_name 留空用建议名，content 留空用草稿原文。 */
+export interface PublishInput {
+  file_name?: string
+  content?: string
+  allow_missing_meta?: boolean
+}
+
+/** 入库预览：只算计划（要写/要删几条、版本号怎么变），不落盘、不改库。 */
+export async function planPolicyPublish(
+  draftId: string,
+  input: PublishInput,
+): Promise<{ applied: false; plan: PublishPlan }> {
+  return j(
+    await fetch(`/api/policy/drafts/${encodeURIComponent(draftId)}/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...input, confirm: false }),
+    }),
+  )
+}
+
+/** 确认入库：落盘 + 按单元同步进向量库（会改真库；核对不过后端会自动退回）。 */
+export async function publishPolicyDraft(
+  draftId: string,
+  input: PublishInput,
+): Promise<PublishResult> {
+  return j(
+    await fetch(`/api/policy/drafts/${encodeURIComponent(draftId)}/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...input, confirm: true }),
+    }),
+  )
+}
+
+/** 政策库现状：版本号 + 逐份清单（纯读盘，0 次模型调用）。 */
+export async function getPolicyLibrary(): Promise<PolicyLibrary> {
+  return j(await fetch('/api/policy/library'))
 }

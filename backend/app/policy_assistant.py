@@ -39,6 +39,8 @@ _ARTICLE_RE = re.compile(r"^#{1,4}\s*(第[一二三四五六七八九十百\d]+�
 # 阈值数字：百分比与月数（冲突检测只认这两类可核对的量）
 _PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[%％]")
 _MONTH_RE = re.compile(r"(\d+)\s*个月")
+# 缺项占位符：草稿里没填的元信息写作「（待填）」，它不是真值
+_PLACEHOLDER_RE = re.compile(r"^[（(\[\s]*待填")
 
 OVERLAP_HIGH = 0.80  # 余弦相似度 ≥ 此值 → 高度重叠（疑似重复或替代关系）
 OVERLAP_MEDIUM = 0.70  # ≥ 此值 → 中等重叠（值得并读确认）；以下只记录不提示
@@ -70,11 +72,11 @@ def parse_policy(text: str, source: str = "") -> dict:
     parsed = {
         "title": title,
         "source": source,
-        "ref": meta.get("文件编号", "") or _ref_from_name(source),
-        "version": meta.get("版本", ""),
-        "effective_date": meta.get("生效日期", ""),
-        "owner": meta.get("归口部门", ""),
-        "scope": re.sub(r"\s+", " ", scope_block.group(1)).strip() if scope_block else "",
+        "ref": _value(meta.get("文件编号", "")) or _ref_from_name(source),
+        "version": _value(meta.get("版本", "")),
+        "effective_date": _value(meta.get("生效日期", "")),
+        "owner": _value(meta.get("归口部门", "")),
+        "scope": _value(re.sub(r"\s+", " ", scope_block.group(1)).strip() if scope_block else ""),
         "articles": _split_articles(body),
     }
     parsed["missing"] = [
@@ -101,6 +103,17 @@ def render_draft(parsed: dict) -> str:
         heading = article["heading"] or f"第{index}条"
         lines.extend([f"## {heading}", "", article["body"].strip(), ""])
     return "\n".join(lines).rstrip() + "\n"
+
+
+def suggest_file_name(parsed: dict) -> str:
+    """建议的入库文件名：编号 + 标题里"："后的短名（语料文件名就是 `P-XX_短名.md` 这个形态）。"""
+    title = (parsed.get("title") or "").lstrip("# ").strip()
+    # 标题常写成「……细则 P-16：解除与善后」，取冒号后半截当短名；没有冒号就用整个标题
+    short = title.split("：")[-1].split(":")[-1].strip() or title
+    # 文件名要能直接落到 Windows 上：去掉路径与保留字符，过长的截断
+    short = re.sub(r"[\\/:*?\"<>|\s]+", "", short)[:30]
+    ref = parsed.get("ref") or ""
+    return f"{ref}_{short}.md" if ref and short else (f"{ref}.md" if ref else f"{short or '新政策'}.md")
 
 
 def find_overlaps(
@@ -239,6 +252,7 @@ def write_draft(text: str, source: str, retriever=None, out_dir: Path | None = N
                 "ref": parsed["ref"],
                 "title": parsed["title"],
                 "draft_file": draft.name,
+                "suggested_file": suggest_file_name(parsed),
                 "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "parsed": parsed,
                 "conflicts": conflicts,
@@ -273,7 +287,10 @@ def load_draft(draft_id: str) -> dict | None:
         "source": meta.get("source", ""),
         "ref": meta.get("ref", ""),
         "title": meta.get("title", ""),
+        # 老草稿没存建议名 → 按解析结果现算，页面一律拿得到
+        "suggested_file": meta.get("suggested_file") or suggest_file_name(meta.get("parsed") or {}),
         "created_at": meta.get("created_at", ""),
+        "applied": meta.get("applied"),  # 入库记录（没入过库为 None）
         "parsed": meta.get("parsed", {}),
         "conflicts": meta.get("conflicts", []),
         "overlaps": _read_json(directory / "overlaps.json", []),
@@ -282,6 +299,26 @@ def load_draft(draft_id: str) -> dict | None:
         "checklist": _read_text(directory / "checklist.md"),
         "files": sorted(item.name for item in directory.iterdir() if item.is_file()),
     }
+
+
+def mark_applied(draft_id: str, result: dict) -> None:
+    """在草稿的 meta 里记一笔入库结果：页面据此显示"已入库"徽标，也留下写入/删除条数备查。"""
+    directory = _draft_dir(draft_id)
+    if directory is None:
+        return
+    meta_file = directory / "meta.json"
+    if not meta_file.is_file():
+        return
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    meta["applied"] = {
+        "file_name": result.get("file_name", ""),
+        "version": result.get("version", ""),
+        "updated": bool(result.get("updated")),
+        "written": result.get("written", 0),
+        "removed": result.get("removed", 0),
+        "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _draft_dir(draft_id: str) -> Path | None:
@@ -341,6 +378,14 @@ def _ref_from_name(name: str) -> str:
     """文件名里的编号（P-XX）兜底，取不到返回空串。"""
     matched = re.match(r"(P-\d+)", name or "")
     return matched.group(1) if matched else ""
+
+
+def _value(raw: str) -> str:
+    """元信息取值：占位符「（待填）」不是真值，按空处理。
+
+    起稿产物里缺项就写着它，若不还原成空，回读时会把占位符当成填好的版本号/生效日期。
+    """
+    return "" if _PLACEHOLDER_RE.match(raw or "") else raw
 
 
 def _numbers(text: str) -> dict:

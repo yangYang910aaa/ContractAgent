@@ -3,12 +3,13 @@
   只起稿、不入库：本页不写政策库，产物落在草稿目录，入库仍由"批准入库"那一步单独做。
 -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { createPolicyDraft, getPolicyDraft } from '../api'
+import { computed, onMounted, ref } from 'vue'
+import { createPolicyDraft, getPolicyDraft, getPolicyLibrary } from '../api'
 import { missingMetaText } from '../labels'
-import type { PolicyDraftDetail, PolicyDraftSummary } from '../types'
+import type { PolicyDraftDetail, PolicyDraftSummary, PolicyLibrary, PublishResult } from '../types'
 import ConflictPane from '../components/policy/ConflictPane.vue'
 import OverlapPane from '../components/policy/OverlapPane.vue'
+import PublishCard from '../components/policy/PublishCard.vue'
 import TextPane from '../components/policy/TextPane.vue'
 
 // 两种输入方式：文件走解析器（含 pdf/docx），粘贴用于从别处抄来的条文
@@ -20,10 +21,29 @@ const busy = ref(false)
 const error = ref('')
 const summary = ref<PolicyDraftSummary | null>(null)
 const detail = ref<PolicyDraftDetail | null>(null)
+const library = ref<PolicyLibrary | null>(null) // 政策库现状（版本 + 份数），入库后刷新
 
 const canSubmit = computed(() =>
   mode.value === 'file' ? Boolean(picked.value) : Boolean(pastedText.value.trim()),
 )
+
+/** 取政策库现状：纯读盘，用来给页面标"依据的是哪一版语料"。 */
+async function loadLibrary() {
+  try {
+    library.value = await getPolicyLibrary()
+  } catch {
+    library.value = null // 拿不到就不显示这一行，不影响起稿与入库
+  }
+}
+
+onMounted(loadLibrary)
+
+/** 入库成功：回读草稿（拿到入库记录）并刷新政策库现状。 */
+async function onApplied(_result: PublishResult) {
+  if (!summary.value) return
+  detail.value = await getPolicyDraft(summary.value.draft_id)
+  await loadLibrary()
+}
 
 /** 选择文件：只留最新一份（起稿是逐份审的，堆一列反而要看错行）。 */
 function onPick(e: Event) {
@@ -71,6 +91,9 @@ function reset() {
       <p class="muted">
         上传或粘贴一份还没入库的政策正文，系统按现有体例重排出草稿、逐条比对现有政策库的重叠程度，
         并列出可核对的冲突与配套清单。<b>本页只起稿，不入库。</b>
+      </p>
+      <p v-if="library" class="lib mono-num">
+        政策库现状：{{ library.version }} · {{ library.files }} 份政策 / {{ library.units }} 个检索单元
       </p>
     </div>
 
@@ -154,6 +177,16 @@ function reset() {
           :text="detail.checklist"
         />
       </div>
+      <div class="full">
+        <PublishCard
+          :draft-id="detail.draft_id"
+          :suggested-file="detail.suggested_file"
+          :draft-text="detail.draft"
+          :missing="detail.parsed.missing"
+          :applied="detail.applied"
+          @applied="onApplied"
+        />
+      </div>
     </div>
   </section>
 </template>
@@ -174,6 +207,12 @@ function reset() {
   margin: 0 0 18px;
   font-size: 13px;
   line-height: 1.7;
+}
+
+.head .lib {
+  margin: -12px 0 16px;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .head b {

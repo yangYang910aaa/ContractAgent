@@ -10,9 +10,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 
-from backend.app import policy_assistant
+from backend.app import policy_assistant, policy_publish
 from backend.app.parser import extract_text
+from backend.app.policy_corpus import corpus_fingerprint
+from backend.app.policy_rag import POLICY_DIR, get_store
 
 router = APIRouter(prefix="/api/policy", tags=["policy"])
 
@@ -22,6 +25,25 @@ ALLOWED_SUFFIXES = {".md", ".txt", ".pdf", ".docx"}
 PASTED_NAME = "粘贴政策.md"
 # 上传原件暂存目录：解析完即删，草稿目录里只留起稿产物
 INCOMING_DIR = policy_assistant.DRAFTS_DIR / "_incoming"
+
+
+def _policy_dir() -> Path:
+    """语料目录：单独成函数，演练与测试可以指到副本目录。"""
+    return POLICY_DIR
+
+
+def _publish_store():
+    """入库用的检索库（Milvus 优先，连不上时内存兜底）：同样留出注入位置。"""
+    return get_store()
+
+
+class PublishIn(BaseModel):
+    """入库入参：confirm=false 只算计划；content 留空就用草稿原文。"""
+
+    file_name: str = Field(default="", description="入库文件名，如 P-16_解除与善后.md")
+    content: str = Field(default="", description="人工修订后的正文（留空则用草稿原文）")
+    confirm: bool = Field(default=False, description="false=只预览计划；true=落盘并同步入库")
+    allow_missing_meta: bool = Field(default=False, description="缺元信息时是否仍入库")
 
 
 def _overlap_counts(overlaps: list[dict]) -> dict:
@@ -99,3 +121,63 @@ def get_draft(draft_id: str) -> dict:
     if detail is None:
         raise HTTPException(status_code=404, detail="草稿不存在或已被清理")
     return detail
+
+
+@router.get("/library")
+def get_library() -> dict:
+    """当前政策库：版本号 + 逐份清单（只读盘，0 次模型调用）。"""
+    fingerprint = corpus_fingerprint(policy_dir=_policy_dir())
+    return {
+        "version": fingerprint["version"],
+        "files": fingerprint["files"],
+        "units": fingerprint["units"],
+        "documents": [
+            {
+                "ref": doc["ref"],
+                "source": doc["source"],
+                "title": doc["title"],
+                "version": doc["version"],
+                "effective_date": doc["effective_date"],
+                "units": doc["units"],
+            }
+            for doc in fingerprint["documents"]
+        ],
+    }
+
+
+@router.post("/drafts/{draft_id}/apply")
+def apply_draft(draft_id: str, payload: PublishIn) -> dict:
+    """入库：confirm=false 只算计划，confirm=true 落盘 + 按单元同步 + 执行后核对。
+
+    这是整页唯一会改真库的动作（改 data/policies/ 与向量库）；核对不过或中途报错会自动退回。
+    """
+    draft = policy_assistant.load_draft(draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="草稿不存在或已被清理")
+    # 分支：调用方没给正文 → 用在页面上过的那份草稿（含按体例重排的结果）
+    content = payload.content.strip() or draft["draft"]
+    file_name = payload.file_name.strip() or draft.get("suggested_file", "")
+    # 分支：预览 → 只返回计划，落盘与库都不动
+    if not payload.confirm:
+        try:
+            plan = policy_publish.plan_publish(
+                content, file_name, policy_dir=_policy_dir(), store=_publish_store()
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=503, detail=f"读不到检索库，无法核算入库改动：{exc}") from exc
+        return {"applied": False, "plan": plan}
+
+    try:
+        result = policy_publish.publish(
+            content,
+            file_name,
+            policy_dir=_policy_dir(),
+            store=_publish_store(),
+            allow_missing_meta=payload.allow_missing_meta,
+        )
+    except policy_publish.PublishBlocked as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    policy_assistant.mark_applied(draft_id, result)  # 给这份草稿记上"已入库"
+    return result
