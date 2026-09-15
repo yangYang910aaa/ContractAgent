@@ -63,7 +63,8 @@ def citation_from(item: Any) -> Citation | None:
     """工具返回记录里的单条 → 引用；认不出形态（没有编号）时返回 None。
 
     政策检索工具走框架的 create_retriever_tool，返回的是 Document（编号在 metadata）；
-    自写工具按下面的 dict 约定返回。
+    自写工具按下面的 dict 约定返回。检查点回读时 Document 已序列化成普通 dict
+    （page_content + metadata 两个键），按同一套字段认，否则刷新页面后检索来的芯片会丢。
     """
     # 分支：检索命中的 Document → 编号/来源取 metadata
     if isinstance(item, Document):
@@ -76,6 +77,19 @@ def citation_from(item: Any) -> Citation | None:
             title=str(item.metadata.get("title") or ""),
             text=clip_text(item.page_content),
             source=str(item.metadata.get("source") or ""),
+        )
+    # 分支：序列化后的 Document（从检查点读回来的形态）→ 字段仍在 metadata 里
+    if isinstance(item, dict) and "page_content" in item:
+        meta = item.get("metadata") or {}
+        ref = str(meta.get("policy_ref") or "")
+        if not ref:
+            return None
+        return Citation(
+            kind="policy",
+            ref=ref,
+            title=str(meta.get("title") or ""),
+            text=clip_text(str(item.get("page_content") or "")),
+            source=str(meta.get("source") or ""),
         )
     # 分支：自写工具返回的引用 dict
     if isinstance(item, dict):

@@ -27,11 +27,16 @@ def chat_config(thread_id: str, session_id: str) -> dict:
     return {"configurable": {"thread_id": chat_session_key(thread_id, session_id)}, "recursion_limit": 30}
 
 
-def history_turns(messages: Sequence[BaseMessage] | None, declared_refs: Iterable[str] = ()) -> list[dict]:
+def history_turns(
+    messages: Sequence[BaseMessage] | None,
+    declared_refs: Iterable[str] = (),
+    declared_hits: dict[str, dict] | None = None,
+) -> list[dict]:
     """检查点里的消息 → 面板气泡用的轮次列表（提问 + 回答 + 引用）。
 
     引用按这一轮里工具返回过的记录现算，与当时页面上的芯片一致——不另存一份引用，
-    省掉"存的与显示的不一致"这种漂移。没有回答的轮次（比如中途失败）也保留提问。
+    省掉"存的与显示的不一致"这种漂移；报告里本来就有的依据也要一起传进来，否则
+    当时靠报告原文补的那条芯片（origin=report）回读时会不见。没有回答的轮次也保留提问。
     """
     turns: list[dict] = []
     tools: list[ToolMessage] = []  # 当前这一轮的工具返回记录
@@ -39,7 +44,9 @@ def history_turns(messages: Sequence[BaseMessage] | None, declared_refs: Iterabl
         # 分支：新的提问 → 先给上一轮结算引用，再开一轮
         if isinstance(message, HumanMessage):
             if turns:
-                turns[-1].update(summarize_citations(tools, turns[-1]["answer"], declared_refs))
+                turns[-1].update(
+                    summarize_citations(tools, turns[-1]["answer"], declared_refs, declared_hits)
+                )
             turns.append({"question": message_text(message.content), "answer": "", "citations": [], "unverified": []})
             tools = []
             continue
@@ -54,5 +61,5 @@ def history_turns(messages: Sequence[BaseMessage] | None, declared_refs: Iterabl
             if text.strip():
                 turns[-1]["answer"] = text
     if turns:
-        turns[-1].update(summarize_citations(tools, turns[-1]["answer"], declared_refs))
+        turns[-1].update(summarize_citations(tools, turns[-1]["answer"], declared_refs, declared_hits))
     return turns

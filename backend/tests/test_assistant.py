@@ -25,6 +25,7 @@ from backend.app.assistant import (
     collect_citations,
     context_brief,
     final_answer,
+    history_turns,
     mentioned_policy_refs,
     policy_directory,
     summarize_citations,
@@ -298,6 +299,44 @@ def test_collect_citations_skips_unknown_artifact_shape_and_clips_text() -> None
     citations = collect_citations(messages)
     assert len(citations) == 1 and citations[0].ref == "P-14"
     assert len(citations[0].text) < 3000 and citations[0].text.endswith("…")
+
+
+def test_collect_citations_accepts_serialized_document() -> None:
+    """从检查点读回来的检索命中是普通 dict（page_content + metadata），照样要成芯片。"""
+    serialized = {
+        "id": "doc-1",
+        "type": "Document",
+        "page_content": "## 第三条 按日计罚的累计上限\n日费率明显偏高的应加累计上限。",
+        "metadata": {"policy_ref": "p-14", "title": "第三条 按日计罚的累计上限", "source": "P-14_x.md"},
+    }
+    citations = collect_citations([_tool_message("[P-14]…", artifact=[serialized])])
+    assert [(c.kind, c.ref) for c in citations] == [("policy", "p-14")]
+    assert citations[0].title == "第三条 按日计罚的累计上限"
+    assert citations[0].source == "P-14_x.md"
+
+
+def test_history_turns_keeps_tool_and_report_chips_after_reload() -> None:
+    """回读历史要与现场同口径：检索来的芯片、报告补的芯片都在，依据不被判成"未检索到"。
+
+    消息在检查点里是序列化过的（检索命中已成普通 dict、报告依据根本不在消息里），
+    按现场口径重算才不会出现"回答写着依据、引用栏却空着"。
+    """
+    context = build_context(_record(report=_report()))
+    serialized = {
+        "id": "doc-1",
+        "type": "Document",
+        "page_content": "违约金累计上限与赔偿责任上限不应相互倒挂。",
+        "metadata": {"policy_ref": "P-14", "title": "第四条 与其他责任条款的衔接", "source": "P-14_x.md"},
+    }
+    messages = [
+        HumanMessage("这份合同为什么判不通过？"),
+        _tool_message("[P-14]…", artifact=[serialized]),
+        AIMessage("依据 P-14 与 P-01，两条都判高风险。"),
+    ]
+    turns = history_turns(messages, context.declared_refs, context.declared_hits)
+    assert turns[0]["question"] == "这份合同为什么判不通过？"
+    assert [(c["ref"], c["origin"]) for c in turns[0]["citations"]] == [("P-14", "tool"), ("P-01", "report")]
+    assert turns[0]["unverified"] == []
 
 
 def test_collect_citations_caps_the_chip_list() -> None:

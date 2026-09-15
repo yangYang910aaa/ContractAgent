@@ -546,7 +546,7 @@ def chat_history(
     return {
         "thread_id": thread_id,
         "session_id": session_id,
-        "turns": assistant.history_turns(messages, context.declared_refs),
+        "turns": assistant.history_turns(messages, context.declared_refs, context.declared_hits),
     }
 
 
