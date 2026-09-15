@@ -1,22 +1,24 @@
 <!--
-  应用外壳：顶栏导航（上传审查 / 任务队列）+ 三视图切换。
-  用 state 切换而非 vue-router：只有 3 个页面，引入路由依赖不值当；
-  支持 ?view=upload|queue|task&thread=xxx 直达（演示/截图/书签用，非路由）。
+  应用外壳：顶栏导航（上传审查 / 任务队列 / 政策库）+ 四视图切换。
+  用 state 切换而非 vue-router：页面就这几个，引入路由依赖不值当；
+  支持 ?view=upload|queue|task|policy&thread=xxx 直达（演示/截图/书签用，非路由）。
   C 方向换皮：顶栏白底靛蓝品牌标，导航"当前页"用靛蓝浅底胶囊。
 -->
 <script setup lang="ts">
 import { ref } from 'vue'
+import PolicyView from './views/PolicyView.vue'
 import UploadView from './views/UploadView.vue'
 import QueueView from './views/QueueView.vue'
 import TaskView from './views/TaskView.vue'
 
-type View = 'upload' | 'queue' | 'task'
+type View = 'upload' | 'queue' | 'task' | 'policy'
 
 // 直达参数：?view=queue / ?view=task&thread=<id>；非法或缺 thread 时回落默认
 const params = new URLSearchParams(location.search)
 const viewParam = params.get('view')
 const threadParam = params.get('thread') ?? ''
-const view = ref<View>(viewParam === 'queue' || viewParam === 'task' || viewParam === 'upload' ? viewParam : 'upload')
+const views: View[] = ['upload', 'queue', 'task', 'policy']
+const view = ref<View>(views.includes(viewParam as View) ? (viewParam as View) : 'upload')
 const activeThread = ref(threadParam) // 任务详情视图当前展示的任务号
 if (view.value === 'task' && !activeThread.value) view.value = 'queue'
 
@@ -62,6 +64,10 @@ function go(viewName: View) {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"></path></svg>
           任务队列
         </button>
+        <button :class="{ on: view === 'policy' }" @click="go('policy')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 4.5h9l5 5V19a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19V6A1.5 1.5 0 0 1 5 4.5z"></path><path d="M13.6 4.6v5h5"></path><path d="M7.4 13.6h7M7.4 17h4.4"></path></svg>
+          政策库
+        </button>
       </nav>
     </header>
 
@@ -70,6 +76,7 @@ function go(viewName: View) {
       <UploadView v-if="view === 'upload'" @open="openTask" @go-queue="go('queue')" />
       <QueueView v-else-if="view === 'queue'" @open="openTask" />
       <TaskView v-else-if="view === 'task'" :thread-id="activeThread" @back="go('queue')" />
+      <PolicyView v-else-if="view === 'policy'" />
     </main>
 
     <!-- 页脚：演示合规免责 -->

@@ -21,6 +21,7 @@ from backend.app import llm
 from backend.app.config import settings
 from backend.app.graph import ReviewRunner
 from backend.app.policy_corpus import report_policy_library
+from backend.app.routes_policy import router as policy_router
 from backend.app.routes_tasks import router as tasks_router
 from backend.app.store_pg import PgPersistence
 from backend.app.tasks import TaskManager
@@ -70,6 +71,8 @@ def create_app(manager: TaskManager | None = None) -> FastAPI:
         manager, app.state.persistence = _build_default_manager()
     app.state.manager = manager
     app.include_router(tasks_router)
+    # 政策库起稿页：只读起稿（不写库），独立路由文件
+    app.include_router(policy_router)
 
     @app.get("/")
     def root() -> dict:

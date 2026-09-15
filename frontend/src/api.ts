@@ -4,7 +4,16 @@
  * 约定：非 2xx 统一抛 Error(detail)，页面 catch 后展示即可。
  */
 
-import type { ChatCitation, ChatTurn, ChatUsage, SourceDoc, TaskDetail, TaskList } from './types'
+import type {
+  ChatCitation,
+  ChatTurn,
+  ChatUsage,
+  PolicyDraftDetail,
+  PolicyDraftSummary,
+  SourceDoc,
+  TaskDetail,
+  TaskList,
+} from './types'
 
 /** 解包响应：失败时优先取后端的 detail 文案（FastAPI HTTPException）。 */
 async function j<T>(resp: Response): Promise<T> {
@@ -213,4 +222,24 @@ export async function clearChat(
       { method: 'DELETE' },
     ),
   )
+}
+
+// ---- 政策库起稿（只读起稿：不写政策库，产物落草稿目录）----
+
+/** 起稿：文件与粘贴正文二选一；返回摘要与 draft_id。 */
+export async function createPolicyDraft(input: {
+  file?: File
+  text?: string
+  name?: string
+}): Promise<PolicyDraftSummary> {
+  const form = new FormData()
+  if (input.file) form.append('file', input.file)
+  if (input.text) form.append('text', input.text)
+  if (input.name) form.append('name', input.name)
+  return j(await fetch('/api/policy/drafts', { method: 'POST', body: form }))
+}
+
+/** 草稿详情：草稿全文 / 重叠分级 / 冲突 / 配套清单（刷新页面后回看也用它）。 */
+export async function getPolicyDraft(draftId: string): Promise<PolicyDraftDetail> {
+  return j(await fetch(`/api/policy/drafts/${encodeURIComponent(draftId)}`))
 }

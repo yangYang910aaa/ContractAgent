@@ -6,6 +6,8 @@
 - 冲突提示：编号撞号、元信息缺失、同主题阈值数字不一致这类**可核对**的矛盾单列。
 另附一份配套改动清单骨架（范围卡体例：风险类型候选/规则待定项/样本/金标/验收）。
 
+产物落 `data/policies/_drafts/<来源名>_<时分秒>/`，另写一份 meta.json 存解析结果与冲突条目
+（清单里是人类可读的句子，回读要的是原始条目）。这里只起稿，入库仍走 `policy_admin --sync`。
 """
 
 from __future__ import annotations
@@ -120,7 +122,7 @@ def find_overlaps(
                 "policy_ref": hit.policy_ref,
                 "source": hit.source,
                 "score": round(float(hit.score), 3),
-                "text_head": re.sub(r"\s+", "", hit.text)[:60],
+                "text_head": _head(hit.text),
                 # 数字随命中一起带上：冲突检测要比的是条文里的阈值，不是标题
                 "numbers": _numbers(hit.text),
             }
@@ -208,14 +210,19 @@ def build_checklist(parsed: dict, overlaps: list[dict], conflicts: list[dict]) -
 
 
 def run_assist(path: str | Path, retriever=None, out_dir: Path | None = None) -> dict:
-    """跑一遍起稿流程：解析 → 重叠 → 冲突 → 落三份草稿，返回产物路径与摘要。"""
+    """按文件跑一遍起稿流程：读取 → 起稿落盘，返回产物路径与摘要。"""
     source = Path(path)
-    parsed = parse_policy(extract_text(source), source=source.name)
+    return write_draft(extract_text(source), source=source.name, retriever=retriever, out_dir=out_dir)
+
+
+def write_draft(text: str, source: str, retriever=None, out_dir: Path | None = None) -> dict:
+    """按一段政策正文起稿并落盘：解析 → 重叠 → 冲突 → 草稿/重叠记录/清单/meta。"""
+    parsed = parse_policy(text, source=source)
     overlaps = find_overlaps(parsed, retriever=retriever)
     conflicts = detect_conflicts(parsed, overlaps)
-    target = out_dir or DRAFTS_DIR / f"{source.stem}_{datetime.now().strftime('%H%M%S')}"
+    target = out_dir or _unique_draft_dir(source)
     target.mkdir(parents=True, exist_ok=True)
-    draft = target / f"{parsed['ref'] or source.stem}_draft.md"
+    draft = target / f"{parsed['ref'] or Path(source).stem or 'draft'}_draft.md"
     draft.write_text(render_draft(parsed), encoding="utf-8")
     (target / "overlaps.json").write_text(
         json.dumps(overlaps, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -223,13 +230,96 @@ def run_assist(path: str | Path, retriever=None, out_dir: Path | None = None) ->
     (target / "checklist.md").write_text(
         build_checklist(parsed, overlaps, conflicts), encoding="utf-8"
     )
+    # 回读靠 meta：草稿文件名可能随编号变化，冲突条目也只在这里留原始形态
+    (target / "meta.json").write_text(
+        json.dumps(
+            {
+                "draft_id": target.name,
+                "source": source,
+                "ref": parsed["ref"],
+                "title": parsed["title"],
+                "draft_file": draft.name,
+                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "parsed": parsed,
+                "conflicts": conflicts,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     return {
+        "draft_id": target.name,
         "parsed": parsed,
         "overlaps": overlaps,
         "conflicts": conflicts,
         "out_dir": target,
         "draft": draft,
     }
+
+
+def load_draft(draft_id: str) -> dict | None:
+    """回读一份草稿的全部产物；目录名不合法、不是草稿目录或 meta 缺失时返回 None。"""
+    directory = _draft_dir(draft_id)
+    if directory is None:
+        return None
+    meta_file = directory / "meta.json"
+    # 这种情况是：目录在但不是起稿产物（meta 缺失）→ 当作不存在
+    if not meta_file.is_file():
+        return None
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    return {
+        "draft_id": meta.get("draft_id") or draft_id,
+        "source": meta.get("source", ""),
+        "ref": meta.get("ref", ""),
+        "title": meta.get("title", ""),
+        "created_at": meta.get("created_at", ""),
+        "parsed": meta.get("parsed", {}),
+        "conflicts": meta.get("conflicts", []),
+        "overlaps": _read_json(directory / "overlaps.json", []),
+        # 文件名按 name 取：meta 是本地产物，仍不当可信路径用
+        "draft": _read_text(directory / Path(str(meta.get("draft_file") or "")).name),
+        "checklist": _read_text(directory / "checklist.md"),
+        "files": sorted(item.name for item in directory.iterdir() if item.is_file()),
+    }
+
+
+def _draft_dir(draft_id: str) -> Path | None:
+    """草稿目录（防路径穿越）：只认 DRAFTS_DIR 下的单层目录名。"""
+    # 这种情况是：传了空串/相对路径/多级路径 → 一律不认
+    if not draft_id or draft_id in {".", ".."} or draft_id != Path(draft_id).name:
+        return None
+    target = DRAFTS_DIR / draft_id
+    return target if target.is_dir() else None
+
+
+def _unique_draft_dir(source: str) -> Path:
+    """草稿目录名：来源名 + 时分秒；同一秒内重复起稿时加序号，避免互相覆盖。"""
+    # 来源名以 draft 结尾说明喂进来的是上一次的产物：目录名再带一遍 _draft 只会更难认
+    stem = re.sub(r"[_\-\s]?draft$", "", Path(source).stem, flags=re.IGNORECASE) or "draft"
+    base = f"{stem}_{datetime.now().strftime('%H%M%S')}"
+    target = DRAFTS_DIR / base
+    index = 1
+    while target.exists():
+        target = DRAFTS_DIR / f"{base}-{index}"
+        index += 1
+    return target
+
+
+def _read_json(path: Path, fallback):
+    """读一个 JSON 产物；缺失或解析失败时返回兜底值（回读不因半截文件报错）。"""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return fallback
+
+
+def _read_text(path: Path) -> str:
+    """读一个文本产物；缺失时返回空串。"""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 def _split_articles(text: str) -> list[dict]:
@@ -259,6 +349,11 @@ def _numbers(text: str) -> dict:
         "percent": sorted(set(_PERCENT_RE.findall(text or ""))),
         "months": sorted(set(_MONTH_RE.findall(text or ""))),
     }
+
+
+def _head(text: str) -> str:
+    """命中条文的一行预览：去掉折行与标题符号，面板上不该出现 markdown 记号。"""
+    return re.sub(r"[\s#]+", "", text or "")[:60]
 
 
 def _existing_refs(policy_dir: Path | None = None) -> set[str]:

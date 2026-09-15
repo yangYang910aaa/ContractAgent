@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from backend.app import policy_assistant
@@ -90,8 +91,8 @@ def test_conflicts_flag_threshold_mismatch() -> None:
     assert any("阈值不一致" in item["kind"] and "40" in item["detail"] for item in conflicts)
 
 
-def test_run_assist_writes_three_artifacts(tmp_path: Path) -> None:
-    """跑一遍起稿：草稿、重叠记录、配套清单三份产物落盘，清单里带政策库版本。"""
+def test_run_assist_writes_artifacts(tmp_path: Path) -> None:
+    """跑一遍起稿：草稿、重叠记录、配套清单（另加回读用的 meta）落盘，清单里带政策库版本。"""
     source = tmp_path / "P-29_示例政策.md"
     source.write_text(_DRAFT, encoding="utf-8")
     result = policy_assistant.run_assist(
@@ -103,3 +104,12 @@ def test_run_assist_writes_three_artifacts(tmp_path: Path) -> None:
     assert "政策库当前版本：PL-" in checklist
     assert result["draft"].is_file()
     assert result["parsed"]["ref"] == "P-29"
+
+
+def test_draft_dir_name_strips_draft_suffix(tmp_path: Path, monkeypatch) -> None:
+    """来源名以 _draft 结尾（把上一次的产物再喂回来）时，目录名不再重复带 _draft。"""
+    monkeypatch.setattr(policy_assistant, "DRAFTS_DIR", tmp_path / "drafts")
+    source = tmp_path / "P-29_draft.md"
+    source.write_text(_DRAFT, encoding="utf-8")
+    result = policy_assistant.run_assist(source, retriever=_retriever({"其他": []}))
+    assert re.fullmatch(r"P-29_\d{6}", result["draft_id"])

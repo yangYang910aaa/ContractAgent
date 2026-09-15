@@ -19,6 +19,8 @@ frontend/dist/
 backend/eval/output/
 data/uploads/
 data/ocr_cache/
+# 政策起稿产物（草稿/重叠记录/清单，本地留存，入库仍走政策库同步）
+data/policies/_drafts/
 
 # 素材目录（用户收集：官方示范文本原件 / 评测变体 / 真实合同 / OCR 文本）：
 # 合规红线，一律不入库不上传（2026-09-09，2026-09-11 合并为 data/素材/）
@@ -41,6 +43,6 @@ Thumbs.db
 # 日志
 *.log
 
-# 文档约定（用户 2026-09-03）：除根目录 README.md 外，其余 .md 一律不入库
+# 文档约定
 *.md
 !/README.md

@@ -188,3 +188,33 @@ export function gradeDisplay(grade: string | null | undefined, template = false)
   if (template && grade === 'conditional_pass') return '待确认'
   return GRADE_TEXT[grade ?? ''] ?? grade ?? '—'
 }
+
+// ---- 政策库起稿页：重叠分级与缺项展示 ----
+
+/** 重叠等级 → 中文（口径见 backend/app/policy_assistant.py 的两个阈值常量）。 */
+export const OVERLAP_TEXT: Record<string, string> = {
+  high: '高度重叠',
+  medium: '中等重叠',
+  low: '低重叠',
+}
+
+/** 重叠等级 → 印章样式类（复用风险等级那套 .stamp-* 颜色）。 */
+export const OVERLAP_CLASS: Record<string, string> = {
+  high: 'stamp-seal',
+  medium: 'stamp-warn',
+  low: 'stamp-mute',
+}
+
+/** 元信息字段 key → 中文（起稿缺项提示用，键名与后端 parse_policy 对齐）。 */
+export const POLICY_META_LABELS: Record<string, string> = {
+  ref: '文件编号',
+  version: '版本',
+  effective_date: '生效日期',
+  owner: '归口部门',
+  scope: '适用范围',
+}
+
+/** 缺项列表 → 中文文案（如 "版本、生效日期"）。 */
+export function missingMetaText(missing: string[] | undefined | null): string {
+  return (missing ?? []).map((key) => POLICY_META_LABELS[key] ?? key).join('、')
+}

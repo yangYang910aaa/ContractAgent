@@ -212,3 +212,71 @@ export interface ChatUsage {
   seconds: number
   tokens?: number
 }
+
+// ---- 政策库起稿（只读起稿页；与 backend/app/policy_assistant.py、routes_policy.py 对齐）----
+
+/** 重叠分级：high=余弦分≥0.80（疑似重复或替代）/ medium=≥0.70（值得并读）/ low=其余。 */
+export type OverlapLevel = 'high' | 'medium' | 'low'
+
+/** 一条可核对的冲突：编号撞号 / 元信息缺失 / 同主题阈值数字不一致。 */
+export interface PolicyConflict {
+  kind: string // 冲突类型（后端给的短标签，直接展示）
+  detail: string // 说明：撞了哪个号、缺哪项、两个数字各是多少
+}
+
+/** 重叠记录里的一条命中：命中的既有条文与它的余弦分。 */
+export interface PolicyOverlapHit {
+  policy_ref: string // 命中的政策编号（如 P-01）
+  source: string // 命中的政策文件名
+  score: number // 余弦相似度（0~1）
+  text_head: string // 命中条文开头（去掉空白，截 60 字）
+  numbers: { percent: string[]; months: string[] } // 命中条文里的百分比与月数
+}
+
+/** 逐条重叠分级：新政策的一条条文 vs 现有政策库。 */
+export interface PolicyOverlapItem {
+  article: string // 新政策的条文头（无标题时为"(无标题)"）
+  level: OverlapLevel
+  numbers: { percent: string[]; months: string[] } // 这条新条文里的百分比与月数
+  hits: PolicyOverlapHit[] // 命中的既有条文（按相似度降序）
+}
+
+/** 起稿解析结果：元信息 + 条文逐条（缺项列在 missing 里）。 */
+export interface PolicyParsed {
+  title: string
+  source: string
+  ref: string // 政策编号
+  version: string
+  effective_date: string
+  owner: string // 归口部门
+  scope: string // 适用范围
+  articles: { heading: string; body: string }[]
+  missing: string[] // 缺哪些元信息（入库前要补齐）
+}
+
+/** 起稿摘要（POST /api/policy/drafts）：够页面先出概览，详情再取一次。 */
+export interface PolicyDraftSummary {
+  draft_id: string
+  source: string
+  ref: string
+  title: string
+  articles: number // 条文数
+  missing: string[]
+  overlap: { high: number; medium: number; low: number }
+  conflicts: PolicyConflict[]
+}
+
+/** 草稿详情（GET /api/policy/drafts/{id}）：草稿全文 + 重叠 + 冲突 + 配套清单。 */
+export interface PolicyDraftDetail {
+  draft_id: string
+  source: string
+  ref: string
+  title: string
+  created_at: string // 起稿时间（本地时间字符串）
+  parsed: PolicyParsed
+  conflicts: PolicyConflict[]
+  overlaps: PolicyOverlapItem[]
+  draft: string // 规范化草稿（markdown 文本）
+  checklist: string // 配套改动清单（markdown 文本）
+  files: string[] // 草稿目录里的产物文件名
+}
