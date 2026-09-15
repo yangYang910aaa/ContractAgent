@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
@@ -80,6 +81,18 @@ def _delete_one(manager: TaskManager, thread_id: str) -> str | None:
     manager.runner.delete_task(thread_id)
     _remove_source_file(record.source)
     return None
+
+
+def _upload_name(thread_id: str, filename: str, suffix: str) -> str:
+    """上传落盘文件名：任务号打头保住唯一性与可追溯，再拼原文件名保住可读性。
+
+    只落任务号的话，事后对着 `data/uploads/` 一片十六进制根本认不出哪份是哪份。
+    原文件名里的路径分隔符与控制字符一并收敛，超长截断（Windows 路径长度有限）。
+    """
+    stem = Path(filename or "").stem
+    stem = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", stem).strip(" ._")[:40]
+    # 分支：原文件名没剩下可用字符（空名/纯符号）→ 只留任务号
+    return f"{thread_id}_{stem}{suffix}" if stem else f"{thread_id}{suffix}"
 
 
 class ApprovalIn(BaseModel):
@@ -247,7 +260,7 @@ async def upload_task(
     # 两段式登记：先建任务拿 thread_id（落盘文件名用），再补 source 并入队——
     # 落盘路径依赖 thread_id，不能像 submit 那样一步到位
     thread_id = manager.register(file.filename or "contract", review_mode=review_mode)
-    target = UPLOAD_DIR / f"{thread_id}{suffix}"
+    target = UPLOAD_DIR / _upload_name(thread_id, file.filename or "", suffix)
     content = await file.read()
     target.write_bytes(content)
     # 登记簿 source 补成落盘路径（worker 取盘解析）

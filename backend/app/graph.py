@@ -16,9 +16,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from backend.app.parser import NO_TEXT_ERROR, extract_text
-from backend.app.pipeline import enrich_policy_hits, infer_effective_from_signature
-from backend.app.policy_corpus import report_policy_library
-from backend.app.policy_grounding import check_citations
+from backend.app.pipeline import build_report, enrich_policy_hits, infer_effective_from_signature
 from backend.app.reviewer import BlindReviewOutput, blind_review, merge_review
 from backend.app.rules import (
     annotate_open_ended_risks,
@@ -240,44 +238,37 @@ def build_review_graph(
 
     def report_node(state: ReviewState) -> dict:
         """汇总最终报告（抽取/风险/政策引用/评级/审批意见），输出 JSON。"""
+        # 报告结构与离线链路共用同一个拼装口（含政策库版本与引用核对）
         return {
-            "report": {
-                "contract_file": state.get("source", ""),
-                "grade": state.get("grade"),
-                "risks": state.get("risks", []),
-                "policy_hits": state.get("policy_hits", []),
-                "policy_library": report_policy_library(),
-                # 引用核对：结论只做标注与统计，不影响风险等级与是否并入
-                "citation_checks": check_citations(
-                    list(state.get("risks", [])),
-                    contract_kind=(state.get("extracted") or {}).get("contract_kind"),
-                ),
-                "extracted": state.get("extracted"),
-                "review": state.get("review"),
-                "approval": state.get("approval"),
-                "review_mode": state.get("review_mode", "single"),
-                # LLM 用量：与评测链路（pipeline.run_review）口径一致，报告可直接看成本
-                "llm": state.get("llm"),
-                "status": "done",
-            }
+            "report": build_report(
+                state.get("source", ""),
+                state.get("extracted"),
+                state.get("risks", []),
+                state.get("policy_hits", []),
+                review=state.get("review"),
+                llm=state.get("llm"),
+                grade=state.get("grade"),
+                extra={
+                    "approval": state.get("approval"),
+                    "review_mode": state.get("review_mode", "single"),
+                    "status": "done",
+                },
+            )
         }
 
     def error_node(state: ReviewState) -> dict:
         """抽取/图执行失败的落点：报告带 error，批处理可定位坏文件。"""
         return {
-            "report": {
-                "contract_file": state.get("source", ""),
-                "grade": None,
-                "risks": [],
-                "policy_hits": [],
-                "policy_library": report_policy_library(),
-                "citation_checks": check_citations([]),
-                "extracted": state.get("extracted"),
-                "error": state.get("error", "未知错误"),
+            "report": build_report(
+                state.get("source", ""),
+                state.get("extracted"),
+                [],
+                [],
                 # 抽取失败也可能已经发出调用（超时/限流），用量照实带出
-                "llm": current_usage(),
-                "status": "error",
-            }
+                llm=current_usage(),
+                error=state.get("error", "未知错误"),
+                extra={"status": "error"},
+            )
         }
 
     # ---- 组装：直线链路 + 两处条件分流 ----

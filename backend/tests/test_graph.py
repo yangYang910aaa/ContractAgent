@@ -232,6 +232,20 @@ def test_empty_text_goes_error_report_without_llm() -> None:
     assert seen == []  # 空正文不该白花一次调用
 
 
+def test_error_report_sections_match_pipeline(tmp_path) -> None:
+    """两条链路的报告由同一个拼装口产出：错误出口带的段也一致（改口径只改一处）。"""
+    from backend.app.pipeline import run_review
+
+    empty = tmp_path / "empty.md"
+    empty.write_text("   \n", encoding="utf-8")
+    offline = run_review(empty)
+    runner = ReviewRunner(extractor=lambda text: _normal_model(), retriever=lambda q: [])
+    graph_report = runner.start("empty.txt", text="   ")["report"]
+    # 图链路多一个 status（审批与状态是它特有的段），其余段两边必须一致
+    assert set(offline) | {"status"} == set(graph_report)
+    assert "error" in offline and "error" in graph_report
+
+
 def test_start_reads_file_when_no_text_given() -> None:
     """start 不给 text 时应按 source 读盘（真实上传链路形态）。"""
     # 用企业正常样本（与 _normal_model 的品类一致）：校服文本配企业模型会触发

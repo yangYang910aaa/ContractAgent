@@ -138,31 +138,61 @@ def _policy_snippet(text: str, limit: int = 200) -> str:
 
 def build_report(
     contract_file: str,
-    extracted: ContractModel,
-    risks: list[RiskItem],
-    policy_hits: list[dict],
+    extracted: ContractModel | dict | None = None,
+    risks: list[RiskItem] | list[dict] | None = None,
+    policy_hits: list[dict] | None = None,
     review: dict | None = None,
     llm: dict | None = None,
+    *,
+    grade: str | None = None,
+    error: str | None = None,
+    extra: dict | None = None,
 ) -> dict:
-    """把流水线各环节结果组装成报告 dict(JSON 可直接序列化)。
+    """把各环节结果组装成报告 dict（JSON 可直接序列化）：出处、引用核对、风险与评级都在这拼。
 
-    review 为双审(review_mode=double)的合并结果段；单审传 None,报告里为 null。
-    llm 为本次审查的 LLM 调用计数段(评测二期)；不传为 null,旧调用方(如 graph
-    服务端链路)不受影响。
+    离线入口（run_review 的三条出口）与服务端图（graph 的 report/error 节点）共用它，
+    免得"报告里带哪些段"在多处各写一遍、改一处漏一处。risks/extracted 收规则侧对象或
+    已序列化的 dict（图链路里是 dict）；grade 不给就按风险现算；error 不为空时附错误信息；
+    extra 给图链路补它特有的段（审批意见、状态、审查模式）。
     """
+    plain_risks = [_plain(risk) for risk in (risks or [])]
+    objects = [risk for risk in (risks or []) if hasattr(risk, "model_dump")]
+    # 分支：调用方没给评级、风险又是规则侧的对象 → 现算（图链路自己有结论，会显式传 grade）
+    if grade is None and objects:
+        grade = grade_report(objects).value
     report = {
         "contract_file": contract_file,  #来源文件路径
-        "grade": grade_report(risks).value, #high/medium/low的等级评分
-        "risks": [risk.model_dump(mode="json") for risk in risks],  # date/Decimal → JSON 类型
-        "policy_hits": policy_hits, #政策引用清单
+        "grade": grade, #high/medium/low的等级评分
+        "risks": plain_risks,  # date/Decimal → JSON 类型
+        "policy_hits": policy_hits or [], #政策引用清单
         "policy_library": report_policy_library(), #政策库版本（本次报告依据的是哪一版语料）
         # 引用核对：报告里的每条政策引用能否对上政策原文（确定性检查，不改判定）
-        "citation_checks": check_citations(risks, contract_kind=extracted.contract_kind),
-        "extracted": extracted.model_dump(mode="json"),
+        "citation_checks": check_citations(
+            list(risks or []), contract_kind=_contract_kind(extracted)
+        ),
+        "extracted": _plain(extracted),
     }
     report["review"] = review
     report["llm"] = llm
+    # 分支：错误出口（空正文/抽取失败）→ 报告带 error，批处理可定位坏文件
+    if error is not None:
+        report["error"] = error
+    report.update(extra or {})
     return report
+
+
+def _plain(value):
+    """报告里放 dict：规则侧对象转 JSON 友好形态（date/Decimal → 字符串/数字）。"""
+    return value.model_dump(mode="json") if hasattr(value, "model_dump") else value
+
+
+def _contract_kind(extracted) -> str | None:
+    """合同品类：离线链路给模型对象、图链路给 dict，两种都取得到。"""
+    if extracted is None:
+        return None
+    if isinstance(extracted, dict):
+        return extracted.get("contract_kind")
+    return extracted.contract_kind
 
 
 def run_review(
@@ -185,18 +215,14 @@ def run_review(
         # 这种情况是：文件读不出正文（空文件、加密/损坏 PDF、OCR 没认出字）→ 直接给错误报告。
         # 在空正文上跑规则只会凭空报"缺必填"，让人对着空文件点审批（服务端图链路同一口径）
         if not text.strip():
-            return {
-                "contract_file": str(path),
-                "grade": None,
-                "risks": [],
-                "policy_hits": [],
-                "policy_library": report_policy_library(),
-                "citation_checks": check_citations([]),
-                "extracted": ContractModel().model_dump(),
-                "review": None,
-                "llm": usage.to_dict(),
-                "error": NO_TEXT_ERROR,
-            }
+            return build_report(
+                str(path),
+                ContractModel(),
+                [],
+                [],
+                llm=usage.to_dict(),
+                error=NO_TEXT_ERROR,
+            )
         try:
             #LLM 结构化抽取（double_read 开时含付款期次第二读）
             extracted = extract_contract(
@@ -208,19 +234,15 @@ def run_review(
             extracted = infer_effective_from_signature(extracted, text)
         except Exception as exc:  # LLM/接口异常（如格式不支持、超时）
             extracted = ContractModel()
-            return {
-                "contract_file": str(path),
-                "grade": None,
-                "risks": [],
-                "policy_hits": [],
-                "policy_library": report_policy_library(),
-                "citation_checks": check_citations([]),
-                "extracted": extracted.model_dump(),
-                "review": None,
-                # 抽取失败也可能已发出调用（限流/超时），成本口径照实带出
-                "llm": usage.to_dict(),
-                "error": f"抽取失败：{exc}",
-            }
+            # 抽取失败也可能已发出调用（限流/超时），成本口径照实带出
+            return build_report(
+                str(path),
+                extracted,
+                [],
+                [],
+                llm=usage.to_dict(),
+                error=f"抽取失败：{exc}",
+            )
         # 先跑规则引擎（字段级 evaluate + 文本级 text_rules），再叠加开放式条款/模板标注；
         # 文本级检查不依赖抽取字段，两个 annotate 只做"降级 + 附提示"，不改判定口径
         risks = annotate_template_risks(

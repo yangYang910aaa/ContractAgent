@@ -177,6 +177,22 @@ def test_edit_patch_reruns_and_second_gate(client: TestClient) -> None:
     assert resp.json()["report"]["approval"]["action"] == "approved"
 
 
+def test_upload_saves_readable_file_name(client: TestClient) -> None:
+    """上传落盘文件名 = 任务号 + 原文件名：出问题时对着 uploads 目录能认出是哪份。"""
+    import backend.app.routes_tasks as routes
+
+    tid = client.post(
+        "/api/tasks", files={"file": ("学生校服采购合同.md", _sample_bytes(), "text/markdown")}
+    ).json()["thread_id"]
+    source = Path(client.app.state.manager.runner.store.get(tid).source)
+    assert source.name == f"{tid}_学生校服采购合同.md"
+    assert source.is_file()
+    # 原文件名里只剩符号时退化成只用任务号，也不该报错
+    assert routes._upload_name("abc123", "///", ".md") == "abc123.md"
+    # 路径分隔符与控制字符一并收敛，不能借文件名跳出上传目录
+    assert "/" not in routes._upload_name("abc123", "..\\..\\坏`名", ".md")
+
+
 def test_upload_unsupported_suffix_400(client: TestClient) -> None:
     """非白名单格式应 400 并给出原因。"""
     resp = client.post("/api/tasks", files={"file": ("a.xyz", b"x", "application/octet-stream")})
