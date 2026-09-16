@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 from backend.app import policy_admin, policy_corpus
+from backend.app.config import settings
 from backend.app.pipeline import build_report
 from backend.app.policy_rag import IndexDoc, MemoryStore
 from backend.app.schemas import ContractModel
@@ -198,6 +200,149 @@ def test_fingerprint_cli_prints_version_only(corpus_dir: Path, capsys) -> None:
     assert policy_admin.main(["--fingerprint", "--policy-dir", str(corpus_dir)]) == 0
     printed = capsys.readouterr().out.strip()
     assert printed == policy_corpus.corpus_fingerprint(policy_dir=corpus_dir)["version"]
+
+
+class FakeMilvusClient:
+    """假 Milvus 客户端：只实现删回滚点用得到的几个方法，并复刻"带别名的集合删不掉"。"""
+
+    def __init__(self, collections: list[str], aliases: dict[str, str]) -> None:
+        self.collections = list(collections)
+        self.aliases = dict(aliases)
+        self.ops: list[tuple[str, str]] = []
+
+    def list_aliases(self) -> dict:
+        # 真实返回值是字典而不是列表，按列表迭代会静默拿不到别名
+        return {"aliases": sorted(self.aliases), "db_name": "default"}
+
+    def describe_alias(self, name: str) -> dict:
+        return {"alias": name, "collection_name": self.aliases[name]}
+
+    def has_collection(self, name: str) -> bool:
+        return name in self.collections or name in self.aliases
+
+    def get_collection_stats(self, name: str) -> dict:
+        return {"row_count": 72}
+
+    def drop_alias(self, name: str) -> None:
+        self.ops.append(("drop_alias", name))
+        del self.aliases[name]
+
+    def drop_collection(self, name: str) -> None:
+        # 情况：还有别名指向它 → 复刻真实拒绝（错误码 1100），逼出"先摘别名"的顺序
+        if name in self.aliases.values():
+            raise RuntimeError("collection has alias, code 1100")
+        self.ops.append(("drop_collection", name))
+        self.collections.remove(name)
+
+
+def _store_with_client(corpus_dir: Path, client: FakeMilvusClient) -> MemoryStore:
+    """内存库挂上假 Milvus 客户端：核对走真实语料，删除走假客户端。"""
+    store = _store_with_corpus(corpus_dir)
+    store.client = client
+    return store
+
+
+def test_drop_legacy_reports_only_without_yes(corpus_dir: Path, capsys) -> None:
+    """不带 --yes 只看现状：报告检索名字指向哪、回滚点多少行，不动库。"""
+    client = FakeMilvusClient(
+        collections=["contract_policies_biz", policy_admin.LEGACY_COLLECTION],
+        aliases={settings.milvus_collection: "contract_policies_biz"},
+    )
+    store = _store_with_client(corpus_dir, client)
+    assert policy_admin._drop_legacy(store, corpus_dir, False, False) == 0
+    out = capsys.readouterr().out
+    assert "未执行" in out and "72 行" in out
+    assert client.ops == []
+    assert client.has_collection(policy_admin.LEGACY_COLLECTION)
+
+
+def test_drop_legacy_removes_alias_first_then_collection(corpus_dir: Path, capsys) -> None:
+    """回滚点上还挂着别名：必须先摘别名再删集合（否则 Milvus 拒绝删除）。"""
+    client = FakeMilvusClient(
+        collections=["contract_policies_biz", policy_admin.LEGACY_COLLECTION],
+        aliases={settings.milvus_collection: "contract_policies_biz", "old_name": policy_admin.LEGACY_COLLECTION},
+    )
+    store = _store_with_client(corpus_dir, client)
+    assert policy_admin._drop_legacy(store, corpus_dir, True, False) == 0
+    assert client.ops == [
+        ("drop_alias", "old_name"),
+        ("drop_collection", policy_admin.LEGACY_COLLECTION),
+    ]
+    # 检索用的别名没被动过，线上仍指向业务键集合
+    assert client.aliases[settings.milvus_collection] == "contract_policies_biz"
+    assert "确认不存在" in capsys.readouterr().out
+
+
+def test_drop_legacy_blocked_when_live_name_is_not_business_key_alias(corpus_dir: Path, capsys) -> None:
+    """检索名字没指向业务键集合（没迁移完或已回滚）→ 中止，回滚点是唯一退路。"""
+    client = FakeMilvusClient(
+        collections=["contract_policies_biz", policy_admin.LEGACY_COLLECTION],
+        aliases={settings.milvus_collection: policy_admin.LEGACY_COLLECTION},
+    )
+    store = _store_with_client(corpus_dir, client)
+    assert policy_admin._drop_legacy(store, corpus_dir, True, False) == 1
+    assert "中止理由" in capsys.readouterr().out
+    assert client.ops == []
+    assert client.has_collection(policy_admin.LEGACY_COLLECTION)
+
+
+def test_drop_legacy_idempotent_and_memory_backend(corpus_dir: Path, capsys) -> None:
+    """回滚点已经不在 → 当幂等；内存后端没有物理集合 → 直接说明无需删除。"""
+    client = FakeMilvusClient(
+        collections=["contract_policies_biz"],
+        aliases={settings.milvus_collection: "contract_policies_biz"},
+    )
+    store = _store_with_client(corpus_dir, client)
+    assert policy_admin._drop_legacy(store, corpus_dir, True, False) == 0
+    assert "不存在，无需删除" in capsys.readouterr().out
+
+    assert policy_admin.main(["--drop-legacy", "--backend", "memory"]) == 0
+    assert "无需删除回滚点" in capsys.readouterr().out
+
+
+def _drafts_dir_with(tmp_path: Path, count: int) -> Path:
+    """造 count 份起稿产物，修改时间递增（最早的排最后）。"""
+    drafts = tmp_path / "_drafts"
+    drafts.mkdir()
+    for index in range(count):
+        directory = drafts / f"P-1{index}_旧稿_{index:06d}"
+        directory.mkdir()
+        (directory / "draft.md").write_text("## 第一条\n正文", encoding="utf-8")
+        os.utime(directory, (1_700_000_000 + index * 60, 1_700_000_000 + index * 60))
+    return drafts
+
+
+def test_prune_drafts_lists_then_removes_oldest(tmp_path: Path, capsys) -> None:
+    """起稿产物按时间留最近几份：默认只列，--yes 才删，且只删超出的那几份。"""
+    drafts = _drafts_dir_with(tmp_path, 5)
+    plan = policy_admin.plan_draft_prune(drafts, keep=2)
+    assert [path.name for path in plan["keep"]] == ["P-14_旧稿_000004", "P-13_旧稿_000003"]
+    assert len(plan["remove"]) == 3
+
+    # 情况：没给 --yes → 只列待删，目录一个不少
+    assert policy_admin.main(["--prune-drafts", "2", "--drafts-dir", str(drafts)]) == 0
+    out = capsys.readouterr().out
+    assert "待删 P-10_旧稿_000000" in out and "未执行" in out
+    assert len(list(drafts.iterdir())) == 5
+
+    # 情况：给了 --yes → 删掉超出的 3 份，最近 2 份留着
+    assert policy_admin.main(["--prune-drafts", "2", "--drafts-dir", str(drafts), "--yes"]) == 0
+    assert "已删除 3 份历史产物" in capsys.readouterr().out
+    assert sorted(path.name for path in drafts.iterdir()) == [
+        "P-13_旧稿_000003",
+        "P-14_旧稿_000004",
+    ]
+
+
+def test_prune_drafts_noop_when_under_keep(tmp_path: Path, capsys) -> None:
+    """份数没超过保留数 → 什么也不删（也不打印"未执行"这种催促）。"""
+    drafts = _drafts_dir_with(tmp_path, 2)
+    assert policy_admin.main(["--prune-drafts", "--drafts-dir", str(drafts), "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "没有需要清理的产物" in out and "未执行" not in out
+    assert len(list(drafts.iterdir())) == 2
+    # 目录不存在时当没事发生（首次起稿前就会走到这条）
+    assert policy_admin.main(["--prune-drafts", "--drafts-dir", str(tmp_path / "none")]) == 0
 
 
 def test_report_carries_policy_library() -> None:

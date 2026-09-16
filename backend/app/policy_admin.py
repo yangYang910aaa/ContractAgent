@@ -5,15 +5,19 @@
     python -m backend.app.policy_admin --sync         # 只打印同步计划，不改库
     python -m backend.app.policy_admin --sync --yes   # 执行同步（只重写有变化的文件）
     python -m backend.app.policy_admin --fingerprint  # 只打印政策库版本号
+    python -m backend.app.policy_admin --drop-legacy --yes      # 删除回滚点集合（默认只报现状）
+    python -m backend.app.policy_admin --prune-drafts 10 --yes  # 起稿产物只留最近 10 份
 
 同步是"按份替换"：变化的文件先按文件名删掉旧单元再重插，磁盘上已删的文件清掉库内行，
 没变化的文件一个单元都不动——不做清库重建，分条与检索仍走原实现，不动检索口径。
+后两条是收尾清理：删集合与删目录都不可恢复，所以一律先列出、加 --yes 才动手。
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -22,6 +26,7 @@ from backend.app.policy_corpus import (
     corpus_fingerprint,
     corpus_units,
 )
+from backend.app.policy_assistant import DRAFTS_DIR, DRAFTS_KEEP
 from backend.app.config import settings
 from backend.app.policy_rag import MilvusStore, get_store, unit_id
 
@@ -204,19 +209,170 @@ def _print_unit_plan(plan: dict) -> None:
     print("（未执行：确认无误后加 --yes）")
 
 
+def _drop_legacy(store, policy_dir, confirmed: bool, as_json: bool) -> int:
+    """删除回滚点集合：默认只报现状，加 --yes 才真删（先摘别名再删集合）。
+
+    回滚点是"改主键时退回去的唯一一条路"，所以删之前要三件事同时成立：检索用的名字
+    已经是别名、它指向业务键集合（说明迁移完成而不是回滚状态）、文件与索引核对一致。
+    别名还挂在回滚点上时不能直接删集合——Milvus 会拒绝（错误码 1100），必须先摘别名。
+    """
+    client = store.client
+    alias = settings.milvus_collection
+    aliases = client.list_aliases().get("aliases", [])
+    # 情况：检索名字还不是别名 → 说明没迁移过或已回滚，指向的就是它自己
+    is_alias = alias in aliases
+    live_target = client.describe_alias(alias)["collection_name"] if is_alias else alias
+    has_legacy = client.has_collection(LEGACY_COLLECTION)
+    legacy_rows = (
+        client.get_collection_stats(LEGACY_COLLECTION).get("row_count", 0) if has_legacy else 0
+    )
+    # 情况：还有别名挂在回滚点上 → 记下来待摘（删除带别名的集合会被 Milvus 拒绝）
+    attached = [
+        name
+        for name in aliases
+        if client.describe_alias(name)["collection_name"] == LEGACY_COLLECTION
+    ]
+    state = {
+        "alias": alias,
+        "is_alias": is_alias,
+        "live_target": live_target,
+        "legacy_collection": LEGACY_COLLECTION,
+        "legacy_exists": has_legacy,
+        "legacy_rows": legacy_rows,
+        "aliases_on_legacy": attached,
+    }
+    # 情况：回滚点本来就不在 → 没什么可删，按幂等处理
+    if not has_legacy:
+        if as_json:
+            print(json.dumps(state | {"dropped": False, "reason": "回滚点不存在"}, ensure_ascii=False, indent=2))
+        else:
+            print(f"{LEGACY_COLLECTION} 不存在，无需删除")
+        return 0
+
+    check = compare_corpus_and_index(store=store, policy_dir=policy_dir)
+    blocked = []
+    # 情况：检索名字不是指向业务键集合的别名 → 删了就没有退路，先中止
+    if not is_alias or live_target != REBUILD_COLLECTION:
+        blocked.append(f"检索名字 {alias} 不指向 {REBUILD_COLLECTION}（当前指向 {live_target}）")
+    # 情况：文件与索引对不上 → 先同步，别在库不健康的时候拆掉退路
+    if not check["ok"]:
+        blocked.append("文件与索引不一致（先跑 --sync）")
+
+    if as_json:
+        print(json.dumps(state | {"dropped": False, "blocked": blocked}, ensure_ascii=False, indent=2))
+    else:
+        print(f"检索名字 {alias} → {live_target}（别名：{'是' if is_alias else '否'}）")
+        print(f"回滚点 {LEGACY_COLLECTION}：存在，{legacy_rows} 行")
+        if attached:
+            print("挂在回滚点上的别名（待摘）：" + "、".join(attached))
+        print(f"文件与索引核对：{'一致' if check['ok'] else '不一致'}")
+        for problem in blocked:
+            print(f"  中止理由：{problem}")
+    if blocked:
+        return 1
+    # 情况：没给 --yes → 只报现状与将要执行的动作
+    if not confirmed:
+        if not as_json:
+            print("（未执行：确认无误后加 --yes；删除不可恢复，政策正文在 data/policies/ 可重建）")
+        return 0
+
+    for name in attached:
+        client.drop_alias(name)
+        print(f"已摘别名 {name}")
+    client.drop_collection(LEGACY_COLLECTION)
+    gone = not client.has_collection(LEGACY_COLLECTION)
+    if as_json:
+        print(json.dumps(state | {"dropped": gone}, ensure_ascii=False, indent=2))
+    else:
+        print(f"已删除 {LEGACY_COLLECTION}（回收 {legacy_rows} 行）：{'确认不存在' if gone else '仍能查到，需人工确认'}")
+    return 0 if gone else 1
+
+
+def plan_draft_prune(drafts_dir: Path, keep: int = DRAFTS_KEEP) -> dict:
+    """起稿产物保留计划：按最后修改时间倒序，返回 (保留, 待删)。
+
+    只认目录下的直接子目录（一次起稿一个目录）；目录不存在时返回空计划。
+    """
+    if not drafts_dir.is_dir():
+        return {"keep": [], "remove": []}
+    drafts = [path for path in drafts_dir.iterdir() if path.is_dir()]
+    drafts.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return {"keep": drafts[:keep], "remove": drafts[keep:]}
+
+
+def _prune_drafts(drafts_dir: Path, keep: int, confirmed: bool, as_json: bool) -> int:
+    """清理起稿产物：默认只列要删的目录，加 --yes 才真删。
+
+    产物是本地历史记录，删了不影响政策库（正文在 data/policies/ 的 md 里）；
+    所以这里不做自动清理——列出来给人看一眼再删，避免把还在用的草稿扫掉。
+    """
+    plan = plan_draft_prune(drafts_dir, keep)
+    remove = plan["remove"]
+    if as_json:
+        print(json.dumps(
+            {
+                "drafts_dir": str(drafts_dir),
+                "keep": keep,
+                "kept": [path.name for path in plan["keep"]],
+                "removed": [] if not confirmed else [path.name for path in remove],
+                "remove_planned": [path.name for path in remove],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ))
+    else:
+        print(f"起稿产物目录 {drafts_dir}：保留最近 {keep} 份，现有 {len(plan['keep']) + len(remove)} 份")
+        for path in remove:
+            print(f"  待删 {path.name}")
+        if not remove:
+            print("没有需要清理的产物")
+    if not confirmed or not remove:
+        if not as_json and remove:
+            print("（未执行：确认无误后加 --yes）")
+        return 0
+    removed = 0
+    for path in remove:
+        # 情况：目录里的符号链接 → 跳过（rmtree 不该顺着链接删到别处去）
+        if path.is_symlink():
+            print(f"跳过符号链接 {path.name}")
+            continue
+        shutil.rmtree(path)
+        removed += 1
+    if not as_json:
+        print(f"已删除 {removed} 份历史产物")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    """CLI 入口：--check 核对 / --sync 按份同步 / --fingerprint 打印版本号。"""
+    """CLI 入口：--check 核对 / --sync 按份同步 / --fingerprint 打印版本号 /
+    --drop-legacy 删回滚点 / --prune-drafts 清理起稿产物。"""
     parser = argparse.ArgumentParser(description="政策库语料指纹、一致性核对与按份同步")
     parser.add_argument("--check", action="store_true", help="核对文件与索引是否一致（默认动作）")
     parser.add_argument("--sync", action="store_true", help="按份同步有变化的语料")
     parser.add_argument("--fingerprint", action="store_true", help="只打印政策库版本号")
     parser.add_argument("--rebuild", action="store_true", help="重建为业务键集合并用别名接管检索名字")
-    parser.add_argument("--yes", action="store_true", help="与 --sync 同用：确认执行，否则只打印计划")
+    parser.add_argument("--drop-legacy", action="store_true", help="删除回滚点集合（默认只报现状）")
+    parser.add_argument(
+        "--prune-drafts",
+        type=int,
+        nargs="?",
+        const=DRAFTS_KEEP,
+        default=None,
+        metavar="N",
+        help=f"清理起稿产物，保留最近 N 份（默认 {DRAFTS_KEEP}；默认只列不删）",
+    )
+    parser.add_argument("--yes", action="store_true", help="与 --sync / --drop-legacy 同用：确认执行，否则只报计划")
     parser.add_argument("--json", action="store_true", help="以 JSON 输出（脚本/评测引用）")
     parser.add_argument("--backend", default=None, choices=["auto", "memory", "milvus"], help="检索后端")
     parser.add_argument("--policy-dir", default=None, help="语料目录（默认 data/policies；演练可指到副本）")
+    parser.add_argument("--drafts-dir", default=None, help="起稿产物目录（默认 data/policies/_drafts）")
     args = parser.parse_args(argv)
     policy_dir = Path(args.policy_dir) if args.policy_dir else None
+
+    # 分支：清理起稿产物 → 纯读盘/删目录，不连向量库
+    if args.prune_drafts is not None:
+        drafts_dir = Path(args.drafts_dir) if args.drafts_dir else DRAFTS_DIR
+        return _prune_drafts(drafts_dir, args.prune_drafts, args.yes, args.json)
 
     # 分支：只要版本号 → 不连向量库，纯读盘
     if args.fingerprint and not args.sync and not args.check:
@@ -229,6 +385,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     store = get_store(backend=args.backend)
+    if args.drop_legacy:
+        # 情况：删集合只对 Milvus 有意义（内存后端没有集合可言）
+        if not hasattr(store, "client"):
+            print("当前检索后端没有物理集合，无需删除回滚点")
+            return 0
+        return _drop_legacy(store, policy_dir, args.yes, args.json)
     if args.rebuild:
         return _rebuild(args.yes, args.json)
     if args.sync:

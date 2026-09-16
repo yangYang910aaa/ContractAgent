@@ -25,6 +25,9 @@ from backend.app.policy_rag import POLICY_DIR, PolicyHit, get_store, load_polici
 
 DRAFTS_DIR = POLICY_DIR / "_drafts"
 
+# 起稿产物默认保留份数：一次起稿一个目录，日积月累只占地方；清理命令按这个默认值留最近几份
+DRAFTS_KEEP = 10
+
 # 元信息行：「文件编号：P-15　　版本：V1.0　　生效日期：2026年9月14日」等，一行可有多项
 _META_RE = re.compile(r"(文件编号|版本|生效日期|归口部门|适用范围)\s*[：:]\s*([^\s　]+)")
 _META_KEYS = {
