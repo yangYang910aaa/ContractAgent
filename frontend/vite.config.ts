@@ -1,5 +1,5 @@
 import vue from '@vitejs/plugin-vue'
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -12,5 +12,10 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+  },
+  // 单测：跑纯函数与小组件（jsdom 环境，不依赖后端）
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.test.ts'],
   },
 })
