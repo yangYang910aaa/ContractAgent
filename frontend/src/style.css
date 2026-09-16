@@ -7,37 +7,37 @@
    只换语义与色值，视图 scoped 内继续沿用。 */
 
 :root {
-  --bg: #f4f6fa;            /* 页面底色：冷灰亮底（仪表盘画布） */
-  --paper: #f4f6fa;         /* 兼容旧令牌：页面底色 */
-  --paper-2: #e9edf3;       /* 兼容旧令牌：次级底/悬停底 */
-  --card: #ffffff;          /* 卡片：纯白 */
-  --card-2: #f6f8fb;        /* 卡片次级底：输入框/引用块 */
-  --ink: #1c2433;           /* 正文：近黑藏青 */
-  --ink-2: #45516a;         /* 次级文字 */
-  --muted: #8493ab;         /* 弱化文字（灰蓝，保证可读） */
-  --line: #e3e8f0;          /* 发丝分隔线 */
-  --line-strong: #cdd6e4;   /* 强调线 */
-  --pri: #3456d1;           /* 靛蓝主色：主按钮/导航/链接/信息强调 */
-  --pri-deep: #2743ad;      /* 靛蓝深一档：hover/阴影 */
-  --pri-soft: #e9edfc;      /* 靛蓝浅底 */
-  --seal: #e0454f;          /* 语义红：高风险/待审批/失败 */
-  --seal-deep: #b03038;     /* 语义红深一档：边框/阴影 */
-  --seal-soft: #fdebee;     /* 语义红浅底 */
-  --ok: #2f9e63;            /* 通过绿 */
+  --bg: #f4f6fa; /* 页面底色：冷灰亮底（仪表盘画布） */
+  --paper: #f4f6fa; /* 兼容旧令牌：页面底色 */
+  --paper-2: #e9edf3; /* 兼容旧令牌：次级底/悬停底 */
+  --card: #ffffff; /* 卡片：纯白 */
+  --card-2: #f6f8fb; /* 卡片次级底：输入框/引用块 */
+  --ink: #1c2433; /* 正文：近黑藏青 */
+  --ink-2: #45516a; /* 次级文字 */
+  --muted: #8493ab; /* 弱化文字（灰蓝，保证可读） */
+  --line: #e3e8f0; /* 发丝分隔线 */
+  --line-strong: #cdd6e4; /* 强调线 */
+  --pri: #3456d1; /* 靛蓝主色：主按钮/导航/链接/信息强调 */
+  --pri-deep: #2743ad; /* 靛蓝深一档：hover/阴影 */
+  --pri-soft: #e9edfc; /* 靛蓝浅底 */
+  --seal: #e0454f; /* 语义红：高风险/待审批/失败 */
+  --seal-deep: #b03038; /* 语义红深一档：边框/阴影 */
+  --seal-soft: #fdebee; /* 语义红浅底 */
+  --ok: #2f9e63; /* 通过绿 */
   --ok-soft: #e6f4ec;
-  --warn: #c07f12;          /* 待审/中风险琥珀 */
+  --warn: #c07f12; /* 待审/中风险琥珀 */
   --warn-soft: #fdf3df;
-  --info: #2f80d8;          /* 信息蓝：审查中/等待类过程态 */
+  --info: #2f80d8; /* 信息蓝：审查中/等待类过程态 */
   --info-soft: #e8f2fc;
-  --mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --serif: "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
-  --kai: "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
-  --sans: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  --mono: 'Cascadia Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  --serif: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif;
+  --kai: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei UI', sans-serif;
+  --sans: 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
   --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.07);
-  --r-sm: 8px;              /* 圆角刻度：按钮/胶囊/小件 */
-  --r-md: 10px;             /* 圆角刻度：卡片 */
-  --r-lg: 12px;             /* 圆角刻度：大卡/弹层 */
-  --r-xl: 14px;             /* 圆角刻度：抽屉 dock 内侧 */
+  --r-sm: 8px; /* 圆角刻度：按钮/胶囊/小件 */
+  --r-md: 10px; /* 圆角刻度：卡片 */
+  --r-lg: 12px; /* 圆角刻度：大卡/弹层 */
+  --r-xl: 14px; /* 圆角刻度：抽屉 dock 内侧 */
 }
 
 * {
@@ -87,8 +87,12 @@ button {
   font-size: 13.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease,
-    box-shadow 0.14s ease, transform 0.1s ease;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease,
+    box-shadow 0.14s ease,
+    transform 0.1s ease;
 }
 
 .btn:hover:not(:disabled) {
@@ -185,7 +189,7 @@ input[type='text']:focus-visible {
 }
 
 .stamp::before {
-  content: "";
+  content: '';
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -352,7 +356,9 @@ input[type='text'] {
   border-radius: var(--r-sm);
   padding: 8px 11px;
   width: 100%;
-  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+  transition:
+    border-color 0.14s ease,
+    box-shadow 0.14s ease;
 }
 
 textarea:focus,

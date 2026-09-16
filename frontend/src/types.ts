@@ -237,6 +237,22 @@ export interface ChatUsage {
   tokens?: number
 }
 
+/** 对话流一帧的数据体（与 backend/app/assistant/streaming.py 的事件对齐，按事件名取用）：
+ *  status/token 用 text；tool 用 summary 与 items；citations 用 citations 与 unverified；
+ *  usage 用 calls 与 seconds；error 用 message；done 用完整回答 answer。 */
+export interface ChatEventData {
+  text?: string // status / token 事件的正文
+  name?: string // tool 事件：工具名
+  summary?: string // tool 事件：命中摘要（状态行文案）
+  items?: ChatCitation[] // tool 事件：这一轮检索到的条文
+  citations?: ChatCitation[] // citations 事件：本轮回答的引用
+  unverified?: string[] // citations 事件：提到但查不到出处的政策编号
+  calls?: number // usage 事件：模型调用次数
+  seconds?: number // usage 事件：耗时（秒）
+  message?: string // error 事件：失败原因
+  answer?: string // done 事件：完整回答（校对丢字用）
+}
+
 // ---- 政策库起稿（只读起稿页；与 backend/app/policy_assistant.py、routes_policy.py 对齐）----
 
 /** 重叠分级：high=余弦分≥0.80（疑似重复或替代）/ medium=≥0.70（值得并读）/ low=其余。 */

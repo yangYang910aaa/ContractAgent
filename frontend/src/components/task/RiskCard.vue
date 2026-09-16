@@ -24,18 +24,28 @@ const emit = defineEmits<{
         {{ SEVERITY_TEXT[risk.severity ?? 'high'] }}
       </span>
       <span class="risk-type serif">{{ riskLabel(risk) }}</span>
-      <span v-if="risk.origin === 'review'" class="origin-badge" title="独立复核盲审补抓，未参考主审结论">复核新增</span>
+      <span
+        v-if="risk.origin === 'review'"
+        class="origin-badge"
+        title="独立复核盲审补抓，未参考主审结论"
+        >复核新增</span
+      >
       <span v-if="risk.policy_ref" class="mono-num ref">{{ risk.policy_ref }}</span>
     </div>
     <div class="risk-actions">
-      <button v-if="risk.clause_ref || risk.evidence" class="clause-link"
-              @click="emit('locate', risk.clause_ref ?? '', risk.evidence_quote || risk.evidence || '')">
+      <button
+        v-if="risk.clause_ref || risk.evidence"
+        class="clause-link"
+        @click="emit('locate', risk.clause_ref ?? '', risk.evidence_quote || risk.evidence || '')"
+      >
         {{ risk.clause_ref ? `条款：${risk.clause_ref} · 原文定位` : '原文定位' }}
       </button>
       <!-- 这种情况是：既无条款号也无摘录（字段类规则没抽到原文锚点）→
            明说"定位不了"，别让人以为是功能坏了 -->
       <p v-else class="clause-none">正文里没有可直接指路的表述，请人工通读核对</p>
-      <button class="clause-link ask" title="让助手解释这条判定" @click="emit('ask', risk)">问这条</button>
+      <button class="clause-link ask" title="让助手解释这条判定" @click="emit('ask', risk)">
+        问这条
+      </button>
     </div>
     <p v-if="risk.evidence" class="quote">「{{ risk.evidence }}」</p>
     <p v-if="risk.suggestion" class="suggest">{{ prettyField(risk.suggestion) }}</p>

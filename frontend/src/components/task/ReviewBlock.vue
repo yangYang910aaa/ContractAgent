@@ -4,7 +4,14 @@
 -->
 <script setup lang="ts">
 import { computed } from 'vue'
-import { OUTCOME_CLASS, OUTCOME_TEXT, outcomeChips, riskLabel, SEVERITY_CLASS, SEVERITY_TEXT } from '../../labels'
+import {
+  OUTCOME_CLASS,
+  OUTCOME_TEXT,
+  outcomeChips,
+  riskLabel,
+  SEVERITY_CLASS,
+  SEVERITY_TEXT,
+} from '../../labels'
 import type { ReviewSection } from '../../types'
 
 const props = defineProps<{ review: ReviewSection | null | undefined }>()
@@ -37,18 +44,29 @@ const error = computed(() => props.review?.error ?? '')
     <ul v-if="review.details?.length" class="rv-list">
       <li v-for="(d, i) in review.details" :key="i" class="rv-row">
         <div class="rv-line">
-          <span class="chip" :class="OUTCOME_CLASS[d.outcome]">{{ OUTCOME_TEXT[d.outcome] ?? d.outcome }}</span>
-          <span v-if="d.severity" class="rv-sev" :class="SEVERITY_CLASS[d.severity]">{{ SEVERITY_TEXT[d.severity] }}</span>
+          <span class="chip" :class="OUTCOME_CLASS[d.outcome]">{{
+            OUTCOME_TEXT[d.outcome] ?? d.outcome
+          }}</span>
+          <span v-if="d.severity" class="rv-sev" :class="SEVERITY_CLASS[d.severity]">{{
+            SEVERITY_TEXT[d.severity]
+          }}</span>
           <span class="rv-type serif">{{ riskLabel(d) }}</span>
-          <span v-if="d.clause_ref" class="rv-clause"><span class="rv-clause-lbl">条款</span>{{ d.clause_ref }}</span>
+          <span v-if="d.clause_ref" class="rv-clause"
+            ><span class="rv-clause-lbl">条款</span>{{ d.clause_ref }}</span
+          >
           <span v-if="d.policy_ref" class="mono-num ref">{{ d.policy_ref }}</span>
         </div>
         <!-- 复核看到的原文（最多两行，点开详情仍可在原文抽屉里定位） -->
         <p v-if="d.evidence" class="rv-ev">「{{ d.evidence }}」</p>
         <!-- 处理结果说明：为什么并入/为什么只提示（复核门未过、类型白名单、已降级等） -->
         <p v-if="d.note" class="rv-note">处理：{{ d.note }}</p>
-        <button v-if="d.clause_ref || d.evidence" class="clause-link"
-                @click="emit('locate', d.clause_ref ?? '', d.evidence ?? '')">原文定位</button>
+        <button
+          v-if="d.clause_ref || d.evidence"
+          class="clause-link"
+          @click="emit('locate', d.clause_ref ?? '', d.evidence ?? '')"
+        >
+          原文定位
+        </button>
       </li>
     </ul>
     <!-- 结果术语解释：不解释的话"仅记录不并入/取高升级"这类词看不懂 -->
@@ -58,8 +76,13 @@ const error = computed(() => props.review?.error ?? '')
         <li><b>与主审一致</b>：双方都报，无分歧</li>
         <li><b>复核新增</b>：主审漏检、复核补抓，已并入风险清单</li>
         <li><b>取高升级</b>：双方都报、复核级别更高，按高的记</li>
-        <li><b>仅记录不并入</b>：复核发现未过确定性校验、或类型不属可并入范围，只记录、不进风险清单</li>
-        <li><b>复核按通用口径</b>：独立复核不看品类，也不套"政采/校服按范本执行"的豁免，政采类合同可能出现主审未报、复核报出的条目</li>
+        <li>
+          <b>仅记录不并入</b>：复核发现未过确定性校验、或类型不属可并入范围，只记录、不进风险清单
+        </li>
+        <li>
+          <b>复核按通用口径</b
+          >：独立复核不看品类，也不套"政采/校服按范本执行"的豁免，政采类合同可能出现主审未报、复核报出的条目
+        </li>
       </ol>
     </div>
   </div>

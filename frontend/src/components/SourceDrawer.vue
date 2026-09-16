@@ -102,7 +102,13 @@ function clampAbsurdIndents(root: HTMLElement): number {
       const value = Number(m[1])
       // 统一折算成 pt 再比较，避免单位不同导致漏判
       const pt =
-        m[2] === 'pt' ? value : m[2] === 'px' ? value * 0.75 : m[2] === 'in' ? value * 72 : value * 28.35
+        m[2] === 'pt'
+          ? value
+          : m[2] === 'px'
+            ? value * 0.75
+            : m[2] === 'in'
+              ? value * 72
+              : value * 28.35
       if (pt > INDENT_MAX_PT) {
         el.style.setProperty(prop, '0')
         fixed += 1
@@ -216,7 +222,9 @@ function applyMarks(html: string, index: number, norm: boolean): string {
   for (const m of [...markers].sort((x, y) => y.text.length - x.text.length)) {
     const raw = norm ? m.text.replace(/\s+/g, '') : m.text
     const esc = escHtml(raw)
-    html = html.split(esc).join(`<mark class="mk-${m.sev === 'medium' ? 'med' : 'high'}">${esc}</mark>`)
+    html = html
+      .split(esc)
+      .join(`<mark class="mk-${m.sev === 'medium' ? 'med' : 'high'}">${esc}</mark>`)
   }
   return html
 }
@@ -242,7 +250,8 @@ function isPdfShard(line: string): boolean {
   return !/[。！？；]$/.test(t)
 }
 
-const _PDF_SEG_START = /^[0-9]+、|^（[一二三四五六七八九十0-9]+）|^第[0-9一二三四五六七八九十百千]+条/
+const _PDF_SEG_START =
+  /^[0-9]+、|^（[一二三四五六七八九十0-9]+）|^第[0-9一二三四五六七八九十百千]+条/
 // PDF 前言里的"标签：值"行（合同编号/甲方/乙方等），应独立成行而非并进段落
 const _PDF_HEADER = /^[^，。！？；：\n]{1,14}[：:]/
 
@@ -265,7 +274,10 @@ function layoutHtml(index: number, b: SourceBlock): string {
     let i = 0
     while (i < lines.length) {
       const line = lines[i].trim()
-      if (!line) { i++; continue }
+      if (!line) {
+        i++
+        continue
+      }
       const cells = tableCells(line)
       // 这种情况是：连续表格行 → 收集成一个 <table>（首行当表头）
       if (cells) {
@@ -277,12 +289,19 @@ function layoutHtml(index: number, b: SourceBlock): string {
           rows.push(c)
           i++
         }
-        const headHtml = rows[0].map((c) => `<th>${applyMarks(escHtml(c), index, false)}</th>`).join('')
+        const headHtml = rows[0]
+          .map((c) => `<th>${applyMarks(escHtml(c), index, false)}</th>`)
+          .join('')
         const bodyHtml = rows
           .slice(1)
-          .map((r) => `<tr>${r.map((c) => `<td>${applyMarks(escHtml(c), index, false)}</td>`).join('')}</tr>`)
+          .map(
+            (r) =>
+              `<tr>${r.map((c) => `<td>${applyMarks(escHtml(c), index, false)}</td>`).join('')}</tr>`,
+          )
           .join('')
-        out.push(`<div class="mini-tbl"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`)
+        out.push(
+          `<div class="mini-tbl"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`,
+        )
         continue
       }
       out.push(`<p class="pl">${applyMarks(escHtml(line), index, false)}</p>`)
@@ -310,7 +329,10 @@ function layoutHtml(index: number, b: SourceBlock): string {
     // 这种情况是：OCR 页标记行（"--- 第 3 页 ---"）→ 不进正文、也**不打断段落**。
     // 页标记常把一句话从中间切开（"…各自单｜--- 第 3 页 ---｜位公章…"），落进正文会读成
     // "页码混进条款"；跳过后两截自然拼回一句。纯文本页签仍保留原样。
-    if (PAGE_MARK_AT.test(clean)) { i++; continue }
+    if (PAGE_MARK_AT.test(clean)) {
+      i++
+      continue
+    }
     // 表格碎片簇：连续 ≥3 个短行且都不是段落/编号头 → 合并成一行近似文本
     if (clean && isPdfShard(raw)) {
       let run = 1
@@ -322,14 +344,15 @@ function layoutHtml(index: number, b: SourceBlock): string {
           if (c) joined.push(c)
         }
         flush()
-        out.push(
-          `<p class="tbl-flat">${applyMarks(escHtml(joined.join(' · ')), index, true)}</p>`,
-        )
+        out.push(`<p class="tbl-flat">${applyMarks(escHtml(joined.join(' · ')), index, true)}</p>`)
         i += run
         continue
       }
     }
-    if (!clean) { i++; continue }
+    if (!clean) {
+      i++
+      continue
+    }
     // 段落/编号头与"标签：值"行：另起一段
     if (_PDF_SEG_START.test(clean) || _PDF_HEADER.test(clean)) {
       pushNew(clean)
@@ -342,7 +365,8 @@ function layoutHtml(index: number, b: SourceBlock): string {
       // 跨行拼接：中文字符间不加空格（pypdf 折行打断的句子直接接回）
       const prev = buf[buf.length - 1]
       const next = clean[0]
-      const bothWord = /[\u4e00-\u9fff0-9A-Za-z]/.test(prev) && /[\u4e00-\u9fff0-9A-Za-z]/.test(next)
+      const bothWord =
+        /[\u4e00-\u9fff0-9A-Za-z]/.test(prev) && /[\u4e00-\u9fff0-9A-Za-z]/.test(next)
       buf += bothWord ? clean : ` ${clean}`
     }
     // 一句话结束（且下一行不是"，…"续句）→ 落一段
@@ -577,7 +601,8 @@ async function load() {
     if (!d.text) {
       tab.value = 'blocks'
     } else if (!props.anchor) {
-      tab.value = d.file_available && (d.suffix === '.pdf' || d.suffix === '.docx') ? 'file' : 'blocks'
+      tab.value =
+        d.file_available && (d.suffix === '.pdf' || d.suffix === '.docx') ? 'file' : 'blocks'
     }
     // 这种情况是：打开时带着定位指令（从风险项点进来）→ 数据到齐后滚动
     await locate()
@@ -669,104 +694,101 @@ onUnmounted(() => {
         role="dialog"
         aria-label="原合同查看"
       >
-      <!-- 左缘拖拽手柄：右栏默认占 60vw，能拖窄才方便边看报告边核对原文 -->
-      <div class="src-resize" title="拖动调整宽度" @mousedown="startResize"></div>
-      <header class="src-head">
-        <div class="title-wrap">
-          <span class="file serif" :title="doc?.name">{{ doc?.name || '…' }}</span>
-          <span class="muted small">
-            <span v-if="doc" :class="['kind', doc.kind === 'sample' ? 'kind-sample' : 'kind-upload']">
-              {{ doc.kind === 'sample' ? '内置样本' : '上传合同' }}
-            </span>
-            <span v-if="doc?.suffix" class="mono-num">{{ doc.suffix }}</span>
-            <span v-if="isDocx">· 网页渲染预览，排版细节可能与 Word 略有差异</span>
-          </span>
-        </div>
-        <div class="acts">
-          <button
-            v-if="doc?.file_available"
-            class="btn btn-ghost sm"
-            @click="askDownload = true"
-          >下载原文件</button>
-          <button class="btn btn-ghost sm" @click="emit('close')">关闭</button>
-        </div>
-      </header>
-
-      <div class="tabs">
-        <button
-          v-for="t in tabs"
-          :key="t.id"
-          :class="{ on: tab === t.id }"
-          @click="tab = t.id"
-        >{{ t.label }}</button>
-      </div>
-      <p v-if="tab === 'text' && hasText" class="pane-note">
-        模型读取的原始全文快照（md 含 Markdown 标记；如需按条款阅读请切「条文视图」）
-      </p>
-      <p v-if="tab === 'blocks' && hasText && !isMd" class="pane-note">
-        docx 表格已按行列重排；PDF 由逐格提取，折行已拼接、表格以分隔行近似（原版版式见「原文件」页签）
-      </p>
-
-      <p v-if="error" class="err pad">{{ error }}</p>
-
-      <!-- 空态：任务还在审查中（原文未解析完）或解析失败 -->
-      <div v-else-if="!hasText" class="empty pad">
-        <p class="pulse">原文解析中…</p>
-        <p class="muted small">任务完成 parse 后自动显示；可稍等片刻（本面板会自动刷新）</p>
-      </div>
-
-      <!-- 原文件：pdf 走浏览器内嵌（inline）；docx 由 docx-preview 渲染 -->
-      <iframe
-        v-else-if="tab === 'file' && doc && doc.file_available && isPdf"
-        class="pdf-frame"
-        :src="taskFileUrl(threadId)"
-        title="原文件预览"
-      ></iframe>
-      <div
-        v-else-if="tab === 'file' && doc && doc.file_available && isDocx"
-        class="docx-wrap"
-      >
-        <p v-if="docxBusy" class="docx-state pulse">正在渲染 Word 原文件…</p>
-        <p v-else-if="docxError" class="docx-state docx-err">{{ docxError }}</p>
-        <p v-else-if="docxClamped > 0" class="docx-state">
-          源文件缩进异常（超 2 英寸），已按容错方式排版，行首不再被顶出可视区。
-        </p>
-        <div ref="docxBox" class="docx-frame"></div>
-      </div>
-
-      <!-- 条文视图：按条款块渲染（md 表格已转文本），块标题即证据定位锚点 -->
-      <div v-else-if="tab === 'blocks' && doc" class="src-body">
-        <p v-if="anyHit" class="hit-hint">
-          命中条款以底色标出（红=高风险 / 琥珀=中风险），句内亮色为风险证据原文
-        </p>
-        <div
-          v-for="(b, i) in doc.blocks"
-          :id="`src-block-${i}`"
-          :key="i"
-          class="block"
-          :class="{ hit: blockHits[i]?.risks.length > 0 }"
-        >
-          <div class="b-top">
-            <h4 v-if="b.title" class="block-title serif">{{ b.title }}</h4>
-            <span v-if="blockHits[i]?.risks.length" class="hit-badge">
-              命中 {{ blockHits[i].risks.length }}
+        <!-- 左缘拖拽手柄：右栏默认占 60vw，能拖窄才方便边看报告边核对原文 -->
+        <div class="src-resize" title="拖动调整宽度" @mousedown="startResize"></div>
+        <header class="src-head">
+          <div class="title-wrap">
+            <span class="file serif" :title="doc?.name">{{ doc?.name || '…' }}</span>
+            <span class="muted small">
+              <span
+                v-if="doc"
+                :class="['kind', doc.kind === 'sample' ? 'kind-sample' : 'kind-upload']"
+              >
+                {{ doc.kind === 'sample' ? '内置样本' : '上传合同' }}
+              </span>
+              <span v-if="doc?.suffix" class="mono-num">{{ doc.suffix }}</span>
+              <span v-if="isDocx">· 网页渲染预览，排版细节可能与 Word 略有差异</span>
             </span>
           </div>
-          <div v-if="blockHits[i]?.risks.length" class="hit-tags">
-            <span
-              v-for="(r, ri) in blockHits[i].risks"
-              :key="ri"
-              class="hit-tag"
-              :class="r.severity === 'medium' ? 'tag-med' : 'tag-high'"
-            >{{ riskLabel(r) }}</span>
+          <div class="acts">
+            <button v-if="doc?.file_available" class="btn btn-ghost sm" @click="askDownload = true">
+              下载原文件
+            </button>
+            <button class="btn btn-ghost sm" @click="emit('close')">关闭</button>
           </div>
-          <p class="block-text" v-html="blockHtml(i)"></p>
-        </div>
-        <p v-if="!doc.blocks.length" class="muted small">无条文结构，可切「纯文本」查看全文</p>
-      </div>
+        </header>
 
-      <!-- 纯文本全文：等宽快照，与条文视图明显区分 -->
-      <pre v-else-if="tab === 'text' && doc" class="raw">{{ doc.text }}</pre>
+        <div class="tabs">
+          <button v-for="t in tabs" :key="t.id" :class="{ on: tab === t.id }" @click="tab = t.id">
+            {{ t.label }}
+          </button>
+        </div>
+        <p v-if="tab === 'text' && hasText" class="pane-note">
+          模型读取的原始全文快照（md 含 Markdown 标记；如需按条款阅读请切「条文视图」）
+        </p>
+        <p v-if="tab === 'blocks' && hasText && !isMd" class="pane-note">
+          docx 表格已按行列重排；PDF
+          由逐格提取，折行已拼接、表格以分隔行近似（原版版式见「原文件」页签）
+        </p>
+
+        <p v-if="error" class="err pad">{{ error }}</p>
+
+        <!-- 空态：任务还在审查中（原文未解析完）或解析失败 -->
+        <div v-else-if="!hasText" class="empty pad">
+          <p class="pulse">原文解析中…</p>
+          <p class="muted small">任务完成 parse 后自动显示；可稍等片刻（本面板会自动刷新）</p>
+        </div>
+
+        <!-- 原文件：pdf 走浏览器内嵌（inline）；docx 由 docx-preview 渲染 -->
+        <iframe
+          v-else-if="tab === 'file' && doc && doc.file_available && isPdf"
+          class="pdf-frame"
+          :src="taskFileUrl(threadId)"
+          title="原文件预览"
+        ></iframe>
+        <div v-else-if="tab === 'file' && doc && doc.file_available && isDocx" class="docx-wrap">
+          <p v-if="docxBusy" class="docx-state pulse">正在渲染 Word 原文件…</p>
+          <p v-else-if="docxError" class="docx-state docx-err">{{ docxError }}</p>
+          <p v-else-if="docxClamped > 0" class="docx-state">
+            源文件缩进异常（超 2 英寸），已按容错方式排版，行首不再被顶出可视区。
+          </p>
+          <div ref="docxBox" class="docx-frame"></div>
+        </div>
+
+        <!-- 条文视图：按条款块渲染（md 表格已转文本），块标题即证据定位锚点 -->
+        <div v-else-if="tab === 'blocks' && doc" class="src-body">
+          <p v-if="anyHit" class="hit-hint">
+            命中条款以底色标出（红=高风险 / 琥珀=中风险），句内亮色为风险证据原文
+          </p>
+          <div
+            v-for="(b, i) in doc.blocks"
+            :id="`src-block-${i}`"
+            :key="i"
+            class="block"
+            :class="{ hit: blockHits[i]?.risks.length > 0 }"
+          >
+            <div class="b-top">
+              <h4 v-if="b.title" class="block-title serif">{{ b.title }}</h4>
+              <span v-if="blockHits[i]?.risks.length" class="hit-badge">
+                命中 {{ blockHits[i].risks.length }}
+              </span>
+            </div>
+            <div v-if="blockHits[i]?.risks.length" class="hit-tags">
+              <span
+                v-for="(r, ri) in blockHits[i].risks"
+                :key="ri"
+                class="hit-tag"
+                :class="r.severity === 'medium' ? 'tag-med' : 'tag-high'"
+                >{{ riskLabel(r) }}</span
+              >
+            </div>
+            <p class="block-text" v-html="blockHtml(i)"></p>
+          </div>
+          <p v-if="!doc.blocks.length" class="muted small">无条文结构，可切「纯文本」查看全文</p>
+        </div>
+
+        <!-- 纯文本全文：等宽快照，与条文视图明显区分 -->
+        <pre v-else-if="tab === 'text' && doc" class="raw">{{ doc.text }}</pre>
       </aside>
 
       <!-- 下载确认弹窗：不静默下载 -->
@@ -775,7 +797,9 @@ onUnmounted(() => {
           <h4 class="serif">下载原文件</h4>
           <p class="dl-name">{{ doc?.name }}</p>
           <p v-if="isPdf" class="muted small">PDF 可在「原文件」页直接预览；确认要下载到本地吗？</p>
-          <p v-else-if="isDocx" class="muted small">Word 无法在浏览器预览，下载后用 Word/WPS 打开。</p>
+          <p v-else-if="isDocx" class="muted small">
+            Word 无法在浏览器预览，下载后用 Word/WPS 打开。
+          </p>
           <p v-else class="muted small">将原文件保存到本地（建议先预览确认内容）。</p>
           <div class="dl-acts">
             <button class="btn btn-ghost sm" @click="askDownload = false">取消</button>
@@ -833,7 +857,7 @@ onUnmounted(() => {
 }
 
 .src-resize::after {
-  content: "";
+  content: '';
   position: absolute;
   left: 3px;
   top: 50%;

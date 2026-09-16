@@ -26,7 +26,9 @@ const emit = defineEmits<{
 const citationCheck = computed(() => props.detail.report?.citation_checks ?? null)
 
 /** 站不住的引用：编号不存在、正文读不到、引错政策、阈值在原文找不到——列出来请人核对。 */
-const citationProblems = computed(() => (citationCheck.value?.items ?? []).filter((item) => !item.ok))
+const citationProblems = computed(() =>
+  (citationCheck.value?.items ?? []).filter((item) => !item.ok),
+)
 
 /** 只带提示的引用：政策自己写明"这类合同不适用"之类，不影响结论，单独一行免得混进问题里。 */
 const citationNotes = computed(() =>
@@ -43,7 +45,9 @@ const citationBadge = computed(() => {
 /** 政策行解析：已知标签行（文件编号/版本/生效日期/归口部门/适用范围/第X条）
  * 拆出标签与内容，标签用强调色、内容保持正文色——关键信息一眼可分。 */
 function policyRowParts(line: string): { lbl: string | null; val: string } {
-  const m = line.match(/^(文件编号|版本|生效日期|归口部门|适用范围|第[一二三四五六七八九十百\d]+条)[：:](.*)$/)
+  const m = line.match(
+    /^(文件编号|版本|生效日期|归口部门|适用范围|第[一二三四五六七八九十百\d]+条)[：:](.*)$/,
+  )
   return m ? { lbl: `${m[1]}：`, val: m[2] } : { lbl: null, val: line }
 }
 
@@ -74,18 +78,27 @@ function policyRowClass(index: number, line: string): string {
       <div class="appr-head">
         <span class="muted">审批记录</span>
         <span class="chip" :class="detail.report.approval.action">
-          {{ detail.report.approval.action === 'approved' ? '放行'
-             : detail.report.approval.action === 'rejected' ? '打回' : '编辑重审' }}
+          {{
+            detail.report.approval.action === 'approved'
+              ? '放行'
+              : detail.report.approval.action === 'rejected'
+                ? '打回'
+                : '编辑重审'
+          }}
         </span>
       </div>
-      <p v-if="detail.report.approval.reviewer_note" class="note">{{ detail.report.approval.reviewer_note }}</p>
+      <p v-if="detail.report.approval.reviewer_note" class="note">
+        {{ detail.report.approval.reviewer_note }}
+      </p>
       <p v-else class="note none">（未填写审批意见）</p>
     </div>
 
     <!-- 结论条：疑似空白模板单独成结论，不混进下方风险清单 -->
     <div v-if="templateNotice" class="card pad tpl-notice">
       <p class="tpl-title serif">结论：疑似空白模板，未填写内容较多</p>
-      <p v-if="templateNotice.evidence" class="tpl-ev">占位示例：「{{ templateNotice.evidence }}」</p>
+      <p v-if="templateNotice.evidence" class="tpl-ev">
+        占位示例：「{{ templateNotice.evidence }}」
+      </p>
       <p class="tpl-sug">{{ prettyField(templateNotice.suggestion ?? '') }}</p>
     </div>
 
@@ -141,13 +154,17 @@ function policyRowClass(index: number, line: string): string {
         class="lib-meta muted"
         :title="detail.report.policy_library.revisions.join('、')"
       >
-        政策库版本 <span class="mono-num">{{ detail.report.policy_library.version }}</span>
-        · {{ detail.report.policy_library.files }} 份 / {{ detail.report.policy_library.units }} 条
+        政策库版本 <span class="mono-num">{{ detail.report.policy_library.version }}</span> ·
+        {{ detail.report.policy_library.files }} 份 / {{ detail.report.policy_library.units }} 条
       </p>
       <div v-for="(h, i) in detail.report.policy_hits" :key="i" class="card pad hit">
         <!-- 逐行排版：编号 / 相似度 / 标题 / 元信息 / 条文各占一行 -->
-        <p class="pl pl-ref"><span class="mono-num ref">{{ h.policy_ref }}</span></p>
-        <p v-if="h.score != null" class="pl pl-score muted">相似度 {{ Number(h.score).toFixed(3) }}</p>
+        <p class="pl pl-ref">
+          <span class="mono-num ref">{{ h.policy_ref }}</span>
+        </p>
+        <p v-if="h.score != null" class="pl pl-score muted">
+          相似度 {{ Number(h.score).toFixed(3) }}
+        </p>
         <template v-if="policyReflow(h.snippet ?? '').length">
           <p
             v-for="(ln, li) in policyReflow(h.snippet ?? '')"
@@ -156,7 +173,8 @@ function policyRowClass(index: number, line: string): string {
             :class="policyRowClass(li, ln)"
           >
             <template v-if="policyRowParts(ln).lbl">
-              <span class="lbl">{{ policyRowParts(ln).lbl }}</span>{{ policyRowParts(ln).val }}
+              <span class="lbl">{{ policyRowParts(ln).lbl }}</span
+              >{{ policyRowParts(ln).val }}
             </template>
             <template v-else>{{ ln }}</template>
           </p>
@@ -165,9 +183,14 @@ function policyRowClass(index: number, line: string): string {
         <details v-if="h.full_text || h.text" class="policy-more">
           <summary class="muted">查看完整条文</summary>
           <div class="policy-full">
-            <p v-for="(ln, li) in policyReflow(h.full_text ?? h.text ?? '')" :key="li" :class="policyRowClass(li, ln)">
+            <p
+              v-for="(ln, li) in policyReflow(h.full_text ?? h.text ?? '')"
+              :key="li"
+              :class="policyRowClass(li, ln)"
+            >
               <template v-if="policyRowParts(ln).lbl">
-                <span class="lbl">{{ policyRowParts(ln).lbl }}</span>{{ policyRowParts(ln).val }}
+                <span class="lbl">{{ policyRowParts(ln).lbl }}</span
+                >{{ policyRowParts(ln).val }}
               </template>
               <template v-else>{{ ln }}</template>
             </p>

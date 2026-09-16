@@ -14,7 +14,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { askChat, clearChat, fetchChatHistory, streamChat } from '../api'
-import type { ChatCitation, ChatUsage } from '../types'
+import type { ChatEvent } from '../api'
+import type { ChatCitation, ChatEventData, ChatUsage } from '../types'
 
 const props = defineProps<{
   threadId: string
@@ -160,8 +161,14 @@ async function send(text?: string) {
   scrollToBottom()
   controller = new AbortController()
   try {
-    await streamChat(props.threadId, question, sessionId, (event, data) => applyEvent(turn, event, data), controller.signal)
-  } catch (err) {
+    await streamChat(
+      props.threadId,
+      question,
+      sessionId,
+      (event, data) => applyEvent(turn, event, data),
+      controller.signal,
+    )
+  } catch {
     // 分支：用户点了「停止生成」→ 保留已出的内容，不算失败
     if (controller?.signal.aborted) turn.stopped = true
     else await fallback(turn, question)
@@ -189,7 +196,7 @@ async function fallback(turn: LiveTurn, question: string) {
 }
 
 /** 流事件 → 渲染态：status/tool 更新过程行，token 追加正文，其余在收尾时落到气泡上。 */
-function applyEvent(turn: LiveTurn, event: string, data: any) {
+function applyEvent(turn: LiveTurn, event: ChatEvent, data: ChatEventData) {
   // 分支：过程状态行（阶段或工具命中摘要）
   if (event === 'status') {
     turn.status = data.text ?? ''
@@ -213,7 +220,8 @@ function applyEvent(turn: LiveTurn, event: string, data: any) {
     return
   }
   if (event === 'usage') {
-    turn.usage = data
+    // 用量事件的数据体就是用量本身（后端只发调用次数与秒数）
+    turn.usage = { calls: data.calls ?? 0, seconds: data.seconds ?? 0 }
     return
   }
   if (event === 'error') {
@@ -229,7 +237,9 @@ function applyEvent(turn: LiveTurn, event: string, data: any) {
 
 function addHit(turn: LiveTurn, item: ChatCitation) {
   if (!item?.ref) return
-  const exists = turn.hits.some((h) => h.kind === item.kind && h.ref === item.ref && h.text === item.text)
+  const exists = turn.hits.some(
+    (h) => h.kind === item.kind && h.ref === item.ref && h.text === item.text,
+  )
   if (!exists) turn.hits.push(item)
 }
 
@@ -336,7 +346,12 @@ onMounted(() => {
 <template>
   <Teleport to="body">
     <!-- 浮动入口：贴视口右下角，页面滚动时不动 -->
-    <button v-if="!open" class="chat-fab" title="问这份合同（解释判定、查政策、找条款）" @click="openPanel">
+    <button
+      v-if="!open"
+      class="chat-fab"
+      title="问这份合同（解释判定、查政策、找条款）"
+      @click="openPanel"
+    >
       <span class="fab-mark" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
           <path d="M21 12a8 8 0 0 1-8 8H8l-4 3v-5.5A8 8 0 0 1 12 4a8 8 0 0 1 9 8z"></path>
@@ -361,7 +376,9 @@ onMounted(() => {
           </span>
         </div>
         <div class="cp-head-actions">
-          <button class="cp-icon-btn" :disabled="!turns.length" title="清空对话" @click="askClear">清空</button>
+          <button class="cp-icon-btn" :disabled="!turns.length" title="清空对话" @click="askClear">
+            清空
+          </button>
           <button class="cp-icon-btn cp-close" title="关闭（Esc）" @click="closePanel">✕</button>
         </div>
       </header>
@@ -381,8 +398,15 @@ onMounted(() => {
         <div v-if="!turns.length" class="cp-empty">
           <span class="cp-empty-mark" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M12 3.5 4.5 7v5.2c0 4.3 3.1 7.3 7.5 8.3 4.4-1 7.5-4 7.5-8.3V7z" stroke-linejoin="round"></path>
-              <path d="M9 12.2l2.1 2.1L15.4 10" stroke-linecap="round" stroke-linejoin="round"></path>
+              <path
+                d="M12 3.5 4.5 7v5.2c0 4.3 3.1 7.3 7.5 8.3 4.4-1 7.5-4 7.5-8.3V7z"
+                stroke-linejoin="round"
+              ></path>
+              <path
+                d="M9 12.2l2.1 2.1L15.4 10"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              ></path>
             </svg>
           </span>
           <p class="cp-empty-title">可以问我这三类</p>
@@ -394,11 +418,18 @@ onMounted(() => {
         </div>
 
         <div v-for="(turn, i) in turns" :key="i" class="cp-turn">
-          <p class="cp-q"><span class="cp-q-mark" aria-hidden="true">问</span>{{ turn.question }}</p>
+          <p class="cp-q">
+            <span class="cp-q-mark" aria-hidden="true">问</span>{{ turn.question }}
+          </p>
           <div class="cp-a">
             <!-- 过程可见：工具在做什么、命中了什么 -->
-            <p v-if="turn.status" class="cp-status"><i class="cp-pulse" aria-hidden="true"></i>{{ turn.status }}</p>
-            <p v-if="turn.answer" class="cp-text">{{ cleanAnswer(turn.answer) }}<span v-if="turn.running" class="cp-caret" aria-hidden="true"></span></p>
+            <p v-if="turn.status" class="cp-status">
+              <i class="cp-pulse" aria-hidden="true"></i>{{ turn.status }}
+            </p>
+            <p v-if="turn.answer" class="cp-text">
+              {{ cleanAnswer(turn.answer)
+              }}<span v-if="turn.running" class="cp-caret" aria-hidden="true"></span>
+            </p>
             <p v-if="turn.stopped" class="cp-note">已停止生成，以上是已出的内容</p>
             <p v-if="turn.error" class="cp-error">
               {{ turn.error }}<button class="cp-link" @click="retry(turn)">重试</button>
@@ -427,7 +458,10 @@ onMounted(() => {
                 :title="c.origin === 'report' ? `${preview(c)}（依据来自报告）` : preview(c)"
                 @click="onCitation(c, citationKey(c, ci))"
               >
-                <span class="cp-chip-glyph" aria-hidden="true">{{ c.kind === 'policy' ? '§' : '条' }}</span>{{ chipLabel(c) }}
+                <span class="cp-chip-glyph" aria-hidden="true">{{
+                  c.kind === 'policy' ? '§' : '条'
+                }}</span
+                >{{ chipLabel(c) }}
               </button>
               <span
                 v-for="ref in turn.unverified"
@@ -441,7 +475,8 @@ onMounted(() => {
             <div v-for="(c, ci) in turn.citations" :key="`full-${ci}`">
               <div v-if="expanded === citationKey(c, ci)" class="cp-cite-full">
                 <p class="cp-cite-head">
-                  <span class="cp-tag">{{ c.kind === 'policy' ? '政策' : '条款' }}</span>{{ c.title || c.ref }}
+                  <span class="cp-tag">{{ c.kind === 'policy' ? '政策' : '条款' }}</span
+                  >{{ c.title || c.ref }}
                 </p>
                 <p class="cp-cite-text">{{ c.text }}</p>
               </div>
@@ -450,29 +485,63 @@ onMounted(() => {
             <!-- 动作按钮：把回答变成下一步动作（改判定的事仍由人来做） -->
             <div v-if="!turn.running && (turn.answer || turn.error)" class="cp-actions">
               <button v-if="turn.answer" class="cp-act" @click="copy(turn)">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  aria-hidden="true"
+                >
                   <rect x="9" y="9" width="10" height="10" rx="2"></rect>
-                  <path d="M15 9V6.5A1.5 1.5 0 0 0 13.5 5h-7A1.5 1.5 0 0 0 5 6.5v7A1.5 1.5 0 0 0 6.5 15H9"></path>
+                  <path
+                    d="M15 9V6.5A1.5 1.5 0 0 0 13.5 5h-7A1.5 1.5 0 0 0 5 6.5v7A1.5 1.5 0 0 0 6.5 15H9"
+                  ></path>
                 </svg>
                 {{ turn.copied ? '已复制' : '复制' }}
               </button>
-              <button v-if="firstClause(turn)" class="cp-act" @click="emit('focusRisk', firstClause(turn)!.ref)">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+              <button
+                v-if="firstClause(turn)"
+                class="cp-act"
+                @click="emit('focusRisk', firstClause(turn)!.ref)"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  aria-hidden="true"
+                >
                   <circle cx="11" cy="11" r="6.5"></circle>
                   <path d="M11 8.2v3.4M11 14.4v.4" stroke-linecap="round"></path>
                   <path d="M16 16l4 4" stroke-linecap="round"></path>
                 </svg>
                 查看这条风险
               </button>
-              <button v-if="firstClause(turn)" class="cp-act" @click="onCitation(firstClause(turn)!, '')">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+              <button
+                v-if="firstClause(turn)"
+                class="cp-act"
+                @click="onCitation(firstClause(turn)!, '')"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  aria-hidden="true"
+                >
                   <path d="M6 4.5h8.5L19 9v10.5H6z" stroke-linejoin="round"></path>
                   <path d="M9 13h6M9 16h4" stroke-linecap="round"></path>
                 </svg>
                 打开原文
               </button>
               <button v-if="turn.error" class="cp-act" @click="retry(turn)">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  aria-hidden="true"
+                >
                   <path d="M19 12a7 7 0 1 1-2.1-5" stroke-linecap="round"></path>
                   <path d="M19 4.5V7h-2.5" stroke-linecap="round" stroke-linejoin="round"></path>
                 </svg>
@@ -494,10 +563,22 @@ onMounted(() => {
             rows="1"
             placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"
           ></textarea>
-          <button v-if="busy" class="cp-stop" title="停止生成（保留已出的内容）" @click="stop">停止</button>
+          <button v-if="busy" class="cp-stop" title="停止生成（保留已出的内容）" @click="stop">
+            停止
+          </button>
           <button class="cp-send" :disabled="!draft.trim() || busy" title="发送" @click="send()">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
-              <path d="M5 12h13M12.5 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"></path>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.9"
+              aria-hidden="true"
+            >
+              <path
+                d="M5 12h13M12.5 6l6 6-6 6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              ></path>
             </svg>
           </button>
         </div>
@@ -531,14 +612,20 @@ onMounted(() => {
   font-size: 14px;
   letter-spacing: 0.2px;
   cursor: pointer;
-  box-shadow: 0 2px 6px rgba(23, 31, 48, 0.16), 0 12px 28px rgba(52, 86, 209, 0.3);
+  box-shadow:
+    0 2px 6px rgba(23, 31, 48, 0.16),
+    0 12px 28px rgba(52, 86, 209, 0.3);
   animation: fab-in 0.34s cubic-bezier(0.22, 0.9, 0.24, 1) both;
-  transition: transform 0.16s ease, box-shadow 0.16s ease;
+  transition:
+    transform 0.16s ease,
+    box-shadow 0.16s ease;
 }
 
 .chat-fab:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 10px rgba(23, 31, 48, 0.18), 0 16px 34px rgba(52, 86, 209, 0.34);
+  box-shadow:
+    0 4px 10px rgba(23, 31, 48, 0.18),
+    0 16px 34px rgba(52, 86, 209, 0.34);
 }
 
 .chat-fab:active {
@@ -590,7 +677,9 @@ onMounted(() => {
   border: 1px solid var(--line-strong);
   border-radius: 16px;
   background: var(--card);
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 18px 44px rgba(16, 24, 40, 0.2);
+  box-shadow:
+    0 1px 2px rgba(16, 24, 40, 0.06),
+    0 18px 44px rgba(16, 24, 40, 0.2);
   animation: panel-in 0.22s cubic-bezier(0.22, 0.9, 0.24, 1) both;
 }
 
@@ -624,7 +713,8 @@ onMounted(() => {
   padding: 11px 12px 11px 14px;
   border-bottom: 1px solid var(--line);
   /* 极淡的靛蓝顶光，把头部与正文分开（不用渐变花活） */
-  background: linear-gradient(180deg, rgba(52, 86, 209, 0.07), rgba(52, 86, 209, 0) 82%), var(--card-2);
+  background:
+    linear-gradient(180deg, rgba(52, 86, 209, 0.07), rgba(52, 86, 209, 0) 82%), var(--card-2);
 }
 
 .cp-mark {
@@ -679,7 +769,10 @@ onMounted(() => {
   color: var(--ink-2);
   font-size: 12px;
   cursor: pointer;
-  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+  transition:
+    border-color 0.14s ease,
+    color 0.14s ease,
+    background 0.14s ease;
 }
 
 .cp-icon-btn:hover:not(:disabled) {
@@ -787,7 +880,11 @@ onMounted(() => {
   font-size: 13px;
   text-align: left;
   cursor: pointer;
-  transition: transform 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease, color 0.14s ease;
+  transition:
+    transform 0.14s ease,
+    border-color 0.14s ease,
+    box-shadow 0.14s ease,
+    color 0.14s ease;
 }
 
 .cp-suggest:hover {
@@ -929,7 +1026,7 @@ onMounted(() => {
 }
 
 .cp-hits summary::before {
-  content: "▸";
+  content: '▸';
   display: inline-block;
   width: 12px;
   color: var(--line-strong);
@@ -992,7 +1089,10 @@ onMounted(() => {
   color: var(--pri-deep);
   font-size: 12px;
   cursor: pointer;
-  transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
+  transition:
+    transform 0.14s ease,
+    box-shadow 0.14s ease,
+    border-color 0.14s ease;
 }
 
 .cp-chip:hover {
@@ -1103,7 +1203,10 @@ onMounted(() => {
   color: var(--ink-2);
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease,
+    border-color 0.14s ease;
 }
 
 .cp-act:hover {
@@ -1146,7 +1249,9 @@ onMounted(() => {
   font-size: 13px;
   line-height: 1.6;
   resize: none;
-  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+  transition:
+    border-color 0.14s ease,
+    box-shadow 0.14s ease;
 }
 
 .cp-input:focus {
@@ -1166,7 +1271,10 @@ onMounted(() => {
   background: var(--pri);
   color: #fff;
   cursor: pointer;
-  transition: background 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
+  transition:
+    background 0.14s ease,
+    transform 0.14s ease,
+    box-shadow 0.14s ease;
 }
 
 .cp-send svg {

@@ -81,14 +81,19 @@ export function policyReflow(text: string): string[] {
     const line = raw.trim().replace(/^#{1,6}\s*/, '')
     if (!line) continue
     // 同行多段元信息（文件编号／版本／生效日期 等全角空格分隔）先拆成独立段
-    const segments = line.split(/\s{2,}|\u3000{2,}/).map((s) => s.trim()).filter(Boolean)
+    const segments = line
+      .split(/\s{2,}|\u3000{2,}/)
+      .map((s) => s.trim())
+      .filter(Boolean)
     for (const seg of segments) {
       const isHead = /^(采购合同审核制度|细则|第[一二三四五六七八九十\d]+条|附则)/.test(seg)
       const isLabel = /^[^：:，。！？\n]{1,10}[：:]/.test(seg)
       const prev = logical[logical.length - 1]
       const prevEndsSentence = prev ? /[。；！？]$/.test(prev) : true
       // 上一行若是标题/条文头（第X条等），正文不能并进标题行
-      const prevIsHead = prev ? /^(采购合同审核制度|细则|第[一二三四五六七八九十\d]+条|附则)/.test(prev) : true
+      const prevIsHead = prev
+        ? /^(采购合同审核制度|细则|第[一二三四五六七八九十\d]+条|附则)/.test(prev)
+        : true
       // 续行合并：非结构行、上一行不是标题、且上一行没到句末 → 接上去
       if (prev && !prevIsHead && !isHead && !isLabel && !prevEndsSentence) {
         logical[logical.length - 1] += seg
@@ -123,7 +128,11 @@ export function prettyField(text: string): string {
 // ---- 风险等级 / 评级 / 复核结论的展示映射（详情页各面板共用，放一处免得各写一份）----
 
 /** 风险等级 → 中文（与 style.css 的 .stamp-* 印章族配套）。 */
-export const SEVERITY_TEXT: Record<string, string> = { high: '高风险', medium: '中风险', low: '低风险' }
+export const SEVERITY_TEXT: Record<string, string> = {
+  high: '高风险',
+  medium: '中风险',
+  low: '低风险',
+}
 
 /** 风险等级 → 印章样式类。 */
 export const SEVERITY_CLASS: Record<string, string> = {

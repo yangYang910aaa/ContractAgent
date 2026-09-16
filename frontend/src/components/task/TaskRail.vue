@@ -78,7 +78,9 @@ function extText(key: string): string {
         <span class="ring ring-seal">{{ GRADE_TEXT[detail.grade ?? 'fail'] ?? '不通过' }}</span>
         <div class="s-verdict-meta">
           <span class="stamp stamp-seal">待审批</span>
-          <span class="s-mode muted">高风险 {{ detail.gate_payload?.high_risks.length ?? 0 }} 项</span>
+          <span class="s-mode muted"
+            >高风险 {{ detail.gate_payload?.high_risks.length ?? 0 }} 项</span
+          >
         </div>
       </div>
     </div>
@@ -96,7 +98,9 @@ function extText(key: string): string {
             <span class="stamp" :class="detail.template ? 'stamp-warn' : 'stamp-ok'">
               {{ detail.template ? '待确认' : '已完成' }}
             </span>
-            <span class="s-mode muted">审查模式：{{ REVIEW_MODE_TEXT[detail.report?.review_mode ?? ''] ?? '单审' }}</span>
+            <span class="s-mode muted"
+              >审查模式：{{ REVIEW_MODE_TEXT[detail.report?.review_mode ?? ''] ?? '单审' }}</span
+            >
           </div>
         </div>
         <div class="s-stats">
@@ -137,18 +141,25 @@ function extText(key: string): string {
     <div class="card s-card">
       <h3>原文核对</h3>
       <template v-if="hits.length">
-        <button v-for="h in hits" :key="h.clause" class="s-clause" @click="emit('locate', h.clause, h.quote)">
+        <button
+          v-for="h in hits"
+          :key="h.clause"
+          class="s-clause"
+          @click="emit('locate', h.clause, h.quote)"
+        >
           <span class="dot-sev" :class="h.sev"></span>
           <span class="c-txt">{{ h.clause }}</span>
           <span class="mono-num c-cnt">命中 {{ h.count }}</span>
         </button>
       </template>
       <p v-else class="s-empty muted">
-        {{ mode === 'gate' ? '本任务暂无命中条款，可打开原文人工核对' : '本任务暂无命中条款，可打开原文通读核对' }}
+        {{
+          mode === 'gate'
+            ? '本任务暂无命中条款，可打开原文人工核对'
+            : '本任务暂无命中条款，可打开原文通读核对'
+        }}
       </p>
-      <button class="btn btn-ghost s-more" @click="emit('openSource')">
-        打开原文全文
-      </button>
+      <button class="btn btn-ghost s-more" @click="emit('openSource')">打开原文全文</button>
     </div>
   </aside>
 </template>
@@ -266,7 +277,9 @@ function extText(key: string): string {
   padding: 7px 10px;
   margin-bottom: 8px;
   cursor: pointer;
-  transition: border-color 0.12s ease, background 0.12s ease;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
 }
 
 .s-clause:hover {

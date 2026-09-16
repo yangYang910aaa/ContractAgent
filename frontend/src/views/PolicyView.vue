@@ -6,7 +6,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { createAiPolicyDraft, createPolicyDraft, getPolicyDraft, getPolicyLibrary } from '../api'
 import { missingMetaText } from '../labels'
-import type { PolicyDraftDetail, PolicyDraftSummary, PolicyLibrary, PublishResult } from '../types'
+import type { PolicyDraftDetail, PolicyDraftSummary, PolicyLibrary } from '../types'
 import AiNotesPane from '../components/policy/AiNotesPane.vue'
 import ConflictPane from '../components/policy/ConflictPane.vue'
 import OverlapPane from '../components/policy/OverlapPane.vue'
@@ -52,7 +52,7 @@ async function loadLibrary() {
 onMounted(loadLibrary)
 
 /** 入库成功：回读草稿（拿到入库记录）并刷新政策库现状。 */
-async function onApplied(_result: PublishResult) {
+async function onApplied() {
   if (!summary.value) return
   detail.value = await getPolicyDraft(summary.value.draft_id)
   await loadLibrary()
@@ -86,7 +86,8 @@ async function runDraft() {
 /** 按当前输入方式起稿：文件 / 粘贴 / 模型起草。 */
 async function startDraft(): Promise<PolicyDraftSummary> {
   if (mode.value === 'file') return createPolicyDraft({ file: picked.value! })
-  if (mode.value === 'paste') return createPolicyDraft({ text: pastedText.value, name: pastedName.value })
+  if (mode.value === 'paste')
+    return createPolicyDraft({ text: pastedText.value, name: pastedName.value })
   return createAiPolicyDraft({
     brief: aiBrief.value,
     ref: aiRef.value.trim(),
@@ -119,17 +120,28 @@ function reset() {
         并列出可核对的冲突与配套清单。<b>本页只起稿，不入库。</b>
       </p>
       <p v-if="library" class="lib mono-num">
-        政策库现状：{{ library.version }} · {{ library.files }} 份政策 / {{ library.units }} 个检索单元
+        政策库现状：{{ library.version }} · {{ library.files }} 份政策 /
+        {{ library.units }} 个检索单元
       </p>
     </div>
 
     <!-- 输入 -->
     <div class="card pad input">
       <div class="tabs">
-        <button type="button" :class="{ on: mode === 'file' }" :disabled="busy" @click="mode = 'file'">
+        <button
+          type="button"
+          :class="{ on: mode === 'file' }"
+          :disabled="busy"
+          @click="mode = 'file'"
+        >
           上传文件
         </button>
-        <button type="button" :class="{ on: mode === 'paste' }" :disabled="busy" @click="mode = 'paste'">
+        <button
+          type="button"
+          :class="{ on: mode === 'paste' }"
+          :disabled="busy"
+          @click="mode = 'paste'"
+        >
           粘贴文本
         </button>
         <button type="button" :class="{ on: mode === 'ai' }" :disabled="busy" @click="mode = 'ai'">
@@ -137,7 +149,8 @@ function reset() {
         </button>
       </div>
       <p class="tip muted">
-        放进来的是<b>政策正文</b>（新政策稿、Word/PDF 政策文本、一段条文都行），不是本页生成过的草稿文件；
+        放进来的是<b>政策正文</b>（新政策稿、Word/PDF
+        政策文本、一段条文都行），不是本页生成过的草稿文件；
         传已入库的版本也没关系——它会用「编号重复 + 自重叠」直接告诉你这份已经在库里。
       </p>
 
@@ -148,7 +161,12 @@ function reset() {
       </label>
 
       <div v-else-if="mode === 'paste'" class="paste">
-        <input v-model="pastedName" class="name" type="text" placeholder="来源名（可留空，如 P-16_解除与善后.md）" />
+        <input
+          v-model="pastedName"
+          class="name"
+          type="text"
+          placeholder="来源名（可留空，如 P-16_解除与善后.md）"
+        />
         <textarea
           v-model="pastedText"
           class="text mono-num"
@@ -162,7 +180,12 @@ function reset() {
         <div class="ai-line">
           <input v-model="aiRef" class="name ref" type="text" placeholder="政策编号，如 P-16" />
           <input v-model="aiGroup" class="name" type="text" placeholder="归口部门（可留空）" />
-          <input v-model="aiDate" class="name" type="text" placeholder="生效日期（可留空，如 2026年10月1日）" />
+          <input
+            v-model="aiDate"
+            class="name"
+            type="text"
+            placeholder="生效日期（可留空，如 2026年10月1日）"
+          />
         </div>
         <textarea
           v-model="aiBrief"
@@ -173,14 +196,29 @@ function reset() {
       </div>
 
       <div class="actions">
-        <button class="btn btn-primary" type="button" :disabled="!canSubmit || busy" @click="runDraft">
+        <button
+          class="btn btn-primary"
+          type="button"
+          :disabled="!canSubmit || busy"
+          @click="runDraft"
+        >
           {{ busy ? '处理中（模型起草或逐条检索现有政策）…' : submitLabel }}
         </button>
-        <button v-if="summary || error" class="btn btn-ghost" type="button" :disabled="busy" @click="reset">
+        <button
+          v-if="summary || error"
+          class="btn btn-ghost"
+          type="button"
+          :disabled="busy"
+          @click="reset"
+        >
           清空
         </button>
         <span class="hint muted">
-          {{ mode === 'ai' ? '模型起草会用 1 次 chat 调用；产出仍是草稿，入库要你确认' : '起稿只花检索的向量化调用，不改政策库' }}
+          {{
+            mode === 'ai'
+              ? '模型起草会用 1 次 chat 调用；产出仍是草稿，入库要你确认'
+              : '起稿只花检索的向量化调用，不改政策库'
+          }}
         </span>
       </div>
 
@@ -195,13 +233,25 @@ function reset() {
         <span class="b-title">{{ summary.title || summary.source }}</span>
       </div>
       <div class="b-facts">
-        <span class="fact">条文 <b class="mono-num">{{ summary.articles }}</b></span>
-        <span class="fact">高度重叠 <b class="mono-num">{{ summary.overlap.high }}</b></span>
-        <span class="fact">中等重叠 <b class="mono-num">{{ summary.overlap.medium }}</b></span>
-        <span class="fact">低重叠 <b class="mono-num">{{ summary.overlap.low }}</b></span>
-        <span class="fact">冲突 <b class="mono-num">{{ summary.conflicts.length }}</b></span>
+        <span class="fact"
+          >条文 <b class="mono-num">{{ summary.articles }}</b></span
+        >
+        <span class="fact"
+          >高度重叠 <b class="mono-num">{{ summary.overlap.high }}</b></span
+        >
+        <span class="fact"
+          >中等重叠 <b class="mono-num">{{ summary.overlap.medium }}</b></span
+        >
+        <span class="fact"
+          >低重叠 <b class="mono-num">{{ summary.overlap.low }}</b></span
+        >
+        <span class="fact"
+          >冲突 <b class="mono-num">{{ summary.conflicts.length }}</b></span
+        >
       </div>
-      <p v-if="summary.missing.length" class="miss">元信息待补：{{ missingMetaText(summary.missing) }}</p>
+      <p v-if="summary.missing.length" class="miss">
+        元信息待补：{{ missingMetaText(summary.missing) }}
+      </p>
       <p v-if="summary.llm" class="muted dir mono-num">
         起草用量：{{ summary.llm.calls }} 次调用 · {{ summary.llm.seconds }} 秒
       </p>
@@ -286,7 +336,10 @@ function reset() {
   font-size: 13px;
   font-weight: 600;
   color: var(--ink-2);
-  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
+  transition:
+    border-color 0.14s ease,
+    background 0.14s ease,
+    color 0.14s ease;
 }
 
 .tabs button:hover:not(:disabled) {
@@ -320,7 +373,9 @@ function reset() {
   border-radius: 12px;
   background: #fff;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
 }
 
 .drop:hover {

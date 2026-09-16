@@ -16,7 +16,8 @@ const uploading = ref('') // 当前正在传的文件名（进度文案）
 const results = ref<{ name: string; ok: boolean; tid?: string; error?: string }[]>([])
 // 图片（扫描件、拍照件）与文本型合同同样在白名单里，提示里必须写上，
 // 否则拿扫描件来的用户会以为传不了
-const hint = '支持 PDF / Word / 文本(md,txt) / 图片(扫描件、拍照件)，可多选批量上传；审核在后台顺序进行。'
+const hint =
+  '支持 PDF / Word / 文本(md,txt) / 图片(扫描件、拍照件)，可多选批量上传；审核在后台顺序进行。'
 // 审查模式：single=主审规则；double=主审 + 独立复核盲审（多一次 LLM 调用）
 const reviewMode = ref<'single' | 'double'>('single')
 const modeOptions = [
@@ -52,7 +53,11 @@ async function uploadAll() {
       const res = await uploadContract(file, reviewMode.value)
       results.value.push({ name: file.name, ok: true, tid: res.thread_id })
     } catch (err) {
-      results.value.push({ name: file.name, ok: false, error: err instanceof Error ? err.message : '上传失败' })
+      results.value.push({
+        name: file.name,
+        ok: false,
+        error: err instanceof Error ? err.message : '上传失败',
+      })
     }
   }
   uploading.value = ''
@@ -73,7 +78,9 @@ async function uploadAll() {
     <div class="mode card pad">
       <div class="mode-head">
         <span class="mode-title">审查模式</span>
-        <span class="mode-note muted">双审为"主审 + 独立盲审复核"，不看主审结论独立再查一遍，可补抓漏检</span>
+        <span class="mode-note muted"
+          >双审为"主审 + 独立盲审复核"，不看主审结论独立再查一遍，可补抓漏检</span
+        >
       </div>
       <div class="mode-opts">
         <button
@@ -93,9 +100,18 @@ async function uploadAll() {
 
     <!-- 上传入口：整卡可点，已选文件后显示列表 -->
     <label class="drop card">
-      <input type="file" accept=".pdf,.docx,.md,.txt,.jpg,.jpeg,.png,.bmp,.tif,.tiff" multiple @change="onPick" />
-      <span class="drop-main">{{ picked.length ? `已选 ${picked.length} 份` : '点击选择合同文件（可多选）' }}</span>
-      <span class="drop-sub mono-num">pdf / docx / md / txt / jpg / png · 扫描件与拍照件走本地 OCR</span>
+      <input
+        type="file"
+        accept=".pdf,.docx,.md,.txt,.jpg,.jpeg,.png,.bmp,.tif,.tiff"
+        multiple
+        @change="onPick"
+      />
+      <span class="drop-main">{{
+        picked.length ? `已选 ${picked.length} 份` : '点击选择合同文件（可多选）'
+      }}</span>
+      <span class="drop-sub mono-num"
+        >pdf / docx / md / txt / jpg / png · 扫描件与拍照件走本地 OCR</span
+      >
     </label>
 
     <!-- 待上传清单：可移除单项 -->
@@ -110,7 +126,13 @@ async function uploadAll() {
     <!-- 动作：无文件/上传中禁用；上传中显示当前进度 -->
     <div class="actions">
       <button class="btn btn-primary" :disabled="!picked.length || busy" @click="uploadAll">
-        {{ busy ? `上传中：${uploading}` : picked.length ? `开始审查 ${picked.length} 份` : '开始审查' }}
+        {{
+          busy
+            ? `上传中：${uploading}`
+            : picked.length
+              ? `开始审查 ${picked.length} 份`
+              : '开始审查'
+        }}
       </button>
       <button v-if="picked.length && !busy" class="btn btn-ghost" @click="picked = []">清空</button>
     </div>
@@ -162,12 +184,15 @@ async function uploadAll() {
   border-radius: 14px;
   background: #fff;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .drop::before {
   /* 上传入口 = 靛蓝浅底圆角块 + 「＋」：比纯文字更有"往这里放"的指向 */
-  content: "＋";
+  content: '＋';
   display: grid;
   place-items: center;
   width: 48px;
@@ -179,7 +204,10 @@ async function uploadAll() {
   font-size: 22px;
   font-weight: 400;
   line-height: 1;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    background 0.15s ease;
 }
 
 .drop:hover {
@@ -325,7 +353,10 @@ async function uploadAll() {
   background: #fff;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .mode-opt b {

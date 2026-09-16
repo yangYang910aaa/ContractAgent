@@ -41,14 +41,54 @@ function go(viewName: View) {
       <div class="brand" @click="go('upload')">
         <!-- 品牌标：文档 + 核对勾（方向 C：靛蓝线性小标，无图标库依赖） -->
         <svg class="emblem" viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
-          <path d="M9 3.8h9.6l6 6V26a2.2 2.2 0 0 1-2.2 2.2H9A2.2 2.2 0 0 1 6.8 26V6A2.2 2.2 0 0 1 9 3.8z"
-                fill="#fff" stroke="#3456d1" stroke-width="1.5" />
-          <path d="M18.6 3.8v4.6a2 2 0 0 0 2 2h4.6" fill="none" stroke="#3456d1" stroke-width="1.3" />
-          <line x1="11" y1="13.4" x2="21" y2="13.4" stroke="#cdd6e4" stroke-width="1.7" stroke-linecap="round" />
-          <line x1="11" y1="17.2" x2="21" y2="17.2" stroke="#cdd6e4" stroke-width="1.7" stroke-linecap="round" />
-          <line x1="11" y1="21" x2="16.5" y2="21" stroke="#cdd6e4" stroke-width="1.7" stroke-linecap="round" />
+          <path
+            d="M9 3.8h9.6l6 6V26a2.2 2.2 0 0 1-2.2 2.2H9A2.2 2.2 0 0 1 6.8 26V6A2.2 2.2 0 0 1 9 3.8z"
+            fill="#fff"
+            stroke="#3456d1"
+            stroke-width="1.5"
+          />
+          <path
+            d="M18.6 3.8v4.6a2 2 0 0 0 2 2h4.6"
+            fill="none"
+            stroke="#3456d1"
+            stroke-width="1.3"
+          />
+          <line
+            x1="11"
+            y1="13.4"
+            x2="21"
+            y2="13.4"
+            stroke="#cdd6e4"
+            stroke-width="1.7"
+            stroke-linecap="round"
+          />
+          <line
+            x1="11"
+            y1="17.2"
+            x2="21"
+            y2="17.2"
+            stroke="#cdd6e4"
+            stroke-width="1.7"
+            stroke-linecap="round"
+          />
+          <line
+            x1="11"
+            y1="21"
+            x2="16.5"
+            y2="21"
+            stroke="#cdd6e4"
+            stroke-width="1.7"
+            stroke-linecap="round"
+          />
           <circle cx="24.4" cy="25" r="5.1" fill="#3456d1" />
-          <path d="M22 25.2l1.7 1.7 2.9-3.1" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          <path
+            d="M22 25.2l1.7 1.7 2.9-3.1"
+            fill="none"
+            stroke="#fff"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
         </svg>
         <span class="brand-text">
           <b>合同审核工作台</b>
@@ -57,15 +97,44 @@ function go(viewName: View) {
       </div>
       <nav>
         <button :class="{ on: view === 'upload' }" @click="go('upload')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 16V5m0 0l-4 4m4-4l4 4"></path><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"></path></svg>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+          >
+            <path d="M12 16V5m0 0l-4 4m4-4l4 4"></path>
+            <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"></path>
+          </svg>
           上传审查
         </button>
         <button :class="{ on: view === 'queue' }" @click="go('queue')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"></path></svg>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+          >
+            <path d="M4 6h16M4 12h16M4 18h10"></path>
+          </svg>
           任务队列
         </button>
         <button :class="{ on: view === 'policy' }" @click="go('policy')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 4.5h9l5 5V19a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19V6A1.5 1.5 0 0 1 5 4.5z"></path><path d="M13.6 4.6v5h5"></path><path d="M7.4 13.6h7M7.4 17h4.4"></path></svg>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+          >
+            <path
+              d="M5 4.5h9l5 5V19a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19V6A1.5 1.5 0 0 1 5 4.5z"
+            ></path>
+            <path d="M13.6 4.6v5h5"></path>
+            <path d="M7.4 13.6h7M7.4 17h4.4"></path>
+          </svg>
           政策库
         </button>
       </nav>
@@ -81,7 +150,9 @@ function go(viewName: View) {
 
     <!-- 页脚：演示合规免责 -->
     <footer>
-      <span class="muted">演示环境使用合成合同与合成政策语料 · 系统产出为初审参考，不构成法律意见</span>
+      <span class="muted"
+        >演示环境使用合成合同与合成政策语料 · 系统产出为初审参考，不构成法律意见</span
+      >
     </footer>
   </div>
 </template>
@@ -155,7 +226,10 @@ nav button {
   font-size: 14px;
   letter-spacing: 0.04em;
   border-radius: 8px;
-  transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease,
+    box-shadow 0.14s ease;
 }
 
 nav button svg {

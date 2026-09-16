@@ -16,9 +16,7 @@ const showLow = ref(false)
 const order = { high: 0, medium: 1, low: 2 }
 // 分级优先、同级按最高分排序：要人工判断的是最像的那几条
 const sorted = computed(() =>
-  [...props.overlaps].sort(
-    (a, b) => order[a.level] - order[b.level] || topScore(b) - topScore(a),
-  ),
+  [...props.overlaps].sort((a, b) => order[a.level] - order[b.level] || topScore(b) - topScore(a)),
 )
 const shown = computed(() => sorted.value.filter((item) => showLow.value || item.level !== 'low'))
 const lowCount = computed(() => sorted.value.filter((item) => item.level === 'low').length)
@@ -39,7 +37,9 @@ function topScore(item: PolicyOverlapItem): number {
     <ul class="list">
       <li v-for="item in shown" :key="item.article" class="row">
         <div class="line">
-          <span class="stamp" :class="OVERLAP_CLASS[item.level]">{{ OVERLAP_TEXT[item.level] }}</span>
+          <span class="stamp" :class="OVERLAP_CLASS[item.level]">{{
+            OVERLAP_TEXT[item.level]
+          }}</span>
           <span class="article">{{ item.article }}</span>
         </div>
         <div class="hits">

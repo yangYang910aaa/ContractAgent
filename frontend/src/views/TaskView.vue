@@ -94,7 +94,9 @@ const statusText: Record<TaskStatus, string> = {
 }
 
 // 审查中 = pending/processing：显示进行中动画，不渲染闸口/报告
-const extracting = computed(() => detail.value && ['pending', 'processing'].includes(detail.value.status))
+const extracting = computed(
+  () => detail.value && ['pending', 'processing'].includes(detail.value.status),
+)
 /** 审查中提示的预计时长：双审要多跑一轮独立复核；扫描件/图片多一步本地 OCR
  *  （实测 3~17 秒/页），都比单审慢——原来固定写"约需 30~60 秒"，双审扫描件会像卡住。 */
 const etaText = computed(() => {
@@ -109,7 +111,9 @@ const reportRisks = computed(() => detail.value?.report?.risks ?? [])
 const templateNotice = computed(
   () => reportRisks.value.find((r) => r.risk_type === 'blank_template_suspected') ?? null,
 )
-const listRisks = computed(() => reportRisks.value.filter((r) => r.risk_type !== 'blank_template_suspected'))
+const listRisks = computed(() =>
+  reportRisks.value.filter((r) => r.risk_type !== 'blank_template_suspected'),
+)
 // 双审复核段：review_mode=double 的报告才有（merge_review 产出；单审为 null）
 const review = computed(() => detail.value?.report?.review ?? null)
 // 闸口阶段报告还没生成，复核结论随 gate 载荷带出（否则审批人放行前看不到盲审结果）
@@ -275,8 +279,16 @@ function focusRisk(clause: string) {
 
     <!-- 阶段进度条：当前步高亮；已完成步打勾点；error 末段标红 -->
     <div v-if="detail" class="steps">
-      <div v-for="(s, i) in stageNames" :key="s" class="step"
-           :class="{ on: i === stageIndex, done: i < stageIndex, fail: stageFailed && i === stageNames.length - 1 }">
+      <div
+        v-for="(s, i) in stageNames"
+        :key="s"
+        class="step"
+        :class="{
+          on: i === stageIndex,
+          done: i < stageIndex,
+          fail: stageFailed && i === stageNames.length - 1,
+        }"
+      >
         <span class="dot"></span>
         <span>{{ s }}</span>
       </div>

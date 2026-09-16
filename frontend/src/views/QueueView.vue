@@ -119,9 +119,7 @@ async function load() {
     const res = await listTasks()
     tasks.value = res.tasks
     // 列表刷新后清理已不存在/失效的勾选（如刚被别处删除的任务）
-    selected.value = selected.value.filter((id) =>
-      tasks.value.some((t) => t.thread_id === id),
-    )
+    selected.value = selected.value.filter((id) => tasks.value.some((t) => t.thread_id === id))
     concurrency.value = res.concurrency ?? 1
     hiddenStale.value = res.hidden_stale ?? 0
     lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
@@ -221,8 +219,7 @@ function isSelected(id: string) {
 /** 当前筛选+搜索后的可见行是否已全选。 */
 const allVisibleSelected = computed(
   () =>
-    visible.value.length > 0 &&
-    visible.value.every((t) => selected.value.includes(t.thread_id)),
+    visible.value.length > 0 && visible.value.every((t) => selected.value.includes(t.thread_id)),
 )
 
 /** 表头全选/全不选（作用于可见行，不影响被筛选藏起来的行）。 */
@@ -267,13 +264,21 @@ onUnmounted(() => {
     </p>
     <!-- 源文件已丢失的历史任务被服务端隐藏：明说一句，避免"任务凭空消失"的困惑 -->
     <p v-if="hiddenStale > 0" class="sysline muted">
-      另有 {{ hiddenStale }} 条历史任务的源文件已丢失，未在此展示（原文无法复核）；如需清理可在数据库或删除接口处理。
+      另有
+      {{ hiddenStale }}
+      条历史任务的源文件已丢失，未在此展示（原文无法复核）；如需清理可在数据库或删除接口处理。
     </p>
 
     <!-- 按文件名/任务号搜索：重复上传多份时快速定位 -->
     <div class="searchbar">
       <span class="search-wrap">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          aria-hidden="true"
+        >
           <circle cx="11" cy="11" r="7"></circle>
           <path d="M20 20l-3.5-3.5"></path>
         </svg>
@@ -290,35 +295,79 @@ onUnmounted(() => {
     <div class="stats">
       <div class="stat card">
         <span class="lab">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"></path><path d="M12 8v4M12 15.5v.5"></path></svg>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+          >
+            <path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"></path>
+            <path d="M12 8v4M12 15.5v.5"></path>
+          </svg>
           待审批
         </span>
         <b class="mono-num">{{ counts.gate }}</b>
       </div>
       <div class="stat card">
         <span class="lab">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="9"></circle>
+            <path d="M12 7v5l3 2"></path>
+          </svg>
           进行中
         </span>
         <b class="mono-num">{{ counts.processing + counts.pending }}</b>
       </div>
       <div class="stat card">
         <span class="lab">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8 12.5l2.5 2.5L16 9.5"></path></svg>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="9"></circle>
+            <path d="M8 12.5l2.5 2.5L16 9.5"></path>
+          </svg>
           已完成
         </span>
         <b class="mono-num">{{ counts.done }}</b>
       </div>
       <div class="stat card">
         <span class="lab">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4M12 15.5v.5"></path></svg>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="9"></circle>
+            <path d="M12 8v4M12 15.5v.5"></path>
+          </svg>
           失败
         </span>
         <b class="mono-num">{{ counts.error }}</b>
       </div>
       <div class="stat card total">
         <span class="lab">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            aria-hidden="true"
+          >
+            <path d="M4 6h16M4 12h16M4 18h16"></path>
+          </svg>
           全部
         </span>
         <b class="mono-num">{{ tasks.length }}</b>
@@ -327,8 +376,12 @@ onUnmounted(() => {
 
     <!-- 筛选标签：全部/待审批/审查中/已完成/失败 -->
     <div class="filters">
-      <button v-for="f in (['all', 'gate', 'processing', 'pending', 'done', 'error'] as const)" :key="f"
-              :class="{ on: filter === f }" @click="filter = f">
+      <button
+        v-for="f in ['all', 'gate', 'processing', 'pending', 'done', 'error'] as const"
+        :key="f"
+        :class="{ on: filter === f }"
+        @click="filter = f"
+      >
         {{ f === 'all' ? '全部' : statusText[f] }}
         <span class="mono-num">{{ f === 'all' ? tasks.length : counts[f] }}</span>
       </button>
@@ -350,12 +403,36 @@ onUnmounted(() => {
     </div>
 
     <div v-if="!tasks.length" class="empty-card">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7l2-3h12l2 3v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"></path><path d="M4 7h16M9 12h6"></path></svg>
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        aria-hidden="true"
+      >
+        <path d="M4 7l2-3h12l2 3v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"></path>
+        <path d="M4 7h16M9 12h6"></path>
+      </svg>
       <p>还没有任务——上传几份合同后就会出现在这里</p>
     </div>
     <div v-else-if="!visible.length" class="empty-card">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
-      <p>{{ query.trim() ? `没有匹配「${query.trim()}」的任务，试试改一下名字或清空筛选` : '该筛选下暂无任务' }}</p>
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        aria-hidden="true"
+      >
+        <circle cx="11" cy="11" r="7"></circle>
+        <path d="M20 20l-3.5-3.5"></path>
+      </svg>
+      <p>
+        {{
+          query.trim()
+            ? `没有匹配「${query.trim()}」的任务，试试改一下名字或清空筛选`
+            : '该筛选下暂无任务'
+        }}
+      </p>
     </div>
 
     <!-- 任务列表 -->
@@ -381,8 +458,13 @@ onUnmounted(() => {
           <span class="file-line">
             <span class="ficon" :class="fileChip(t).cls">{{ fileChip(t).label }}</span>
             <span class="file">{{ t.source }}</span>
-            <span v-if="t.review_mode === 'double'" class="mode-badge" title="主审 + 独立复核盲审">双审</span>
-            <span v-if="nameCounts.get(t.source.trim().toLowerCase())! > 1" class="dup-badge mono-num">
+            <span v-if="t.review_mode === 'double'" class="mode-badge" title="主审 + 独立复核盲审"
+              >双审</span
+            >
+            <span
+              v-if="nameCounts.get(t.source.trim().toLowerCase())! > 1"
+              class="dup-badge mono-num"
+            >
               同名 ×{{ nameCounts.get(t.source.trim().toLowerCase()) }}
             </span>
           </span>
@@ -390,8 +472,11 @@ onUnmounted(() => {
         </div>
         <span class="stamp" :class="dispStatus(t).cls">{{ dispStatus(t).text }}</span>
         <span class="rk">
-          <span v-if="t.risk_count != null" class="risk-badge mono-num"
-                :class="t.template ? 'warn' : t.status === 'done' ? 'ok' : 'seal'">
+          <span
+            v-if="t.risk_count != null"
+            class="risk-badge mono-num"
+            :class="t.template ? 'warn' : t.status === 'done' ? 'ok' : 'seal'"
+          >
             {{ t.status === 'gate' ? `待审 ${t.risk_count}` : `${t.risk_count} 项` }}
           </span>
           <span v-if="t.grade" class="grade" :class="gradeClass(t)">{{ dispGrade(t) }}</span>
@@ -409,35 +494,35 @@ onUnmounted(() => {
          Teleport 到 body：本视图根节点带 .rise 进场动画，会把 position: fixed 的包含块
          锁在这个区块上——不 Teleport 就变成"相对整个任务列表居中"，得往下滑才看得见。 -->
     <Teleport to="body">
-    <div v-if="showConfirm" class="modal-mask" @click.self="closeConfirm">
-      <div class="modal" role="dialog" aria-modal="true" aria-label="删除确认">
-        <h3>删除{{ pendingIds.length > 1 ? ` ${pendingIds.length} 项任务` : '任务' }}</h3>
-        <div class="modal-body">
-          <p>
-            将删除{{ pendingIds.length > 1 ? ` ${pendingIds.length} 项` : '该' }}任务，
-            任务记录与上传的原文件会一并删除，<b class="danger-text">不可恢复</b>：
-          </p>
-          <ul class="del-list">
-            <li v-for="t in pendingPreview" :key="t.thread_id">
-              <span class="del-name">{{ t.source }}</span>
-              <span class="mono-num del-tid">{{ t.thread_id }}</span>
-            </li>
-          </ul>
-          <p v-if="pendingIds.length > pendingPreview.length" class="muted">
-            …共 {{ pendingIds.length }} 项（其余省略）
-          </p>
-          <p v-if="pendingBusy > 0" class="warn-txt">
-            其中 {{ pendingBusy }} 项正在处理中，会被自动跳过，不会误删。
-          </p>
-        </div>
-        <div class="modal-actions">
-          <button class="btn btn-ghost" :disabled="deleting" @click="closeConfirm">取消</button>
-          <button class="btn btn-danger" :disabled="deleting" @click="runDelete">
-            {{ deleting ? '删除中…' : '确认删除' }}
-          </button>
+      <div v-if="showConfirm" class="modal-mask" @click.self="closeConfirm">
+        <div class="modal" role="dialog" aria-modal="true" aria-label="删除确认">
+          <h3>删除{{ pendingIds.length > 1 ? ` ${pendingIds.length} 项任务` : '任务' }}</h3>
+          <div class="modal-body">
+            <p>
+              将删除{{ pendingIds.length > 1 ? ` ${pendingIds.length} 项` : '该' }}任务，
+              任务记录与上传的原文件会一并删除，<b class="danger-text">不可恢复</b>：
+            </p>
+            <ul class="del-list">
+              <li v-for="t in pendingPreview" :key="t.thread_id">
+                <span class="del-name">{{ t.source }}</span>
+                <span class="mono-num del-tid">{{ t.thread_id }}</span>
+              </li>
+            </ul>
+            <p v-if="pendingIds.length > pendingPreview.length" class="muted">
+              …共 {{ pendingIds.length }} 项（其余省略）
+            </p>
+            <p v-if="pendingBusy > 0" class="warn-txt">
+              其中 {{ pendingBusy }} 项正在处理中，会被自动跳过，不会误删。
+            </p>
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn-ghost" :disabled="deleting" @click="closeConfirm">取消</button>
+            <button class="btn btn-danger" :disabled="deleting" @click="runDelete">
+              {{ deleting ? '删除中…' : '确认删除' }}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
     </Teleport>
   </section>
 </template>

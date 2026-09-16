@@ -99,7 +99,9 @@ async function confirmPublish() {
 
     <p v-if="applied" class="done muted mono-num">
       已入库 {{ applied.file_name }} · {{ applied.updated ? '更新' : '新增' }} · 写入
-      {{ applied.written }} 条 / 删除 {{ applied.removed }} 条 · 版本 {{ applied.version }} （{{ applied.at }}）
+      {{ applied.written }} 条 / 删除 {{ applied.removed }} 条 · 版本 {{ applied.version }} （{{
+        applied.at
+      }}）
     </p>
 
     <label class="field">
@@ -127,7 +129,9 @@ async function confirmPublish() {
       >
         确认入库
       </button>
-      <span class="hint muted">{{ canPublish ? '按上面的文件名写入政策库' : '先预览一次入库改动' }}</span>
+      <span class="hint muted">{{
+        canPublish ? '按上面的文件名写入政策库' : '先预览一次入库改动'
+      }}</span>
     </div>
 
     <!-- 计划：写几条、删几条、版本号怎么走，都在执行前摊开 -->

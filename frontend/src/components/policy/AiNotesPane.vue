@@ -53,9 +53,7 @@ function numberLine(item: AiNumberFinding): string {
       </li>
     </ul>
 
-    <p v-if="ai.notes.length" class="notes">
-      模型标出的待确认项：{{ ai.notes.join('；') }}
-    </p>
+    <p v-if="ai.notes.length" class="notes">模型标出的待确认项：{{ ai.notes.join('；') }}</p>
     <p v-if="ai.brief" class="muted brief">当时提的需求：{{ ai.brief }}</p>
   </section>
 </template>

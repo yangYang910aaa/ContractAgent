@@ -6,6 +6,7 @@
 
 import type {
   ChatCitation,
+  ChatEventData,
   ChatTurn,
   ChatUsage,
   PolicyDraftDetail,
@@ -139,7 +140,7 @@ export async function streamChat(
   threadId: string,
   message: string,
   sessionId: string,
-  onEvent: (event: ChatEvent, data: any) => void,
+  onEvent: (event: ChatEvent, data: ChatEventData) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   const resp = await fetch(`/api/tasks/${encodeURIComponent(threadId)}/chat`, {
@@ -175,7 +176,7 @@ export async function streamChat(
 }
 
 /** 解析一个 SSE 帧 → 事件名与数据；空帧或数据不合法时返回 null。 */
-function parseFrame(frame: string): { event: ChatEvent; data: any } | null {
+function parseFrame(frame: string): { event: ChatEvent; data: ChatEventData } | null {
   let event = 'message'
   const dataLines: string[] = []
   for (const line of frame.split('\n')) {

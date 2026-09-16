@@ -44,12 +44,22 @@ const emit = defineEmits<{
     <!-- 警报条：解释为什么停在这里 -->
     <div class="card pad gate-alert">
       <div class="alert-top">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"></path><path d="M12 8v4M12 15.5v.5"></path></svg>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          aria-hidden="true"
+        >
+          <path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"></path>
+          <path d="M12 8v4M12 15.5v.5"></path>
+        </svg>
         <h3>高风险，需人工审批</h3>
       </div>
       <p class="muted">
-        检测到 {{ detail.gate_payload?.high_risks.length ?? 0 }} 项高风险：请核对原文条款与政策依据后选择放行或打回；
-        审批意见与动作会写入最终报告留痕。
+        检测到
+        {{ detail.gate_payload?.high_risks.length ?? 0 }}
+        项高风险：请核对原文条款与政策依据后选择放行或打回； 审批意见与动作会写入最终报告留痕。
       </p>
     </div>
 
@@ -71,12 +81,20 @@ const emit = defineEmits<{
     <div class="card pad approval-card">
       <h3>人工审批</h3>
       <div class="approval">
-        <textarea v-model="note" rows="2" placeholder="审批意见（打回必填原因，留痕可追溯）"></textarea>
+        <textarea
+          v-model="note"
+          rows="2"
+          placeholder="审批意见（打回必填原因，留痕可追溯）"
+        ></textarea>
         <p v-if="actionError" class="err">{{ actionError }}</p>
         <div class="btns">
           <button class="btn btn-primary" :disabled="acting" @click="emit('approve')">放行</button>
-          <button class="btn btn-ghost reject" :disabled="acting" @click="emit('reject')">打回</button>
-          <button class="btn btn-plain" @click="emit('toggleEdit')">{{ showEdit ? '收起' : '编辑字段重审' }}</button>
+          <button class="btn btn-ghost reject" :disabled="acting" @click="emit('reject')">
+            打回
+          </button>
+          <button class="btn btn-plain" @click="emit('toggleEdit')">
+            {{ showEdit ? '收起' : '编辑字段重审' }}
+          </button>
         </div>
         <div v-if="showEdit" class="edit-panel">
           <label class="muted">字段补丁（JSON，键=ContractModel 字段名）</label>
