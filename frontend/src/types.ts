@@ -115,9 +115,33 @@ export interface Report {
   approval?: Approval | null
   review_mode?: string // single/double/parallel（多智能体决策钩子）
   review?: ReviewSection | null // 双审复核段（double 模式报告）
+  citation_checks?: CitationCheckSection | null // 引用核对段（逐条核编号/正文/阈值）
   llm?: LlmUsage | null // 大模型用量（calls/stages/seconds；老报告可能没有）
   error?: string
   status?: string
+}
+
+/** 引用核对段：报告里带政策引用的风险逐条核对的结果（口径见 backend/app/policy_grounding.py）。 */
+export interface CitationCheckSection {
+  items: CitationCheckItem[]
+  summary: {
+    cited: number // 带政策引用的风险条数（分母）
+    grounded: number // 编号/正文/对应政策/阈值都过的条数
+    rate: number | null // grounded / cited；没有引用时为 null
+    noted: number // 只带提示（不影响结论）的条数
+  }
+}
+
+/** 一条引用的核对结果：issues 是硬性问题（引用站不住），notes 是提示（适用范围提醒等）。 */
+export interface CitationCheckItem {
+  risk_type: string
+  label: string
+  severity: Severity | ''
+  origin: string // rules=规则引擎写的引用 / review=复核新增
+  policy_ref: string
+  ok: boolean
+  issues: string[]
+  notes: string[]
 }
 
 /** 政策库版本段：本次报告依据的语料版本（内容指纹）与份数/条数。 */

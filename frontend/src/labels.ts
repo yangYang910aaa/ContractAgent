@@ -218,3 +218,28 @@ export const POLICY_META_LABELS: Record<string, string> = {
 export function missingMetaText(missing: string[] | undefined | null): string {
   return (missing ?? []).map((key) => POLICY_META_LABELS[key] ?? key).join('、')
 }
+
+// ---- 报告页：引用核对（编号/正文/对应政策/阈值逐条核对，结论见 policy_grounding）----
+
+/** 引用核对的结构（只用到汇总，条目文案由后端给）。 */
+interface CitationCheckSummary {
+  cited: number // 带政策引用的风险条数
+  grounded: number // 核对通过的条数
+  noted: number // 只带提示的条数
+}
+
+/** 引用核对 → 一行结论：全通过就说通过，有硬问题就点明几条要人工看。 */
+export function citationCheckText(summary: CitationCheckSummary | null | undefined): string {
+  if (!summary || !summary.cited) return '本次报告没有政策引用'
+  // 分支：全部对得上 → 报条数，不给"可能有风险"的错觉
+  if (summary.grounded === summary.cited) {
+    return `${summary.cited} 条政策引用逐条核对通过（编号存在、正文可读、阈值能在原文找到）`
+  }
+  return `${summary.cited} 条政策引用中 ${summary.cited - summary.grounded} 条需人工核对`
+}
+
+/** 引用核对 → 结论色调类（全通过绿、有硬问题红）。 */
+export function citationCheckClass(summary: CitationCheckSummary | null | undefined): string {
+  if (!summary || !summary.cited) return 'ck-mute'
+  return summary.grounded === summary.cited ? 'ck-ok' : 'ck-warn'
+}

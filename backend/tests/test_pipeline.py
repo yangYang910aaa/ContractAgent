@@ -27,6 +27,28 @@ def test_build_report_shape() -> None:
     assert report["risks"][0]["severity"] == "high"
 
 
+def test_build_report_grades_clean_contract_as_pass() -> None:
+    """没有风险的风险清单也要给评级：干净合同是"通过"，不是没有评级。
+
+    离线链路自己不传 grade，靠拼装口现算；漏掉"空清单"这一支，正常合同的报告会没有评级，
+    评测里算评级判错，人看着也莫名其妙。
+    """
+    assert build_report("clean.md", ContractModel(), [], [])["grade"] == "pass"
+
+
+def test_build_report_keeps_error_report_ungraded() -> None:
+    """错误报告不按风险算评级：读不出正文的文件不能显示成"通过"。"""
+    report = build_report("broken.pdf", ContractModel(), [], [], error="未识别到正文")
+    assert report["grade"] is None
+    assert report["error"] == "未识别到正文"
+
+
+def test_build_report_accepts_serialized_risk_dicts() -> None:
+    """已序列化的风险 dict 也要能算评级（不是每个调用方手里都是规则侧对象）。"""
+    risks = [{"risk_type": "confidentiality_missing", "severity": "medium"}]
+    assert build_report("demo.md", ContractModel(), risks, [])["grade"] == "conditional_pass"
+
+
 def test_enrich_policy_hits_dedup_and_skip_nonpolicy() -> None:
     risks = [
         _risk("P-01", evidence="预付款比例 60%"),

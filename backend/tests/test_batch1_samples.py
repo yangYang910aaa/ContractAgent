@@ -54,13 +54,28 @@ def test_new_samples_text_rules_match_design() -> None:
 
 
 def test_regenerated_old_samples_clean_on_text_rules() -> None:
-    """方案 A 重渲染后，旧企业/技术样本（01~05/08/09）不再被新文本规则命中。"""
-    kinds = {f"sample_{i:02d}": "enterprise_goods" for i in range(1, 6)}
+    """方案 A 重渲染后，旧企业/技术样本不再被新文本规则命中。
+
+    sample_03 不在此列：它是缺陷样本，"按日 1.5% 且无累计上限"本身就该命中（见下一条）。
+    """
+    kinds = {f"sample_{i:02d}": "enterprise_goods" for i in (1, 2, 4, 5)}
     kinds.update({"sample_08": "tech_service", "sample_09": "tech_service"})
     for sample_id, kind in kinds.items():
         name = f"{sample_id}_"  # 文件名前缀
         path = next(p for p in SAMPLES_DIR.glob("*.md") if p.name.startswith(name))
         assert text_rules(path.read_text(encoding="utf-8"), kind) == [], path.name
+
+
+def test_sample03_has_penalty_cap_missing() -> None:
+    """sample_03 按日 1.5% 又没有累计上限 → 命中"违约金无上限"。
+
+    它那句"赔偿责任总额以 5% 为上限"是赔偿责任口径，不是违约金的封顶（P-14 第四条：
+    两者不应相互倒挂）——早先把这句当封顶，这份样本在文本级规则上才"看起来干净"。
+    """
+    path = next(p for p in SAMPLES_DIR.glob("*.md") if p.name.startswith("sample_03_"))
+    risks = text_rules(path.read_text(encoding="utf-8"), "enterprise_goods")
+    assert {r.risk_type for r in risks} == {"penalty_cap_missing"}
+    assert risks[0].policy_ref == "P-14"
 
 
 def test_normal_samples_contain_batch1_clauses() -> None:

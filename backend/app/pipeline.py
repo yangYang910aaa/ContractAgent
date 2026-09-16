@@ -156,10 +156,11 @@ def build_report(
     extra 给图链路补它特有的段（审批意见、状态、审查模式）。
     """
     plain_risks = [_plain(risk) for risk in (risks or [])]
-    objects = [risk for risk in (risks or []) if hasattr(risk, "model_dump")]
-    # 分支：调用方没给评级、风险又是规则侧的对象 → 现算（图链路自己有结论，会显式传 grade）
-    if grade is None and objects:
-        grade = grade_report(objects).value
+    # 分支：调用方没给评级、也不是错误报告 → 按风险现算。**空清单也要算**：没有风险就是通过，
+    # 漏了这一支，干净合同的离线报告会没有评级（图链路自己有结论，会显式传 grade）；
+    # 错误报告不算评级，否则"读不出正文"的文件会被标成通过。
+    if grade is None and error is None:
+        grade = grade_report(_risk_items(risks)).value
     report = {
         "contract_file": contract_file,  #来源文件路径
         "grade": grade, #high/medium/low的等级评分
@@ -184,6 +185,11 @@ def build_report(
 def _plain(value):
     """报告里放 dict：规则侧对象转 JSON 友好形态（date/Decimal → 字符串/数字）。"""
     return value.model_dump(mode="json") if hasattr(value, "model_dump") else value
+
+
+def _risk_items(risks) -> list[RiskItem]:
+    """风险清单 → 规则侧对象，供评级现算：离线链路给对象、图链路给已序列化的 dict，两种都收。"""
+    return [risk if isinstance(risk, RiskItem) else RiskItem(**risk) for risk in (risks or [])]
 
 
 def _contract_kind(extracted) -> str | None:

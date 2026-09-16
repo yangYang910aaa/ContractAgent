@@ -1,14 +1,15 @@
 <!--
   报告面板（详情页左栏，已完成态）：文件头与导出、审批留痕、空白模板结论、
-  双审复核结论、风险清单、政策引用。展示为主，动作（导出/定位/问助手）转给详情页。
+  双审复核结论、引用核对、风险清单、政策引用。展示为主，动作（导出/定位/问助手）转给详情页。
 -->
 <script setup lang="ts">
-import { policyReflow, prettyField } from '../../labels'
+import { computed } from 'vue'
+import { citationCheckClass, citationCheckText, policyReflow, prettyField } from '../../labels'
 import ReviewBlock from './ReviewBlock.vue'
 import RiskCard from './RiskCard.vue'
 import type { ReviewSection, RiskCardItem, TaskDetail } from '../../types'
 
-defineProps<{
+const props = defineProps<{
   detail: TaskDetail
   risks: RiskCardItem[]
   templateNotice: RiskCardItem | null
@@ -20,6 +21,24 @@ const emit = defineEmits<{
   locate: [clause: string, quote: string]
   ask: [risk: RiskCardItem]
 }>()
+
+/** 引用核对段：报告没有这一段（老报告）时不显示。 */
+const citationCheck = computed(() => props.detail.report?.citation_checks ?? null)
+
+/** 站不住的引用：编号不存在、正文读不到、引错政策、阈值在原文找不到——列出来请人核对。 */
+const citationProblems = computed(() => (citationCheck.value?.items ?? []).filter((item) => !item.ok))
+
+/** 只带提示的引用：政策自己写明"这类合同不适用"之类，不影响结论，单独一行免得混进问题里。 */
+const citationNotes = computed(() =>
+  (citationCheck.value?.items ?? []).filter((item) => item.ok && item.notes.length),
+)
+
+/** 结论徽章：没有引用可核对时说"无引用"，别给"通过"的错觉。 */
+const citationBadge = computed(() => {
+  const summary = citationCheck.value?.summary
+  if (!summary?.cited) return '无引用'
+  return citationProblems.value.length ? '需核对' : '通过'
+})
 
 /** 政策行解析：已知标签行（文件编号/版本/生效日期/归口部门/适用范围/第X条）
  * 拆出标签与内容，标签用强调色、内容保持正文色——关键信息一眼可分。 */
@@ -86,6 +105,31 @@ function policyRowClass(index: number, line: string): string {
     </template>
     <template v-else-if="!templateNotice">
       <p class="none ok-text serif">未发现风险 · 自动放行</p>
+    </template>
+
+    <!-- 引用核对：编号/正文/对应政策/阈值逐条核对——结论只写在后端报告里时用户看不到 -->
+    <template v-if="citationCheck">
+      <h4>引用核对</h4>
+      <div class="card pad ck" :class="citationCheckClass(citationCheck.summary)">
+        <p class="ck-head">
+          <span class="ck-badge">{{ citationBadge }}</span>
+          <span class="ck-text">{{ citationCheckText(citationCheck.summary) }}</span>
+        </p>
+        <ul v-if="citationProblems.length" class="ck-list">
+          <li v-for="(item, i) in citationProblems" :key="`bad-${i}`">
+            <span class="ck-ref mono-num">{{ item.policy_ref }}</span>
+            <span class="ck-label">{{ item.label }}</span>
+            <span class="ck-msg">{{ item.issues.join('；') }}</span>
+          </li>
+        </ul>
+        <ul v-if="citationNotes.length" class="ck-list">
+          <li v-for="(item, i) in citationNotes" :key="`note-${i}`">
+            <span class="ck-ref mono-num">{{ item.policy_ref }}</span>
+            <span class="ck-label">{{ item.label }}</span>
+            <span class="ck-msg">{{ item.notes.join('；') }}</span>
+          </li>
+        </ul>
+      </div>
     </template>
 
     <!-- 政策引用：policy_ref + 相似度 + 制度原文片段 -->
@@ -273,6 +317,82 @@ h4 {
 
 .hit {
   margin: 8px 0;
+}
+
+/* 引用核对：整块色调跟结论走（全通过=绿、有硬问题=红），一眼看出要不要人工看 */
+.ck {
+  margin: 8px 0;
+  border-left: 4px solid var(--muted);
+}
+
+.ck-ok {
+  border-left-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.ck-warn {
+  border-left-color: var(--seal-deep);
+  background: var(--seal-soft);
+}
+
+.ck-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+
+.ck-badge {
+  flex: none;
+  padding: 2px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+  background: var(--card-2);
+}
+
+.ck-ok .ck-badge {
+  color: var(--ok);
+  background: #fff;
+}
+
+.ck-warn .ck-badge {
+  color: var(--seal-deep);
+  background: #fff;
+}
+
+.ck-text {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--ink);
+}
+
+/* 条目行：编号与风险名在前、说明在后，问题与提示共用一套排版 */
+.ck-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ck-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+
+.ck-ref {
+  font-size: 12.5px;
+  color: var(--pri);
+}
+
+.ck-label {
+  color: var(--ink);
+  font-weight: 600;
 }
 
 /* 政策库版本行：贴"政策引用"标题的元信息，悬浮显示各份政策的版本号 */

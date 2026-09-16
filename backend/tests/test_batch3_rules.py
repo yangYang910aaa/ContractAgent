@@ -185,6 +185,28 @@ def test_cap_in_another_clause_does_not_count() -> None:
     assert _types(text)["penalty_cap_missing"] == "high"
 
 
+def test_liability_cap_next_sentence_is_not_penalty_cap() -> None:
+    """紧跟的"赔偿责任上限"不是违约金封顶 → 仍要报无上限（两者不应相互倒挂，P-14 第四条）。
+
+    实测样本形态："每逾期一日按 1.5% 支付违约金。除违约金外，乙方对甲方承担的赔偿责任
+    总额以合同总价款的 5% 为上限。"——旧口径把这个"上限"当成违约金封顶，整条漏判。
+    """
+    text = _text(penalty=(
+        "乙方逾期交付的，每逾期一日按合同总价款的 1.5% 向甲方支付违约金。"
+        "除违约金外，乙方对甲方承担的赔偿责任总额以合同总价款的 5% 为上限。"
+    ))
+    assert _types(text)["penalty_cap_missing"] == "high"
+
+
+def test_penalty_cap_sentence_still_counts() -> None:
+    """违约金自己的累计上限照旧算封顶 → 不报。"""
+    text = _text(penalty=(
+        "乙方逾期交付的，每逾期一日按合同总价款的 1.5% 向甲方支付违约金，"
+        "违约金累计不超过合同总价款的 20%。"
+    ))
+    assert "penalty_cap_missing" not in _types(text)
+
+
 def test_gov_kind_skips_batch3_rules() -> None:
     """政采/校服类按示范文本执行 → 本组规则整组不跑（5‰/日 无上限不误报）。"""
     text = _text(penalty="乙方逾期交付的，每逾期一日按合同总价款的 0.5% 向甲方支付违约金。")

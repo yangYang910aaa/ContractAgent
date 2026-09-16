@@ -488,6 +488,40 @@ def test_first_payment_named_shoufu_counts_as_prepayment() -> None:
     assert "prepayment_ratio_high" not in _risk_types(model2)
 
 
+def test_prepayment_over_limit_with_blank_total_is_medium_not_high() -> None:
+    """"总额空栏、期次比例还留着"（半填/未定稿）→ 降为提示级，不判 high、不停闸口。
+
+    半填合同里的比例多是模板残留，没有总额做基数，照它判"预付过高"会误停闸口。
+    """
+    model = _with(
+        total_amount=None,
+        payment_schedule=[_term("首付款", "1679900", 50.0), _term("尾款", "1679900", 50.0)],
+    )
+    prepay = [r for r in evaluate(model) if r.risk_type == "prepayment_ratio_high"]
+    assert prepay and prepay[0].severity == Severity.medium
+    assert "总额" in prepay[0].suggestion
+
+
+def test_prepayment_over_limit_with_unreliable_total_is_medium_not_high() -> None:
+    """总额抽到了但不可信（低置信度、证据里没有数字）→ 同样只提示，不判 high。"""
+    model = _with(
+        total_amount=Decimal("1000000"),
+        extraction_meta={"total_amount": Evidence(quote="合同总价款为人民币", confidence=0.3)},
+        payment_schedule=[_term("预付款", "500000", 50.0), _term("尾款", "500000", 50.0)],
+    )
+    prepay = [r for r in evaluate(model) if r.risk_type == "prepayment_ratio_high"]
+    assert prepay and prepay[0].severity == Severity.medium
+
+
+def test_prepayment_within_limit_with_blank_total_stays_silent() -> None:
+    """总额空栏但比例本身没超线 → 不必新增提示（别为了避险变成处处都有噪音）。"""
+    model = _with(
+        total_amount=None,
+        payment_schedule=[_term("预付款", "200000", 20.0), _term("尾款", "800000", 80.0)],
+    )
+    assert "prepayment_ratio_high" not in _risk_types(model)
+
+
 # ---- 开放式条款语境 ----
 
 

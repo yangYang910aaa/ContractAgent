@@ -80,6 +80,9 @@ _PENALTY_CAP_RE = re.compile(r"不超过|最高不超过|累计不超过|上限|
 # （真实钢结构合同：0.5%/日 那句之后 271 字才是另一条款的"不超过 8%"）
 _PENALTY_CAP_WINDOW = 150
 
+# 封顶句的主体词：以哪个词为准说话，决定这个"上限"是违约金的还是赔偿责任的
+_CAP_SUBJECT_RE = re.compile(r"违约金|赔偿|责任")
+
 
 # 无上限判定的日费率门槛（%/日）：0.05%/日是行业常见写法，无上限的实际敞口有限
 # （100 天累计 5%），报出来只是噪音；0.5%/日 这类高费率无封顶才会失控（真实钢结构件）
@@ -126,6 +129,35 @@ def _sentence_span(text: str, pos: int) -> tuple[int, int]:
     ends = [text.find(ch, pos) for ch in "。；;\n"]
     ends = [e for e in ends if e != -1]
     return start, (min(ends) if ends else len(text))
+
+
+def _penalty_cap_in(window: str) -> bool:
+    """窗口里有没有"违约金自己的"封顶句。
+
+    只看封顶词所在句里、**离它最近的那个主体词**：是"赔偿/责任"就不是违约金的封顶
+    （P-14 第四条：违约金累计上限与赔偿责任上限不应相互倒挂）。实测样本里"每逾期一日 1.5%"
+    后面紧跟"除违约金外…赔偿责任总额以合同总价款的 5% 为上限"，旧口径把它当封顶，整条漏判。
+    """
+    for match in _PENALTY_CAP_RE.finditer(window):
+        start, _ = _sentence_span(window, match.start())
+        subject = _cap_subject(window[start : match.start()])
+        # 分支：这句话的主语是赔偿责任 → 不是违约金的封顶，跳过继续找
+        if subject in ("赔偿", "责任"):
+            continue
+        return True
+    return False
+
+
+def _cap_subject(prefix: str) -> str | None:
+    """封顶词之前最近的主体词（违约金 / 赔偿 / 责任）；都没有则 None。
+
+    None 的情况（如"尾款最多不超过结算价款的 8%"）按"确实写了上限"处理——宁可少报，
+    不硬把已有上限的句判成无上限。
+    """
+    subject = None
+    for match in _CAP_SUBJECT_RE.finditer(prefix):
+        subject = match.group(0)
+    return subject
 
 
 def _check_confidentiality_no_exception(text: str) -> RiskItem | None:
@@ -224,8 +256,8 @@ def _check_penalty_cap_missing(text: str) -> RiskItem | None:
     #    无上限的敞口有限，真实语料里这类写法很普遍）
     if rate < _PENALTY_UNCAPPED_MIN_DAILY_PERCENT:
         return None
-    # 分支 3：近旁写了上限（不超过/最高不超过/为限…）→ 视为已封顶
-    if _PENALTY_CAP_RE.search(text[hit.start() : hit.start() + _PENALTY_CAP_WINDOW]):
+    # 分支 3：近旁写了违约金自己的上限 → 视为已封顶（赔偿责任上限不算，见 _penalty_cap_in）
+    if _penalty_cap_in(text[hit.start() : hit.start() + _PENALTY_CAP_WINDOW]):
         return None
     # 分支 4：日费率高且无上限 → high
     return RiskItem(

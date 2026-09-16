@@ -253,6 +253,16 @@ def _prepay_ratio(model: ContractModel) -> tuple[PaymentTerm, float] | None:
     return None
 
 
+def _prepay_base_known(model: ContractModel) -> bool:
+    """预付款比例的比对基线是否成立：合同总额有值且抽取可信。
+
+    半填/未定稿合同常出现"总额空栏、期次上的比例还留着"（模板残留），照它判
+    "预付过高"会误停闸口；比例没有可比基线时只提示人工核对（与金额一致性、
+    缺必填在空总额下同样降级的口径一致）。
+    """
+    return model.total_amount is not None and _total_amount_reliable(model)
+
+
 def _check_policies(model: ContractModel, required: set[str]) -> list[RiskItem]:
     """政策类规则汇总（输出带 policy_ref，可回指政策库文档）。
     """
@@ -263,17 +273,35 @@ def _check_policies(model: ContractModel, required: set[str]) -> list[RiskItem]:
     # 分支：存在预付期次且比例超阈值 → 预付款过高，资金风险
     if prepay and prepay[1] > PREPAY_MAX_PERCENT:
         term, ratio = prepay
-        out.append(
-            _mk(
-                model,
-                risk_type="prepayment_ratio_high",
-                severity=Severity.high,
-                field="payment_schedule",
-                policy_ref="P-01",
-                evidence=term.evidence or f"预付款比例 {ratio:g}%",
-                suggestion=f"预付款 {ratio:g}% 超过政策上限 {PREPAY_MAX_PERCENT:g}%，建议降至 30% 以内。",
+        # 分支 1：总额空栏/不可信 → 比例无从核对，降为提示级（不判 high、不停闸口）
+        if not _prepay_base_known(model):
+            out.append(
+                _mk(
+                    model,
+                    risk_type="prepayment_ratio_high",
+                    severity=Severity.medium,
+                    field="payment_schedule",
+                    policy_ref="P-01",
+                    evidence=term.evidence or f"预付款比例 {ratio:g}%（合同总额空栏或不可信）",
+                    suggestion=(
+                        f"合同总额未填或抽取不可信，预付款比例没有可比的基数（政策上限 "
+                        f"{PREPAY_MAX_PERCENT:g}%）；请核对总额与付款安排后再确认。"
+                    ),
+                )
             )
-        )
+        # 分支 2：总额可信 → 判定为预付款过高
+        else:
+            out.append(
+                _mk(
+                    model,
+                    risk_type="prepayment_ratio_high",
+                    severity=Severity.high,
+                    field="payment_schedule",
+                    policy_ref="P-01",
+                    evidence=term.evidence or f"预付款比例 {ratio:g}%",
+                    suggestion=f"预付款 {ratio:g}% 超过政策上限 {PREPAY_MAX_PERCENT:g}%，建议降至 30% 以内。",
+                )
+            )
 
     # ---- P-02 质保期：不足 12 个月 → high ----
     # 分支：质保月数有值且低于下限 → 交付后保障不足
