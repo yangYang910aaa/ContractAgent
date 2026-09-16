@@ -148,10 +148,10 @@ function go(viewName: View) {
       <PolicyView v-else-if="view === 'policy'" />
     </main>
 
-    <!-- 页脚：演示合规免责 -->
+    <!-- 页脚：素材来源与免责（图会带进 README，口径要与实际一致） -->
     <footer>
       <span class="muted"
-        >演示环境使用合成合同与合成政策语料 · 系统产出为初审参考，不构成法律意见</span
+        >合同素材取自公开渠道 · 政策语料为本项目自建 · 系统产出为初审参考，不构成法律意见</span
       >
     </footer>
   </div>
