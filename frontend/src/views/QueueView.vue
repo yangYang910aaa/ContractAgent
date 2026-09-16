@@ -76,6 +76,11 @@ function dispGrade(t: TaskSummary): string {
   return gradeShow(t)
 }
 
+/** 待审批任务的高风险类型名：队列行直接列出来，省得逐份点进去才知道卡在哪一条。 */
+function gateRiskNames(t: TaskSummary): string[] {
+  return (t.gate_payload?.high_risks ?? []).map((risk) => risk.label || risk.risk_type)
+}
+
 /** 各状态数量：统计条与空态文案都用它。 */
 const counts = computed(() => {
   const c: Record<TaskStatus, number> = { pending: 0, processing: 0, gate: 0, done: 0, error: 0 }
@@ -469,6 +474,13 @@ onUnmounted(() => {
             </span>
           </span>
           <span class="mono-num tid">{{ t.thread_id }}</span>
+          <!-- 待审批：把待审高风险名直接列出来（最多三条，其余折叠成 +N） -->
+          <span v-if="t.status === 'gate' && gateRiskNames(t).length" class="gate-names">
+            待审：{{ gateRiskNames(t).slice(0, 3).join('、')
+            }}<template v-if="gateRiskNames(t).length > 3">
+              等 {{ gateRiskNames(t).length }} 条</template
+            >
+          </span>
         </div>
         <span class="stamp" :class="dispStatus(t).cls">{{ dispStatus(t).text }}</span>
         <span class="rk">
@@ -1047,6 +1059,13 @@ onUnmounted(() => {
 .tid {
   color: var(--muted);
   font-size: 12px;
+}
+
+/* 待审批行的"待审：风险名"一行：琥珀色小字，与状态徽章同色系 */
+.gate-names {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--warn);
 }
 
 .rk {

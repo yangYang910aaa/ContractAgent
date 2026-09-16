@@ -302,6 +302,20 @@ def test_label_value_is_not_taken_as_party_name() -> None:
     assert model2.buyer == "某医院"
 
 
+def test_next_field_label_is_not_taken_as_party_name() -> None:
+    """范本填空栏连排时，下一个栏位名不能被当成主体名（政采参考范本实测）。"""
+    text = (
+        "政府采购合同\n甲方合同编号：\n甲方：\n乙方：\n"
+        "甲方合同法律审核部门：\n签订时间：      年    月    日\n"
+        "第一条 合同标的："
+    )
+    model = build_contract_model({"supplier": "甲方合同法律审核部门"}, text)
+    assert model.supplier is None
+    # 值后面紧跟冒号才算栏位名；正文里正常写的名称不受影响
+    ok = build_contract_model({"supplier": "某某科技有限公司"}, "乙方：某某科技有限公司\n")
+    assert ok.supplier == "某某科技有限公司"
+
+
 def test_missing_field_gets_text_locator() -> None:
     """缺必填字段没抽到证据时，也要按字段在正文里补一个"该去哪找"的定位。"""
     text = (

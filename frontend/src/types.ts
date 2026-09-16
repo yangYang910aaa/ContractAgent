@@ -169,6 +169,7 @@ export interface TaskSummary {
   risk_count?: number | null // done=报告风险数；gate=待审 high 数；其余 null
   template?: boolean // 报告含"疑似空白模板"结论（前端评级显示"待确认"）
   error?: string
+  gate_payload?: GatePayload | null // 待审批任务的闸口载荷（列表接口也带，队列行用它显示待审风险名）
 }
 
 /** 队列列表响应：任务数组 + 服务端并发上限。 */

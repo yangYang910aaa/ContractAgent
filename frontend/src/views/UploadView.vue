@@ -47,8 +47,10 @@ async function uploadAll() {
   if (!picked.value.length || busy.value) return
   busy.value = true
   results.value = []
-  for (const file of picked.value) {
-    uploading.value = file.name
+  const total = picked.value.length
+  // 进度按"第几份 / 共几份"显示：一次选几十份时，光有文件名看不出还要等多久
+  for (const [index, file] of picked.value.entries()) {
+    uploading.value = `${file.name}（${index + 1}/${total}）`
     try {
       const res = await uploadContract(file, reviewMode.value)
       results.value.push({ name: file.name, ok: true, tid: res.thread_id })

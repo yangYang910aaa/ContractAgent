@@ -51,12 +51,17 @@ def test_normal_contract_no_risk_and_pass() -> None:
 
 
 def test_risks_carry_chinese_label_and_field_name() -> None:
-    """展示层友好：风险带中文 label，缺必填建议文案里的字段名不再露英文 key。"""
+    """展示层友好：风险带中文 label，缺必填带上字段名，建议文案不露英文 key。"""
     model = _with(effective_date=None, expiry_date=None, total_amount=None)
     missing = [r for r in evaluate(model) if r.risk_type == "missing_required_field"]
     assert len(missing) == 3
-    # label 是中文展示名，不是机器码
-    assert all(r.label == "缺失必填字段" for r in missing)
+    # label 是中文展示名 + 具体字段，不是机器码（同一类型命中多个字段时要能分辨）
+    assert all(r.label.startswith("缺失必填字段「") for r in missing)
+    assert {r.label for r in missing} == {
+        "缺失必填字段「生效日期」",
+        "缺失必填字段「到期日」",
+        "缺失必填字段「合同总额」",
+    }
     # 建议文案字段名已本地化（这句是给人看的）
     sug = next(r for r in missing if r.field == "effective_date").suggestion
     assert "生效日期" in sug
@@ -202,6 +207,14 @@ def test_missing_governing_law_and_ip() -> None:
     types = _risk_types(model)
     assert "governing_law_missing" in types
     assert "ip_ownership_missing" in types
+
+
+def test_missing_required_labels_carry_field_name() -> None:
+    """缺必填会同时命中多个字段：展示名要带上字段，报告里才不用靠证据分辨缺哪一项。"""
+    model = _with(total_amount=None, effective_date=None)
+    risks = [r for r in evaluate(model) if r.risk_type == "missing_required_field"]
+    labels = sorted(r.label for r in risks)
+    assert labels == ["缺失必填字段「合同总额」", "缺失必填字段「生效日期」"]
 
 
 def test_gov_goods_genre_missing_fields_not_flagged() -> None:

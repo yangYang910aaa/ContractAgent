@@ -362,9 +362,10 @@ _PARTY_PLACEHOLDER_RE = re.compile(
     r"^(?:甲方|乙方|买方|卖方|供方|需方|双方|三方)(?:[（(][^）)]{0,12}[）)])?$"
 )
 # 栏位标签词不是名称：真实合同常写"卖方："后换行接"签订时间："，正则会把下一行的
-# 栏位标签当成公司名（小麦合同实测把"签订时间"填进了 supplier）——按标签词拦截
+# 栏位标签当成公司名（小麦合同实测把"签订时间"填进了 supplier）——按标签词拦截；
+# "部门"同属栏位用词（范本里"甲方合同法律审核部门："这种栏位名会被当成主体名）
 _PARTY_LABEL_RE = re.compile(
-    r"时间|日期|地点|电话|传真|邮箱|邮编|地址|账号|开户|盖章|签章|签名|签字|编码|代码|方式"
+    r"时间|日期|地点|电话|传真|邮箱|邮编|地址|账号|开户|盖章|签章|签名|签字|编码|代码|方式|部门"
 )
 # 名称形态判据：采购合同当事人几乎都是组织（公司/厂/院/所/中心…）——中文名以组织后缀结尾，
 # 英文名以公司后缀结尾。实测教训：不设形态判据时，"授权代表""Address"这类中英栏位标签
@@ -376,16 +377,22 @@ _PARTY_ORG_SUFFIX_RE = re.compile(
 )
 
 
-def _is_placeholder_party(value: str) -> bool:
+def _is_placeholder_party(value: str, text: str = "") -> bool:
     """值是否只是栏位标签或掩码（"甲方（需方）""乙方""*******"），而不是真实主体名。
 
     空白/半填模板的栏位没填时，模型会把"甲方（需方）"整串抄成甲方名称，
     报告里就出现"甲方（采购方）：甲方（需方）"这种把标签当值的结果。
+    给了原文时另判一条：值在原文里后面紧跟冒号 → 那是栏位标题，不是填进去的名称
+    （范本的填空栏会连排成"乙方： 甲方合同法律审核部门："）。
     """
-    text = value.strip().replace(" ", "").replace("\u3000", "")
-    if not text:
+    stripped = value.strip().replace(" ", "").replace("\u3000", "")
+    if not stripped:
         return True
-    return bool(_PARTY_MASK_RE.match(text) or _PARTY_PLACEHOLDER_RE.match(text))
+    if _PARTY_MASK_RE.match(stripped) or _PARTY_PLACEHOLDER_RE.match(stripped):
+        return True
+    if text and re.search(rf"{re.escape(stripped)}\s*[：:]", text):
+        return True
+    return False
 
 
 def _party_fallback(field: str, text: str) -> tuple[str | None, str]:
@@ -400,7 +407,7 @@ def _party_fallback(field: str, text: str) -> tuple[str | None, str]:
     for m in pattern.finditer(text):
         value = m.group(1).strip()
         # 分支 1：掩码/占位标签 → 不是名称，继续往后找
-        if _is_placeholder_party(value):
+        if _is_placeholder_party(value, text):
             continue
         # 分支 2：连一个汉字/字母/数字都没有（纯标点）→ 跳过
         if not re.search(r"[\u4e00-\u9fffA-Za-z0-9]", value):
@@ -422,9 +429,10 @@ def _fill_missing_parties(model: ContractModel, text: str) -> ContractModel:
     for field in ("buyer", "supplier"):
         value = getattr(model, field)
         # 分支 1：模型抽到的是栏位标签/掩码（半填模板常见）→ 视为未填，置空
-        if value and _is_placeholder_party(value):
+        if value and _is_placeholder_party(value, text):
             updates[field] = None
             value = None
+            meta.pop(field, None)  # 值都判掉了，来源句一并去掉（空字段不该留证据）
         # 分支 2：已有真实值 → 不动（兜底只补空，不做二次判断）
         if value:
             continue

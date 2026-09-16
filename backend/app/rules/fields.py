@@ -35,6 +35,7 @@ def _mk(
     suggestion: str,  # 整改建议文案
     policy_ref: str | None = None,  # 对应政策编号（P-01..）
     evidence: str | None = None,  # 覆盖默认原文证据（金额类"计算型证据"用）
+    label: str | None = None,  # 覆盖默认中文展示名（同一类型要区分到字段时用）
 ) -> RiskItem:
     """RiskItem 小工厂：统一拼证据与条款引用，避免每处规则重复写。
 
@@ -43,7 +44,8 @@ def _mk(
     """
     return RiskItem(
         risk_type=risk_type,
-        label=RISK_LABELS.get(risk_type, risk_type),  # 中文展示名；未登记类型回退机器码
+        # 中文展示名；未登记类型回退机器码
+        label=label or RISK_LABELS.get(risk_type, risk_type),
         severity=severity,
         field=field,
         evidence=_quote(model, field) if evidence is None else evidence,
@@ -111,14 +113,18 @@ def _check_required(model: ContractModel) -> list[RiskItem]:
         # 主体信息（甲乙方/币种）缺失影响较小，定 medium 提示人工补全。
         if getattr(model, field) is None:
             severity = Severity.high if field in HIGH_IF_MISSING else Severity.medium
+            # 一个类型会命中多个字段（空白模板常有四五条）：展示名带上字段，
+            # 报告里才不会出现一串同名条目、只能靠证据分辨是缺哪一项
+            field_name = FIELD_LABELS.get(field, field)
             out.append(
                 _mk(
                     model,
                     risk_type="missing_required_field",
                     severity=severity,
                     field=field,
+                    label=f"{RISK_LABELS['missing_required_field']}「{field_name}」",
                     # 字段名用中文（FIELD_LABELS），避免界面出现 effective_date 这类英文 key
-                    suggestion=f"缺失必填字段「{FIELD_LABELS.get(field, field)}」，请人工确认或补全后再审。",
+                    suggestion=f"缺失必填字段「{field_name}」，请人工确认或补全后再审。",
                 )
             )
     return out
