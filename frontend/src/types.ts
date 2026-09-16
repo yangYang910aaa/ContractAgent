@@ -307,6 +307,7 @@ export interface PolicyDraftSummary {
   conflicts: PolicyConflict[]
   origin?: 'manual' | 'ai' // 正文来源：人工上传/粘贴，还是模型起草
   new_numbers?: AiNumberFinding[] // 模型起草时新引入的数字（等人确认）
+  suggestions?: AiDraftSuggestions // 模型起草给出的配套建议（风险类型/样本/检索金标）
   llm?: { calls: number; stages: Record<string, number>; seconds: number } // 起草花的调用量
 }
 
@@ -351,6 +352,39 @@ export interface AiDraftSection {
   notes: string[]
   articles: AiDraftArticle[]
   new_numbers: AiNumberFinding[]
+  suggestions?: AiDraftSuggestions // 配套建议（老的草稿产物没有这一项）
+}
+
+/** 配套建议一：这条政策该挂哪个风险类型（known=false 表示库里没有这个编码，需人工定）。 */
+export interface AiRiskTypeSuggestion {
+  risk_type: string // 既有风险类型编码，或模型自认库里没有时写的 new
+  label: string // 风险中文短名
+  why: string // 为什么归到这一类
+  evidence_hint: string // 审查时从合同原文怎么认出来
+  known: boolean // 编码是否对得上规则里登记的那份
+}
+
+/** 配套建议二：建议造的验证样本（expected_grade 为空表示取值非法、按待定展示）。 */
+export interface AiSampleSuggestion {
+  goal: string // 这条样本要验证什么
+  kind: string // 合同品类（四类之一，后端已归位）
+  defect: string // 注入的缺陷
+  expected_grade: string // 期望评级：pass / conditional_pass / fail，空=待定
+}
+
+/** 配套建议三：检索金标建议（提问 → 该命中的条文）。 */
+export interface AiRetrievalSuggestion {
+  query: string // 像审查员那样提的问题
+  policy_ref: string // 该命中的政策编号
+  expect: string // 期望命中的条文要点关键词
+}
+
+/** 模型起草的配套三样：风险类型候选 / 样本建议 / 检索金标建议，外加被后端改过取值的提示。 */
+export interface AiDraftSuggestions {
+  risk_types: AiRiskTypeSuggestion[]
+  samples: AiSampleSuggestion[]
+  retrievals: AiRetrievalSuggestion[]
+  notes: string[] // 取值不合法被归位这类说明（空则没改过）
 }
 
 // ---- 政策入库（B2：会用真库，所以计划与执行分成两步）----

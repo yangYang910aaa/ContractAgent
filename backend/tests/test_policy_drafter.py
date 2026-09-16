@@ -29,6 +29,43 @@ _DRAFTED = {
         },
     ],
     "notes": ["生效日期与归口部门待填", "未提供担保时的具体比例阈值待定"],
+    "risk_types": [
+        {
+            "risk_type": "prepayment_ratio_high",
+            "label": "预付款比例过高",
+            "why": "管的就是交付前付款比例",
+            "evidence_hint": "看付款计划里含「预付/首付」的期次，与合同总额相除",
+        },
+        {
+            "risk_type": "prepayment_cap_missing",
+            "label": "预付款上限缺失",
+            "why": "本条还要求写清上限",
+            "evidence_hint": "看付款条款有没有写「不超过」",
+        },
+        {
+            "risk_type": "prepayment_ratio_high",
+            "label": "重复的一条",
+            "why": "模型常把同一类型列两遍",
+            "evidence_hint": "",
+        },
+    ],
+    "samples": [
+        {
+            "goal": "验证超比例判 fail",
+            "kind": "enterprise_goods",
+            "defect": "付款计划写「合同生效后 10 日内预付 50%」",
+            "expected_grade": "fail",
+        },
+        {
+            "goal": "验证品类取值兜底",
+            "kind": "政采货物",
+            "defect": "首付款 60%",
+            "expected_grade": "严重",
+        },
+    ],
+    "retrievals": [
+        {"query": "预付款最多能给多少", "policy_ref": "P-16", "expect": "预付款比例上限"},
+    ],
 }
 
 
@@ -85,6 +122,7 @@ def test_draft_policy_writes_draft_with_ai_meta(tmp_path: Path, monkeypatch) -> 
     assert detail["ai"]["brief"].startswith("预付款要限制比例")
     assert [item["heading"] for item in detail["ai"]["articles"]][:1] == ["制度目的"]
     assert detail["ai"]["notes"] and detail["ai"]["new_numbers"]
+    assert detail["ai"]["suggestions"]["risk_types"][0]["risk_type"] == "prepayment_ratio_high"
     assert "## 第二条 预付款比例上限" in detail["draft"]
 
 
@@ -102,3 +140,56 @@ def test_cn_number() -> None:
     assert [policy_drafter.cn_number(n) for n in (1, 9, 10, 11, 20, 21, 30)] == [
         "一", "九", "十", "十一", "二十", "二十一", "三十",
     ]
+
+
+def test_normalize_suggestions_flags_unknown_code_and_bad_values() -> None:
+    """配套建议的护栏：自造的风险类型编码标成待新增，非法品类与评级归位并留提示。"""
+    result = policy_drafter.normalize_suggestions(_DRAFTED)
+
+    # 既有编码标 known、按出现顺序去重（重复那条丢掉）
+    assert [item["risk_type"] for item in result["risk_types"]] == [
+        "prepayment_ratio_high",
+        "prepayment_cap_missing",
+    ]
+    assert result["risk_types"][0]["known"] is True
+    assert result["risk_types"][0]["label"] == "预付款比例过高"
+    assert result["risk_types"][0]["evidence_hint"].startswith("看付款计划")
+    # 库里没有这个编码 → 标成待新增（编码不能由模型发明）
+    assert result["risk_types"][1]["known"] is False
+    # 展示名以登记表为准：模型把机器码原样填进 label 时不许透到页面
+    assert result["risk_types"][0]["label"] != result["risk_types"][0]["risk_type"]
+
+    # 非法品类归到企业货物品类、非法评级留空，两条改动都在提示里说明
+    assert result["samples"][0]["kind"] == "enterprise_goods"
+    assert result["samples"][0]["expected_grade"] == "fail"
+    assert result["samples"][1]["kind"] == "enterprise_goods"
+    assert result["samples"][1]["expected_grade"] == ""
+    assert len(result["notes"]) == 2
+    assert result["notes"][0].startswith("样本建议里的品类")
+    assert result["retrievals"][0]["policy_ref"] == "P-16"
+
+    # 模型把同一个非法品类写三遍 → 提示只说一次，页面别刷同一句话
+    repeated = policy_drafter.normalize_suggestions(
+        {"samples": [{"kind": "supplies", "expected_grade": "fail"}] * 3}
+    )
+    assert len(repeated["notes"]) == 1
+    # 已知编码但 label 也写成机器码 → 用登记表里的中文名
+    coded = policy_drafter.normalize_suggestions(
+        {"risk_types": [{"risk_type": "warranty_too_short", "label": "warranty_too_short"}]}
+    )
+    assert coded["risk_types"][0]["label"] == "质保期不足"
+    # 模型把品类编码串进 goal → 那不是"要验证什么"，留空不展示
+    stray = policy_drafter.normalize_suggestions({"samples": [{"goal": "tech_service", "kind": "tech_service"}]})
+    assert stray["samples"][0]["goal"] == "" and stray["samples"][0]["kind"] == "tech_service"
+
+
+def test_normalize_suggestions_tolerates_missing_sections() -> None:
+    """模型没给某一组（或整段为空）时当空列表处理，不炸也不塞占位内容。"""
+    result = policy_drafter.normalize_suggestions({})
+    assert result == {"risk_types": [], "samples": [], "retrievals": [], "notes": []}
+    # 编码写成 new（自己承认库里没有）→ 也按待新增展示，标签用模型给的中文名
+    result = policy_drafter.normalize_suggestions(
+        {"risk_types": [{"risk_type": "new", "label": "担保缺失", "why": "无对应编码", "evidence_hint": "看担保条款"}]}
+    )
+    assert result["risk_types"][0]["known"] is False
+    assert result["risk_types"][0]["label"] == "担保缺失"

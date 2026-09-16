@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from backend.app import policy_assistant
 from backend.app.llm import get_chat_model
+from backend.app.rules import RISK_LABELS
 from backend.app.usage import STAGE_DRAFT, llm_call
 
 # 阈值数字：与冲突检测同一口径（百分比、月数），用来比对"模型有没有自己造数"
@@ -23,6 +24,9 @@ _MONTH_RE = re.compile(r"(\d+)\s*个月")
 _CN_NUM = "一二三四五六七八九十"
 # 起草单次调用的超时（秒）：实测一次约一分钟，给足余量但必须有上限
 DRAFT_TIMEOUT_SECONDS = 180.0
+# 配套建议能接受的取值：品类四类、评级三档（模型给别的值一律归位并留提示）
+_KINDS = {"enterprise_goods", "gov_goods", "agri_goods", "tech_service"}
+_GRADES = {"pass", "conditional_pass", "fail"}
 
 
 class DraftedArticle(BaseModel):
@@ -35,6 +39,32 @@ class DraftedArticle(BaseModel):
     guards: list[str] = Field(description="1~2 条误报护栏：哪些情况属正当、不该报")
 
 
+class RiskTypeSuggestion(BaseModel):
+    """这条政策该挂到哪个风险类型上（既有编码，或确实没有对应时写 new）。"""
+
+    risk_type: str = Field(description="优先取既有风险类型编码；确无对应时写 new")
+    label: str = Field(description="风险的中文短名，如「预付款比例过高」")
+    why: str = Field(description="为什么归到这一类（一句话）")
+    evidence_hint: str = Field(description="审查时从合同原文怎么认出来：看哪个条款、抓什么词或数值")
+
+
+class SampleSuggestion(BaseModel):
+    """建议造的验证样本：用哪类合同、注入什么缺陷、期望什么结论。"""
+
+    goal: str = Field(description="这条样本要验证本细则的哪一点")
+    kind: str = Field(description="合同品类：enterprise_goods / gov_goods / agri_goods / tech_service")
+    defect: str = Field(description="注入的缺陷，写成能照着造出来的一句话")
+    expected_grade: str = Field(description="期望评级：pass / conditional_pass / fail")
+
+
+class RetrievalSuggestion(BaseModel):
+    """建议的检索金标：一句提问 + 该命中的政策条文。"""
+
+    query: str = Field(description="像合同审查员那样提的一个问题")
+    policy_ref: str = Field(description="该命中的政策编号（本细则用需求里给的编号）")
+    expect: str = Field(description="期望命中的条文要点关键词，供人工比对")
+
+
 class DraftedPolicy(BaseModel):
     """一次起草的全部产出。"""
 
@@ -42,6 +72,9 @@ class DraftedPolicy(BaseModel):
     scope: str = Field(description="适用范围：一句话说清管哪些合同、不管哪些")
     articles: list[DraftedArticle] = Field(description="条文，按「制度目的 → 实体要求 → 审查提示」排序")
     notes: list[str] = Field(description="需要人确认的地方：缺哪些元信息、哪些阈值待定、哪里没把握")
+    risk_types: list[RiskTypeSuggestion] = Field(description="配套建议一：这条政策该挂哪些风险类型")
+    samples: list[SampleSuggestion] = Field(description="配套建议二：建议造的验证样本")
+    retrievals: list[RetrievalSuggestion] = Field(description="配套建议三：建议的检索金标")
 
 
 _SYSTEM = """你在为一家集团的采购合规部门起草内部审核细则。你的产出会被人审、然后入库，
@@ -65,6 +98,19 @@ _SYSTEM = """你在为一家集团的采购合规部门起草内部审核细则�
 
 【notes】写清缺哪些元信息、哪些阈值待定、你对哪条没把握。不要编造法律法规名称与条号；
 确实需要依据时写"需人工补充依据"。
+
+【配套三样】条文之外还要给三样落地配套，都要具体到能照着做：
+- risk_types（该挂的风险类型）：先从下面的既有编码里挑，**risk_type 写编码本身**；
+  这条政策管的缺陷确实不在其中时才写 "new" 并给一个短名。每项写清为什么归这一类，
+  以及审查时怎么从合同原文认出来（看哪个条款、抓什么词或数值）。
+  既有风险类型：
+{risk_labels}
+- samples（建议造的验证样本）：用哪类合同的（品类用上面那四个编码）、注入什么缺陷、
+  期望什么结论（pass / conditional_pass / fail）。**品类只能写 enterprise_goods /
+  gov_goods / agri_goods / tech_service 这四个编码之一**，不要写中文或别的英文词。
+  每条一句话，照着就能造出合同。
+- retrievals（检索金标建议）：像审查员那样提一句问题、该命中本细则的哪个编号、
+  期望命中的条文要点关键词。
 
 【体例样例】（只对齐写法与颗粒度：样例的主题、数字都只属于它自己，**一律不要沿用**；
 新政策的数字只能来自我给的需求。样例刻意选了别的主题，就是免得你顺手抄它的数）
@@ -125,6 +171,7 @@ def draft_policy(
                 "notes": drafted.get("notes", []),
                 "articles": drafted.get("articles", []),
                 "new_numbers": new_numbers(brief, text),
+                "suggestions": normalize_suggestions(drafted),
             },
         },
     )
@@ -174,6 +221,74 @@ def new_numbers(brief: str, text: str) -> list[dict]:
     return findings
 
 
+def normalize_suggestions(drafted: dict) -> dict:
+    """把模型给的配套建议收敛成能直接展示的三组：风险类型 / 样本 / 检索金标。
+
+    判定能落到确定性地方的就别交给模型——风险类型编码必须对得上规则里登记的那份，
+    自造编码单独标出来等人定；品类与评级取值不合法时归位，并在提示里说明改了哪里。
+    返回 {risk_types, samples, retrievals, notes}，notes 只记"模型的取值被改过"这类提示。
+    """
+    risk_types: list[dict] = []
+    seen: set[str] = set()
+    for item in drafted.get("risk_types") or []:
+        code = (item.get("risk_type") or "").strip()
+        raw_label = (item.get("label") or "").strip()
+        # 情况：同编码重复出现 → 只留第一条（模型常把一类拆成两行）
+        if code in seen:
+            continue
+        seen.add(code)
+        # 展示名以登记表为准：模型会把机器码原样填进 label（实测出现过），
+        # 库里没有的编码才用它给的中文名，且要挡掉"new"这种没信息量的值
+        label = RISK_LABELS.get(code, "") or (raw_label if raw_label.lower() != code.lower() else "")
+        risk_types.append(
+            {
+                "risk_type": code or "new",
+                "label": label,
+                "why": item.get("why", ""),
+                "evidence_hint": item.get("evidence_hint", ""),
+                "known": code in RISK_LABELS,  # False=库里没这个编码，需人工定
+            }
+        )
+
+    notes: list[str] = []  # 同一句提示只留一次（模型常把同一类错误重复三遍）
+    samples: list[dict] = []
+    for item in drafted.get("samples") or []:
+        kind = (item.get("kind") or "").strip()
+        grade = (item.get("expected_grade") or "").strip()
+        # 情况：品类不在四类里 → 按企业货物品类处理并留提示，别把非法值原样展示
+        if kind not in _KINDS:
+            note = f"样本建议里的品类「{kind or '空'}」不在四类里，先按企业货物品类处理"
+            if note not in notes:
+                notes.append(note)
+            kind = "enterprise_goods"
+        # 情况：期望评级不是三档之一 → 留空（页面显示"待定"），不替模型猜结论
+        if grade not in _GRADES:
+            note = f"样本建议里的期望评级「{grade or '空'}」不是三档之一，先按待定处理"
+            if note not in notes:
+                notes.append(note)
+            grade = ""
+        # 情况：模型把品类编码串进了 goal（实测发生过）→ 那不是"要验证什么"，留空不展示
+        goal = (item.get("goal") or "").strip()
+        samples.append(
+            {
+                "goal": "" if goal in _KINDS else goal,
+                "kind": kind,
+                "defect": item.get("defect", ""),
+                "expected_grade": grade,
+            }
+        )
+
+    retrievals = [
+        {
+            "query": item.get("query", ""),
+            "policy_ref": item.get("policy_ref", ""),
+            "expect": item.get("expect", ""),
+        }
+        for item in drafted.get("retrievals") or []
+    ]
+    return {"risk_types": risk_types, "samples": samples, "retrievals": retrievals, "notes": notes}
+
+
 def cn_number(value: int) -> str:
     """1~99 的阿拉伯数字转中文（1→一、11→十一、21→二十一）：条号按政策体例写中文。"""
     if value <= 10:
@@ -200,6 +315,8 @@ def _default_drafter() -> Callable[[str, str], dict]:
     """默认起草器：真调模型（结构化输出），把结果转成 dict。"""
     # 起草要跑一整篇条文，比抽取慢；给个上限，卡住的连接宁可报错也不要把请求吊死
     structured = get_chat_model(timeout=DRAFT_TIMEOUT_SECONDS).with_structured_output(DraftedPolicy)
+    # 既有风险类型编码交给模型挑：让它知道库里已有什么，别自己发明编码
+    system = _SYSTEM.replace("{risk_labels}", "\n".join(f"- {k}：{v}" for k, v in RISK_LABELS.items()))
 
     def run(brief: str, meta_line: str) -> dict:
         question = f"【需求/要点】\n{brief}"
@@ -207,7 +324,7 @@ def _default_drafter() -> Callable[[str, str], dict]:
         if meta_line:
             question += f"\n\n【已知元信息】\n{meta_line}"
         with llm_call(STAGE_DRAFT):
-            drafted = structured.invoke([("system", _SYSTEM), ("human", question)])
+            drafted = structured.invoke([("system", system), ("human", question)])
         return drafted.model_dump()
 
     return run

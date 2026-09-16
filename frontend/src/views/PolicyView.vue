@@ -8,6 +8,7 @@ import { createAiPolicyDraft, createPolicyDraft, getPolicyDraft, getPolicyLibrar
 import { missingMetaText } from '../labels'
 import type { PolicyDraftDetail, PolicyDraftSummary, PolicyLibrary } from '../types'
 import AiNotesPane from '../components/policy/AiNotesPane.vue'
+import SuggestionPane from '../components/policy/SuggestionPane.vue'
 import ConflictPane from '../components/policy/ConflictPane.vue'
 import OverlapPane from '../components/policy/OverlapPane.vue'
 import PublishCard from '../components/policy/PublishCard.vue'
@@ -279,6 +280,9 @@ function reset() {
       </div>
       <div v-if="detail.ai" class="full">
         <AiNotesPane :ai="detail.ai" :new-numbers="detail.ai.new_numbers" />
+      </div>
+      <div v-if="detail.ai?.suggestions" class="full">
+        <SuggestionPane :suggestions="detail.ai.suggestions" />
       </div>
       <div class="full">
         <PublishCard

@@ -155,6 +155,7 @@ def create_ai_draft(
     detail = policy_assistant.load_draft(result["draft_id"]) or {}
     summary["origin"] = "ai"
     summary["new_numbers"] = (detail.get("ai") or {}).get("new_numbers", [])
+    summary["suggestions"] = (detail.get("ai") or {}).get("suggestions", {})
     # 用量：页面显示"这份草稿花了几次调用"，与报告的成本口径一致
     summary["llm"] = usage.to_dict()
     return summary
