@@ -271,6 +271,33 @@ def test_merge_gate_rejects_penalty_cap_as_liability() -> None:
     assert "非赔偿责任上限" in outcome.review["details"][0]["note"]
 
 
+def test_merge_gate_exempts_gov_text_rule_types() -> None:
+    """政采/校服按示范文本执行：文本级那组口径整组豁免，复核报的也不并入。
+
+    单审对这组规则本来就不跑，盲审只看原文看不到品类、会照报违约金上限；豁免只能由
+    复核门按品类补上，否则政采示范文本项目会平白多出类型级误报。
+    """
+    cap = _finding(
+        "penalty_cap_missing",
+        Severity.high,
+        evidence="每延期一日，乙方应按合同总金额的 1% 承担违约责任。",
+    )
+    # 这种情况是：企业品类（含未分类）→ 照旧并入
+    assert [r.risk_type for r in merge_review([], [cap]).risks] == ["penalty_cap_missing"]
+    # 这种情况是：政采品类 → 与单审同口径，只记提示
+    outcome = merge_review([], [cap], contract_kind="gov_goods")
+    assert outcome.risks == []
+    assert outcome.review["stats"]["noted"] == 1
+    assert "豁免" in outcome.review["details"][0]["note"]
+    # 这种情况是：政采下"写出来的缺陷"属字段级口径，不受豁免影响（违约金日费率畸高照报）
+    rate = _finding(
+        "penalty_rate_too_high",
+        Severity.high,
+        evidence="每逾期一日，乙方按合同总价款的 3% 支付违约金。",
+    )
+    assert merge_review([], [rate], contract_kind="gov_goods").risks != []
+
+
 # ---- 图接线：double 全链路（离线假抽取/假复核）----
 
 
@@ -396,6 +423,35 @@ def test_double_reviewer_failure_falls_back_to_main() -> None:
     )
     assert state["report"]["grade"] == "pass"
     assert "盲审失败" in state["report"]["review"]["error"]
+
+
+def test_double_graph_passes_gov_kind_to_gate() -> None:
+    """double 图链路要把品类传到复核门：政采合同被复核多报的违约金上限不并入、不停闸口。"""
+
+    def gov_model() -> ContractModel:
+        return _normal_model().model_copy(update={"contract_kind": "gov_goods"})
+
+    fake_reviewer = lambda text: BlindReviewOutput(
+        findings=[
+            _finding(
+                "penalty_cap_missing",
+                Severity.high,
+                clause_ref="第十条",
+                evidence="每延期一日，乙方应按合同总金额的 1% 承担违约责任。",
+            )
+        ]
+    )
+    runner = ReviewRunner(
+        extractor=lambda text: gov_model(),
+        retriever=_fake_retriever,
+        reviewer=fake_reviewer,
+        review_mode="double",
+    )
+    state = runner.start("gov.md", text="第一条 交付与验收：甲方组织验收，验收标准以双方确认的技术规范为准。")
+    report = state["report"]
+    assert report["grade"] == "pass"
+    assert report["risks"] == []
+    assert report["review"]["stats"]["noted"] == 1
 def test_verify_high_accepts_penalty_cap_missing() -> None:
     """按日 ≥0.1% 且无上限的违约金反馈 → 复核门放行（此前漏登记白名单）。"""
     from backend.app.reviewer import ReviewFinding, Severity, _verify_high

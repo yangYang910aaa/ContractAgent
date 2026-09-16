@@ -192,3 +192,34 @@ def test_run_review_empty_file_returns_error_without_llm(tmp_path) -> None:
     assert report["risks"] == []
     assert "无法解析" in report["error"]
     assert report["llm"]["calls"] == 0
+
+
+def test_run_review_double_passes_kind_to_review_gate(monkeypatch, tmp_path) -> None:
+    """离线双审要把品类带进复核合并：政采豁免靠品类判断，漏传就等于没改。
+
+    抽取与盲审都换桩（不调模型）：主审在政采品类下本就不跑文本级规则，复核报的
+    违约金上限属该组口径 → 只记提示，不进风险清单。
+    """
+    from backend.app import pipeline, reviewer
+
+    contract = tmp_path / "gov.md"
+    contract.write_text("第一条 交付与验收：甲方组织验收，验收标准以双方确认的技术规范为准。\n", encoding="utf-8")
+    monkeypatch.setattr(
+        pipeline, "extract_contract", lambda **kwargs: ContractModel(contract_kind="gov_goods")
+    )
+    monkeypatch.setattr(
+        reviewer,
+        "blind_review",
+        lambda **kwargs: reviewer.BlindReviewOutput(
+            findings=[
+                reviewer.ReviewFinding(
+                    risk_type="penalty_cap_missing",
+                    severity=reviewer.Severity.high,
+                    evidence="每延期一日，乙方应按合同总金额的 1% 承担违约责任。",
+                )
+            ]
+        ),
+    )
+    report = run_review(contract, review_mode="double", retriever=lambda q: [])
+    assert all(r["risk_type"] != "penalty_cap_missing" for r in report["risks"])
+    assert report["review"]["stats"]["noted"] == 1

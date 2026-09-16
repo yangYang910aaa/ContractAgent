@@ -28,7 +28,12 @@ from pydantic import BaseModel, Field
 from backend.app.llm import get_chat_model
 from backend.app.parser import Clause, split_clauses
 from backend.app.policy_rag import IndexDoc, load_policies
-from backend.app.rules import PENALTY_CAP_MIN_DAILY_PERCENT, RISK_LABELS
+from backend.app.rules import (
+    PENALTY_CAP_MIN_DAILY_PERCENT,
+    RISK_LABELS,
+    TEXT_RULE_KINDS,
+    TEXT_RULE_TYPES,
+)
 from backend.app.schemas import RiskItem, Severity
 from backend.app.usage import STAGE_REVIEW, llm_call
 
@@ -140,17 +145,23 @@ def _months_in(text: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def _verify_high(f: ReviewFinding) -> tuple[bool, str]:
+def _verify_high(f: ReviewFinding, contract_kind: str | None = None) -> tuple[bool, str]:
     """复核门：复核新增/升级的 high 是否可信（确定性校验，不信任 LLM 算术）。
 
     背景：盲审模型对"需要计算的比例/月数"极易判错（实测把 400,000/2,000,000=20%
     的合规预付款报成 high）。凡数值型 high，必须能从其 evidence 原句解析出支持
-    违规结论的数字；解析不出或结论与数字矛盾 → 不并入，只记提示。
+    违规结论的数字；解析不出或结论与数字矛盾 → 不并入，只记提示。品类传进来的
+    目的是对齐主审的适用范围（政采示范文本项目整组豁免文本级口径）。
     """
     text = f.evidence or ""
     # 分支：类型不在白名单 → 一律不并入（rules 已按自身口径处理这些类型）
     if f.risk_type not in _REVIEW_HIGH_TYPES:
         return False, "该类型不属可并入的高风险类型"
+    # 分支：品类按示范文本执行（政采/校服）→ 文本级口径整组豁免，复核不许并入。
+    # 盲审只看原文、拿不到品类，会在示范文本项目上照报违约金上限一类；豁免必须由
+    # 复核门按品类补上，口径与 text_rules 的整组跳过保持一致（未分类按企业口径处理）
+    if (contract_kind or "enterprise_goods") not in TEXT_RULE_KINDS and f.risk_type in TEXT_RULE_TYPES:
+        return False, "政采示范文本项目豁免该组条款口径"
     # 分支：缺核心必填 → 定性判断，正文没有数字可核，放行（空白模板另有护栏）
     if f.risk_type == "missing_required_field":
         return True, ""
@@ -443,12 +454,13 @@ def _outcome_detail(f: ReviewFinding, outcome: str, note: str = "") -> dict:
 def merge_review(
     main: list[RiskItem],
     findings: list[ReviewFinding],
+    contract_kind: str | None = None,
 ) -> MergeOutcome:
     """主审风险与复核发现合并 → (最终风险清单, 复核报告段)。
 
     逐条处理：两边都报且同级 → 记一致；只有复核报 → 高风险并入清单、中低风险只记录；
     两边级别不同 → 取高并标注。护栏：主审已判空白模板时，复核报的缺必填只记录不升级，
-    否则会把空白模板重新顶回闸口。
+    否则会把空白模板重新顶回闸口；政采示范文本项目豁免的那组口径复核门也不并入。
     """
     out = [r.model_copy() for r in main]  # 不修改入参（复制防副作用）
     details: list[dict] = []
@@ -461,7 +473,7 @@ def merge_review(
         # 分支 1：主审没有该 type
         if not candidates:
             # 这种情况是：复核报 high 且通过复核门 → 并入 risks（可能补上主审漏检）
-            ok, why = _verify_high(f)
+            ok, why = _verify_high(f, contract_kind)
             if f.severity == Severity.high and ok:
                 out.append(
                     RiskItem(
@@ -504,7 +516,7 @@ def merge_review(
             _SEVERITY_RANK[r.severity.value] for r in candidates
         ):
             # 复核门：升级也要过确定性校验（防模型把提示级/算错数字顶成 high）
-            ok, why = _verify_high(f)
+            ok, why = _verify_high(f, contract_kind)
             if ok:
                 target = max(candidates, key=lambda r: _SEVERITY_RANK[r.severity.value])
                 target.severity = f.severity
@@ -559,13 +571,15 @@ def double_review(
     llm=None,
     retriever=None,
     max_findings: int = REVIEW_MAX_FINDINGS,
+    contract_kind: str | None = None,
 ) -> tuple[list[RiskItem], dict]:
     """双审编排：盲审 LLM → 与主审合并 → (最终风险, review 报告段)。
 
     pipeline/graph 的统一入口；LLM 失败时回退主审结果并附 error（不阻断）。
+    品类只用于合并时的适用范围判断（盲审本身拿不到品类，保持盲审独立性）。
     """
     output = blind_review(text=text, llm=llm, retriever=retriever, max_findings=max_findings)
-    outcome = merge_review(risks, output.findings)
+    outcome = merge_review(risks, output.findings, contract_kind)
     # 这种情况是：检索/LLM 失败 → 把错误挂到 review 段，方便排查
     if output.error:
         outcome.review["error"] = output.error

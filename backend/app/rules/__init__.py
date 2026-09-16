@@ -37,6 +37,7 @@ from backend.app.rules.constants import (
     RISK_LABELS,
     SUBCONTRACT_KINDS,
     TEXT_RULE_KINDS,
+    TEXT_RULE_TYPES,
     WARRANTY_MIN_MONTHS,
 )
 from backend.app.rules.fields import evaluate, infer_effective_from_signature
@@ -65,6 +66,7 @@ __all__ = [
     "HIGH_IF_MISSING",
     "KIND_BASELINE",
     "TEXT_RULE_KINDS",
+    "TEXT_RULE_TYPES",
     "SUBCONTRACT_KINDS",
     "PREPAY_MAX_PERCENT",
     "WARRANTY_MIN_MONTHS",

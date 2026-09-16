@@ -260,7 +260,9 @@ def run_review(
         if review_mode == "double":
             from backend.app.reviewer import double_review  # 延迟导入：双审才拉 reviewer 链
 
-            risks, review = double_review(risks, text, llm=llm, retriever=retriever)
+            risks, review = double_review(
+                risks, text, llm=llm, retriever=retriever, contract_kind=extracted.contract_kind
+            )
         # 政策引用基于最终风险清单检索（复核新增项也带政策依据，report 才可溯源）
         policy_hits = enrich_policy_hits(risks, retriever=retriever)
         return build_report(

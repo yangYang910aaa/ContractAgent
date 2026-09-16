@@ -127,6 +127,25 @@ _BUYER_KEYWORDS = ("甲方", "采购方")
 TEXT_RULE_KINDS: set[str] = {"enterprise_goods", "tech_service", "agri_goods"}
 
 
+# 上面那组规则的产出类型：跟 TEXT_RULE_KINDS 是同一组的两个面——那份说"跑不跑"，
+# 这份是跑出来的类型。复核门要按同一份清单判断"这条口径在政采项目里本就不该有"，
+# 免得豁免只写在规则侧、复核侧又报回来
+TEXT_RULE_TYPES: set[str] = {
+    "acceptance_unclear",  # 验收标准/期限不明确
+    "invoice_unclear",  # 发票类型与开具时点不明确
+    "performance_bond_missing",  # 大额合同缺履约担保
+    "subcontract_unrestricted",  # 转包/分包未加限制
+    "confidentiality_no_exception",  # 保密条款没有例外情形
+    "penalty_basis_unclear",  # 违约金只写比例、没写基数
+    "penalty_cap_missing",  # 按日计罚却没有累计上限
+    "unfair_exemption_clause",  # 不合理免责条款
+    "personal_info_clause_missing",  # 涉及个人信息却没写处理条款
+    "data_processing_terms_missing",  # 缺委托处理要件
+    "data_cross_border_unclear",  # 数据出境安排不明确
+    "data_deletion_missing",  # 缺数据删除/返还约定
+}
+
+
 # 转包/分包基线只约束"定制/工程交付"形态（企业采购、技术开发/服务）；
 # 农副产品买卖无转包概念，不套用
 SUBCONTRACT_KINDS: set[str] = {"enterprise_goods", "tech_service"}

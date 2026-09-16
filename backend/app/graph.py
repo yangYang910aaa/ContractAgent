@@ -16,7 +16,12 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from backend.app.parser import NO_TEXT_ERROR, extract_text
-from backend.app.pipeline import build_report, enrich_policy_hits, infer_effective_from_signature
+from backend.app.pipeline import (
+    _contract_kind,
+    build_report,
+    enrich_policy_hits,
+    infer_effective_from_signature,
+)
 from backend.app.reviewer import BlindReviewOutput, blind_review, merge_review
 from backend.app.rules import (
     annotate_open_ended_risks,
@@ -183,7 +188,8 @@ def build_review_graph(
             output = run(text)
         except Exception as exc:  # 注入的复核器异常也按 best-effort 处理（不拖垮队列）
             output = BlindReviewOutput(findings=[], error=f"盲审失败：{exc}")
-        outcome = merge_review(risks, output.findings)
+        # 品类用于复核门的适用范围判断：盲审拿不到品类，政采豁免只能在这里补
+        outcome = merge_review(risks, output.findings, _contract_kind(state.get("extracted")))
         # 这种情况是：复核调用/政策读取失败 → 错误挂到 review 段（主审结果保留）
         if output.error:
             outcome.review["error"] = output.error
