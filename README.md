@@ -62,19 +62,26 @@
 ## 它是怎么审的
 
 ```mermaid
-flowchart LR
-    A[合同文件] --> B[解析: Word/PDF/扫描件 OCR]
-    B --> C[抽取: 合同要素 + 原文引证]
-    C --> D[规则引擎: 字段级 + 文本级]
-    D --> E[政策检索: 取回条文原文]
-    E --> F{有高风险}
-    F -->|是| G[人工审批: 放行 / 打回 / 改后重审]
-    F -->|否| H[出具报告]
-    G --> H
-    B -.双审: 原文分条.-> I[独立盲审复核 + 复核门]
-    E -.双审: 政策条文.-> I
-    I --> H
+flowchart TD
+    start([合同文件]) --> parse[解析：Word / PDF / 扫描件 OCR]
+    parse --> extract[抽取：要素 + 原文引证]
+    extract -. 抽取失败 .-> error[错误报告]
+    extract --> rules[规则引擎：字段级 + 文本级]
+    rules -. 双审 .-> review[独立盲审复核 + 复核门]
+    rules --> policy[政策检索：取回条文原文]
+    review --> policy
+    policy --> grade[评级]
+    grade -. 有高风险 .-> gate[人工审批闸口]
+    grade --> report[出具报告]
+    gate -. 放行 / 打回 .-> report
+    gate -. 改字段重审 .-> rules
+    report --> finish([报告])
+    error --> finish
 ```
+
+*上面是审核图的实际节点与条件分支（实线＝固定流转，虚线＝条件分支）：由编译后的图导出
+（`graph.get_graph().draw_mermaid()`），节点名手工换成中文。右下角那条 `闸口 → 规则引擎` 的回环，
+就是"改字段重审"走的路径。*
 
 这条链路上六个环节各管一段：
 
@@ -215,8 +222,8 @@ cd frontend && pnpm install && pnpm dev       # http://localhost:5173（已代�
 政策语料与合同放 `data/policies/`、`data/contracts/`，然后：
 
 ```bash
-python -m backend.app.policy_admin --sync --yes   # 政策入库（按单元增量同步并核对）
-python -m backend.app.policy_admin --check        # 核对文件与索引是否一致
+python -m backend.app.policy.admin --sync --yes   # 政策入库（按单元增量同步并核对）
+python -m backend.app.policy.admin --check        # 核对文件与索引是否一致
 ```
 
 其他常用命令：
@@ -224,7 +231,7 @@ python -m backend.app.policy_admin --check        # 核对文件与索引是否�
 ```bash
 python -m pytest backend/tests -q                 # 后端测试
 cd frontend && pnpm lint && pnpm build            # 前端静态检查与构建
-python -m backend.app.pipeline data/contracts/sample_01.md --out reports   # 离线跑一份合同
+python -m backend.app.review.pipeline data/contracts/sample_01.md --out reports   # 离线跑一份合同
 python -m backend.eval.run_eval --check           # 校验评测集（不调用模型）
 python -m backend.eval.run_retrieval_eval         # 检索金标（只花 embedding）
 ```
@@ -233,13 +240,12 @@ python -m backend.eval.run_retrieval_eval         # 检索金标（只花 embedd
 
 ```
 backend/app/
-  graph.py pipeline.py    审核图与离线链路（规则、评级、报告成文同一出口）
-  extractor.py            抽取：字段、原文引证、双读比对、主体名兜底
-  rules/                  规则引擎：字段级 / 文本级 / 品类基线 / 评级
-  reviewer.py             双审：独立盲审、与主审 diff、复核门
-  policy_*.py             政策库：检索、引用核对、起稿、模型起草、一键入库
+  main.py config.py       服务入口与配置；schemas.py 跨层数据结构；llm.py / usage.py 模型调用与计数
+  api/                    HTTP 接口：任务（上传 / 队列 / 详情 / 审批 / 对话）与政策库
+  review/                 审查主链路：解析、抽取、规则（rules/）、双审、审核图与离线链路
+  policy/                 政策库：检索、语料核对、入库、命令行、起草与引用核对
   assistant/              对话助手：工具、引用汇总、流式输出
-  routes_*.py             REST 接口
+  tasks/                  任务队列与登记簿：worker 池、内存 / Postgres 登记簿、上传目录清理
 backend/eval/             评测闭环（语料指标、检索金标、扫描件字段准确率）
 backend/tests/            离线可跑的测试
 frontend/src/             上传 / 队列 / 详情 / 政策库四个视图与各面板组件
