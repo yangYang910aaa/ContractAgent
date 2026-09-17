@@ -15,11 +15,14 @@
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { askChat, clearChat, fetchChatHistory, streamChat } from '../api'
 import type { ChatEvent } from '../api'
+import { buildChatSuggestions } from '../lib/chatSuggestions'
 import type { ChatCitation, ChatEventData, ChatUsage } from '../types'
 
 const props = defineProps<{
   threadId: string
   fileName?: string
+  // 空态建议问题：由详情页按这份合同的结论与风险生成（这里只负责展示与发问）
+  suggestions?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -54,8 +57,10 @@ const clearError = ref('')
 const bodyEl = ref<HTMLElement | null>(null)
 let controller: AbortController | null = null
 
-// 面板空态的建议问题：用户不用猜能问什么，演示也顺
-const suggestions = ['这份合同为什么判高风险？', '预付款上限是多少？', '把跟发票有关的条款找出来']
+// 面板空态的建议问题：详情页按这份合同的结论生成；没传就退回通用三问，别拿结论造句
+const suggestions = computed(() =>
+  props.suggestions?.length ? props.suggestions : buildChatSuggestions({}),
+)
 
 /** 会话号：一份合同固定一个（存本地），刷新页面、后端重启后再打开面板还能回读同一段历史。 */
 const sessionId = resolveSession()

@@ -13,6 +13,7 @@ import SourceDrawer from '../components/SourceDrawer.vue'
 import GatePane from '../components/task/GatePane.vue'
 import ReportPane from '../components/task/ReportPane.vue'
 import TaskRail from '../components/task/TaskRail.vue'
+import { buildChatSuggestions } from '../lib/chatSuggestions'
 import { riskLabel, SEVERITY_TEXT } from '../labels'
 import type { LabeledRisk } from '../labels'
 import type { ReviewSection, SourceAnchor, TaskDetail, TaskStatus } from '../types'
@@ -119,6 +120,16 @@ const review = computed(() => detail.value?.report?.review ?? null)
 // 闸口阶段报告还没生成，复核结论随 gate 载荷带出（否则审批人放行前看不到盲审结果）
 const gateReview = computed<ReviewSection | null>(
   () => (detail.value?.gate_payload as { review?: ReviewSection | null } | null)?.review ?? null,
+)
+
+/** 助手空态建议问题：按这份合同的结论与风险生成；闸口阶段报告还没生成，用待审高风险。 */
+const chatSuggestions = computed(() =>
+  buildChatSuggestions({
+    grade: detail.value?.grade ?? null,
+    risks: reportRisks.value.length
+      ? reportRisks.value
+      : (detail.value?.gate_payload?.high_risks ?? []),
+  }),
 )
 
 async function load() {
@@ -383,6 +394,7 @@ function focusRisk(clause: string) {
       ref="chatRef"
       :thread-id="props.threadId"
       :file-name="detail.source"
+      :suggestions="chatSuggestions"
       @open-clause="openSource"
       @focus-risk="focusRisk"
     />
