@@ -1,4 +1,4 @@
-"""Phase 0 冒烟测试：目录/政策文档/合成合同可读且生成可复现。"""
+"""冒烟测试：目录/政策文档/合成合同可读且生成可复现。"""
 
 import re
 from pathlib import Path
@@ -38,7 +38,7 @@ def test_generator_reproducible() -> None:
 
 
 def test_defect_samples_contain_expected_markers() -> None:
-    """缺陷样本应包含对应的可见异常标记（后续 Phase 1 规则命中点）。"""
+    """缺陷样本应包含对应的可见异常标记（规则按这些标记命中）。"""
     texts = {s.sample_id: render_contract(s) for s in SPECS}
     assert "1.5%" in texts["sample_03"]  # 违约金率
     assert "5% 为上限" in texts["sample_03"]  # 责任上限
@@ -49,7 +49,7 @@ def test_defect_samples_contain_expected_markers() -> None:
 
 
 def test_defect_specs_ratio_sanity() -> None:
-    """从规格层断言缺陷比例数值（Phase 1 规则将用这些数值化阈值命中）。"""
+    """从规格层断言缺陷比例数值（规则用这些数值化阈值命中）。"""
     specs = {s.sample_id: s for s in SPECS}
     assert specs["sample_04"].prepayment_percent == 60.0  # > 政策上限 30
     assert specs["sample_05"].warranty_months == 6  # < 政策下限 12

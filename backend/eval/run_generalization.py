@@ -1,13 +1,13 @@
 """真实合同泛化集观察跑批。
 
-用途：拿用户收集的真实合同（非生成器产出）整份跑一遍流水线，只看表现、不打分——
-这批没有 ground truth（判分口径待定）。观察四件事：
+用途：拿收集来的真实合同（非生成器产出）整份跑一遍流水线，只看表现、不打分——
+真实合同没有 ground truth（判分口径待定）。观察四件事：
 1) 抽取是否失败（报告 error）；2) 有没有误停闸（出现 high，逐条人工核证据）；
 3) medium 噪音分布（按 risk_type 计数，用于收紧规则口径）；4) parser 章节切分是否
-正常（0 条/极少条要记入问题与踩坑记录）。
+正常（0 条或极少条属正常，异常多则先查切分规则）。
 
 成本口径：默认 single × runs=1，每份 1~2 次 chat 调用（付款期次双读各 +1）。
-扫描件默认整批跳过（纯图片 PDF 留给第 5 步 OCR，用 --include-scans 才纳入）。
+扫描件默认整批跳过（纯图片 PDF 由 OCR 通路单独评测，用 --include-scans 才纳入）。
 
 合规：素材目录 data/素材/ 已 gitignore，输出 JSON 写 backend/eval/output/
 （同样不入库）；脚本里不写任何真实合同文件名，选子集只在命令行给 --only。
@@ -36,7 +36,7 @@ from backend.eval.run_eval import _to_jsonable
 DEFAULT_DIR = BASE_DIR / "data/素材/真实合同"
 DEFAULT_OUT = BASE_DIR / "backend/eval/output"
 
-# 默认排除的素材：扫描件是纯图片 PDF（文本层近 0 字），走第 5 步 OCR 单独评测
+# 默认排除的素材：扫描件是纯图片 PDF（文本层近 0 字），由 OCR 通路单独评测
 DEFAULT_EXCLUDE = ("扫描件",)
 
 # 章节切分异常判据：正文有字却切出极少条款 → 章节式/定义式结构，evidence 回指会丢
@@ -46,7 +46,7 @@ _CLAUSE_ANOMALY_MAX = 2
 def discover(base: Path, only: list[str], exclude: list[str], include_scans: bool) -> list[Path]:
     """列出待跑的合同文件：默认排除扫描件；only 非空时只留文件名含任一子串的。
 
-    排序保证跑批顺序稳定（踩坑复现时便于对比两次跑批的同一批文件）。
+    排序保证跑批顺序稳定（同一批文件两次跑批的输出可直接对比）。
     """
     ex = [e for e in exclude if e]
     # 这种情况是：显式要求纳入扫描件 → 不再按"扫描件"前缀排除
@@ -120,7 +120,7 @@ def _summarize(rows: list[dict]) -> dict:
         "files": len(rows),
         "grade_counts": dict(Counter(r["grade"] or "error" for r in rows)),
         "errors": [r["file"] for r in rows if r["error"]],
-        # 误停闸候选：真实件若出现 high 要逐条人工核证据（本轮观察口径，不自动判误报）
+        # 误停闸候选：真实件若出现 high 要逐条人工核证据（只观察，不自动判误报）
         "high_files": {r["file"]: r["high_types"] for r in rows if r["high_types"]},
         # high 的证据明细：控制台直接给原文句，省得再去 JSON 里翻
         "high_details": {
@@ -162,7 +162,7 @@ def _print_rows(rows: list[dict]) -> None:
 
 
 def _print_summary(summary: dict) -> None:
-    """打印跑批结论（本轮只观察不打分，故只列计数与清单）。"""
+    """打印跑批结论（只观察不打分，故只列计数与清单）。"""
     print("\n===== 跑批结论 =====")
     print(f"文件 {summary['files']} 份 | 评级分布 {summary['grade_counts']} | "
           f"调用合计 {summary['total_calls']} 次 | 总耗时 {summary['total_seconds']}s")
@@ -180,7 +180,7 @@ def _print_summary(summary: dict) -> None:
         for risk_type, n in summary["medium_freq"].items():
             print(f"  - {risk_type}: {n}")
     if summary["clause_anomalies"]:
-        print("章节切分异常（有正文但切不出条款 → 记入问题与踩坑记录）:")
+        print("章节切分异常（有正文但切不出条款 → 先查切分规则）:")
         for name, info in summary["clause_anomalies"].items():
             print(f"  - {name}: chars={info['chars']} clauses={info['clauses']}")
 

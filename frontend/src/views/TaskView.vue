@@ -378,7 +378,7 @@ function focusRisk(clause: string) {
       <p>{{ detail.error || detail.report?.error || '未知错误' }}</p>
     </div>
 
-    <!-- U2 原文抽屉：锚点与当前任务号绑定 -->
+    <!-- U2 原文抽屉：定位词与当前任务号绑定 -->
     <SourceDrawer
       v-if="showSource"
       :thread-id="props.threadId"

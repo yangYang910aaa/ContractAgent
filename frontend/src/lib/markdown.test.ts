@@ -20,12 +20,12 @@ describe('mdBlocks', () => {
     expect(mdBlocks('* 另一条')[0]).toEqual({ kind: 'li', level: 0, text: '另一条' })
   })
 
-  it('空文本与纯空白不产出块（起稿产物可能为空）', () => {
+  it('空文本与纯空白不产出块（起稿输出文件可能为空）', () => {
     expect(mdBlocks('')).toEqual([])
     expect(mdBlocks('   \n\n  ')).toEqual([])
   })
 
-  it('井号与文字之间没空格也当标题（起稿产物里两种写法都有）', () => {
+  it('井号与文字之间没空格也当标题（起稿输出文件里两种写法都有）', () => {
     expect(mdBlocks('#标题')).toEqual([{ kind: 'h', level: 1, text: '标题' }])
     // 没有井号、也不是列表项的行一律当段落
     expect(mdBlocks('1. 编号列表不特殊处理')).toEqual([

@@ -23,7 +23,7 @@ from backend.eval.generate_samples import (
 
 
 def test_md_body_no_engineer_numbering_and_amount_uppercase() -> None:
-    """正文不再是 1.1/2.1 工程编号，且总价大小写并用（大写 + 小写锚点都在）。"""
+    """正文不再是 1.1/2.1 工程编号，且总价大小写并用（大写 + 小写定位词都在）。"""
     md = render_contract(SPECS[0])
     numbered = [line for line in md.splitlines() if re.match(r"^\d+\.\d+\s", line)]
     assert numbered == []
@@ -107,7 +107,7 @@ def test_pdf_a4_with_party_and_signature(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("idx", range(len(SPECS)))
 def test_all_specs_render_docx_pdf_roundtrip(tmp_path: Path, idx: int) -> None:
-    """全部 spec 都能出 docx/pdf，且正文关键锚点（金额/条款）不丢。"""
+    """全部 spec 都能出 docx/pdf，且正文关键内容（金额/条款）不丢。"""
     spec = SPECS[idx]
     docx_path = tmp_path / f"{idx}.docx"
     pdf_path = tmp_path / f"{idx}.pdf"

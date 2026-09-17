@@ -8,7 +8,7 @@
 | 模块 | 职责 |
 | --- | --- |
 | constants.py | 政策阈值、字段与风险中文标签、必填口径、跨模块共用的口径正则 |
-| locator.py | 摘录与定位：整句摘录、OCR 页标记、条款号回推、缺必填锚点 |
+| locator.py | 摘录与定位：整句摘录、OCR 页标记、条款号回推、缺必填字段的定位 |
 | fields.py | 字段级规则（金额/日期/政策阈值）、风险汇总入口、生效日推断 |
 | template.py | 文档形态识别：空白模板、补充协议 |
 | text_checks.py | 条款该不该写（验收/发票/担保/转包）与条款级检查入口 |
@@ -87,7 +87,7 @@ __all__ = [
 def grade_report(risks: list[RiskItem]) -> Grade:
     """按风险清单评级。
 
-    映射：任一 high → fail（Phase 2 将据此触发 gate 人工审批）；
+    映射：任一 high → fail（据此触发 gate 人工审批）；
     只有 medium/low → conditional_pass；空清单 → pass。
     """
     if any(r.severity == Severity.high for r in risks):

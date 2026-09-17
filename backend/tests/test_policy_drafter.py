@@ -102,7 +102,7 @@ def test_new_numbers_flags_only_invented_values() -> None:
 
 
 def test_draft_policy_writes_draft_with_ai_meta(tmp_path: Path, monkeypatch) -> None:
-    """起草产物落盘：草稿文本 + meta 里的来源标注与模型产出，回读拿得到。"""
+    """起草输出文件落盘：草稿文本 + meta 里的来源标注与模型产出，回读拿得到。"""
     monkeypatch.setattr(drafts, "DRAFTS_DIR", tmp_path / "drafts")
     result = drafter.draft_policy(
         _BRIEF,

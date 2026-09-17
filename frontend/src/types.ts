@@ -201,7 +201,7 @@ export interface SourceDoc {
   kind: 'sample' | 'upload' // 内置演示样本 vs 用户上传
   file_available: boolean // 源文件是否还在磁盘（可下载/预览）
   text: string // 解析后的合同全文（pending 阶段为空）
-  blocks: SourceBlock[] // 按条款/章节切分的块（证据高亮锚点载体）
+  blocks: SourceBlock[] // 按条款/章节切分的块（证据高亮定位点载体）
 }
 
 /** U2 原文定位指令：clause 对齐风险项 clause_ref；无条款号的风险（如中风险
@@ -308,7 +308,7 @@ export interface PolicyDraftSummary {
   conflicts: PolicyConflict[]
   origin?: 'manual' | 'ai' // 正文来源：人工上传/粘贴，还是模型起草
   new_numbers?: AiNumberFinding[] // 模型起草时新引入的数字（等人确认）
-  suggestions?: AiDraftSuggestions // 模型起草给出的配套建议（风险类型/样本/检索金标）
+  suggestions?: AiDraftSuggestions // 模型起草给出的配套建议（风险类型/样本/检索标准答案）
   llm?: { calls: number; stages: Record<string, number>; seconds: number } // 起草花的调用量
 }
 
@@ -328,7 +328,7 @@ export interface PolicyDraftDetail {
   overlaps: PolicyOverlapItem[]
   draft: string // 规范化草稿（markdown 文本）
   checklist: string // 配套改动清单（markdown 文本）
-  files: string[] // 草稿目录里的产物文件名
+  files: string[] // 草稿目录里的输出文件文件名
 }
 
 /** 模型起草的一条条文：正文 + 语义解释 + 判定要点 + 误报护栏。 */
@@ -353,7 +353,7 @@ export interface AiDraftSection {
   notes: string[]
   articles: AiDraftArticle[]
   new_numbers: AiNumberFinding[]
-  suggestions?: AiDraftSuggestions // 配套建议（老的草稿产物没有这一项）
+  suggestions?: AiDraftSuggestions // 配套建议（老的草稿文件没有这一项）
 }
 
 /** 配套建议一：这条政策该挂哪个风险类型（known=false 表示库里没有这个编码，需人工定）。 */
@@ -373,14 +373,14 @@ export interface AiSampleSuggestion {
   expected_grade: string // 期望评级：pass / conditional_pass / fail，空=待定
 }
 
-/** 配套建议三：检索金标建议（提问 → 该命中的条文）。 */
+/** 配套建议三：检索标准答案建议（提问 → 该命中的条文）。 */
 export interface AiRetrievalSuggestion {
   query: string // 像审查员那样提的问题
   policy_ref: string // 该命中的政策编号
   expect: string // 期望命中的条文要点关键词
 }
 
-/** 模型起草的配套三样：风险类型候选 / 样本建议 / 检索金标建议，外加被后端改过取值的提示。 */
+/** 模型起草的配套三样：风险类型候选 / 样本建议 / 检索标准答案建议，外加被后端改过取值的提示。 */
 export interface AiDraftSuggestions {
   risk_types: AiRiskTypeSuggestion[]
   samples: AiSampleSuggestion[]

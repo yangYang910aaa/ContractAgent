@@ -1,6 +1,6 @@
 """政策库只读起稿接口：上传或粘贴一份新政策 → 规范化草稿 + 重叠分级 + 冲突初筛 + 配套清单。
 
-只起稿、不改库：不写向量库、不写 data/policies/*.md，产物只落 data/policies/_drafts/；
+只起稿、不改库：不写向量库、不写 data/policies/*.md，输出文件只落 data/policies/_drafts/；
 入库仍走 `python -m backend.app.policy.admin --sync`（前端"批准入库"是后续单独一批）。
 """
 
@@ -25,7 +25,7 @@ router = APIRouter(prefix="/api/policy", tags=["policy"])
 ALLOWED_SUFFIXES = {".md", ".txt", ".pdf", ".docx"}
 # 粘贴文本的兜底来源名：编号从文件名前缀解析，兜底名不带编号时按正文里的「文件编号」认
 PASTED_NAME = "粘贴政策.md"
-# 上传原件暂存目录：解析完即删，草稿目录里只留起稿产物
+# 上传原件暂存目录：解析完即删，草稿目录里只留起稿输出文件
 INCOMING_DIR = drafts.DRAFTS_DIR / "_incoming"
 
 
@@ -54,7 +54,7 @@ class PublishIn(BaseModel):
 
 
 def _draft_summary(result: dict) -> dict:
-    """起稿产物 → 页面摘要（人工起稿与模型起草共用一份口径）。"""
+    """起稿输出文件 → 页面摘要（人工起稿与模型起草共用一份口径）。"""
     parsed = result["parsed"]
     return {
         "draft_id": result["draft_id"],
@@ -101,7 +101,7 @@ async def _read_input(file: UploadFile | None, text: str, name: str) -> tuple[st
             # 解析（含 OCR）是阻塞活：丢到线程池，别占住事件循环
             return await run_in_threadpool(extract_text, temp), _source_name(file.filename)
         finally:
-            temp.unlink(missing_ok=True)  # 原件不留库：草稿目录只存起稿产物
+            temp.unlink(missing_ok=True)  # 原件不留库：草稿目录只存起稿输出文件
             # 暂存目录空了就一并删掉，免得草稿目录里留个空壳
             try:
                 INCOMING_DIR.rmdir()
@@ -119,7 +119,7 @@ async def create_draft(
     text: str = Form(""),
     name: str = Form(""),
 ) -> dict:
-    """起稿：解析 + 重叠分级 + 冲突初筛，产物落盘后返回摘要（不写政策库）。"""
+    """起稿：解析 + 重叠分级 + 冲突初筛，输出文件落盘后返回摘要（不写政策库）。"""
     content, source = await _read_input(file, text, name)
     # 这种情况是：读不出正文（空文件/加密 PDF）→ 400，不落一份空草稿
     if not content.strip():
@@ -163,7 +163,7 @@ def create_ai_draft(
 
 @router.get("/drafts/{draft_id}")
 def get_draft(draft_id: str) -> dict:
-    """草稿详情：回读磁盘产物（草稿全文 / 重叠分级 / 冲突 / 配套清单）。"""
+    """草稿详情：回读磁盘上的文件（草稿全文 / 重叠分级 / 冲突 / 配套清单）。"""
     detail = drafts.load_draft(draft_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="草稿不存在或已被清理")

@@ -217,7 +217,7 @@ def _is_stale(record) -> bool:
 def _clause_blocks(text: str) -> list[dict]:
     """全文 -> 条款块列表.
 
-    前端原文抽屉按块渲染, 块标题留作风险证据回指锚点. 由 get_task_source 调用.
+    前端原文抽屉按块渲染, 块标题留作风险证据回指依据. 由 get_task_source 调用.
     """
     clauses = split_clauses(text)
     # 这种情况是：全文无「第X条/章节」结构 → 整篇当作一块，仍可展示与回指
@@ -329,7 +329,7 @@ def batch_delete(
 class SamplesIn(BaseModel):
     """样本批量入队入参: 取 data/contracts 前 N 份合成样本直接入队.
 
-    什么时候用: 回归测试与 Phase 4 评测需要免上传直接跑内置样本;
+    什么时候用: 回归测试与离线评测需要免上传直接跑内置样本;
     前端无此入口(一键演示入口已移除).
     """
 
@@ -344,7 +344,7 @@ def enqueue_samples(
 ) -> dict:
     """把内置合成样本直接入队(跳过上传步骤).
 
-    什么时候用: 回归测试与 Phase 4 评测需要免上传跑内置样本; 前端无入口.
+    什么时候用: 回归测试与离线评测需要免上传跑内置样本; 前端无入口.
     """
     samples = sorted((BASE_DIR / "data" / "contracts").glob("sample_*.md"))[: body.count]
     review_mode = _validated_mode(body.review_mode)
@@ -380,7 +380,7 @@ def get_task_source(
     thread_id: str,
     manager: TaskManager = Depends(get_manager),
 ) -> dict:
-    """前端查看原合同时: 返回解析后的纯文本+条款块列表(供证据高亮锚点定位)
+    """前端查看原合同时: 返回解析后的纯文本+条款块列表(供证据高亮与定位)
     """
     record = manager.runner.store.get(thread_id)
     if record is None:

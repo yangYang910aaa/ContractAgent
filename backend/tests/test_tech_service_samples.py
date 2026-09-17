@@ -95,7 +95,7 @@ def test_defect_sample09_hits_confidentiality_and_ip() -> None:
 
 @pytest.mark.parametrize("idx", range(len(TECH_SPECS)))
 def test_tech_specs_render_docx_pdf_roundtrip(tmp_path: Path, idx: int) -> None:
-    """两版技术开发样本都能出 md/docx/pdf，关键锚点（编号/总价/保密期/权属句）不丢。"""
+    """两版技术开发样本都能出 md/docx/pdf，关键内容（编号/总价/保密期/权属句）不丢。"""
     spec = TECH_SPECS[idx]
     body = _body_for(spec)
     docx_path = tmp_path / f"{spec.sample_id}.docx"

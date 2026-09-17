@@ -58,7 +58,7 @@ class SampleSuggestion(BaseModel):
 
 
 class RetrievalSuggestion(BaseModel):
-    """建议的检索金标：一句提问 + 该命中的政策条文。"""
+    """建议的检索标准答案：一句提问 + 该命中的政策条文。"""
 
     query: str = Field(description="像合同审查员那样提的一个问题")
     policy_ref: str = Field(description="该命中的政策编号（本细则用需求里给的编号）")
@@ -74,7 +74,7 @@ class DraftedPolicy(BaseModel):
     notes: list[str] = Field(description="需要人确认的地方：缺哪些元信息、哪些阈值待定、哪里没把握")
     risk_types: list[RiskTypeSuggestion] = Field(description="配套建议一：这条政策该挂哪些风险类型")
     samples: list[SampleSuggestion] = Field(description="配套建议二：建议造的验证样本")
-    retrievals: list[RetrievalSuggestion] = Field(description="配套建议三：建议的检索金标")
+    retrievals: list[RetrievalSuggestion] = Field(description="配套建议三：建议的检索标准答案")
 
 
 _SYSTEM = """你在为一家集团的采购合规部门起草内部审核细则。你的产出会被人审、然后入库，
@@ -109,7 +109,7 @@ _SYSTEM = """你在为一家集团的采购合规部门起草内部审核细则�
   期望什么结论（pass / conditional_pass / fail）。**品类只能写 enterprise_goods /
   gov_goods / agri_goods / tech_service 这四个编码之一**，不要写中文或别的英文词。
   每条一句话，照着就能造出合同。
-- retrievals（检索金标建议）：像审查员那样提一句问题、该命中本细则的哪个编号、
+- retrievals（检索标准答案建议）：像审查员那样提一句问题、该命中本细则的哪个编号、
   期望命中的条文要点关键词。
 
 【体例样例】（只对齐写法与颗粒度：样例的主题、数字都只属于它自己，**一律不要沿用**；
@@ -222,7 +222,7 @@ def new_numbers(brief: str, text: str) -> list[dict]:
 
 
 def normalize_suggestions(drafted: dict) -> dict:
-    """把模型给的配套建议收敛成能直接展示的三组：风险类型 / 样本 / 检索金标。
+    """把模型给的配套建议收敛成能直接展示的三组：风险类型 / 样本 / 检索标准答案。
 
     判定能落到确定性地方的就别交给模型——风险类型编码必须对得上规则里登记的那份，
     自造编码单独标出来等人定；品类与评级取值不合法时归位，并在提示里说明改了哪里。

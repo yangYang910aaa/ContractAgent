@@ -1,7 +1,7 @@
 <!--
   原文抽屉：任务页「查看原合同」的侧滑面板。
   视图按文件类型给：pdf 提供「原文件」（浏览器内嵌预览，inline 而非下载）、
-  「条文视图」（按条款整理、Markdown 表格转文本、证据定位锚点）与「纯文本」
+  「条文视图」（按条款整理、Markdown 表格转文本、证据定位点）与「纯文本」
   （模型解析出的原始全文快照，含 Markdown 标记）；docx/md/txt 提供
   「条文视图 / 纯文本」；docx 另有「原文件」页签——浏览器不原生支持 Word，
   用 docx-preview 把原文件渲染成近似 Word 的网页（下载仍弹确认框）。
@@ -416,7 +416,7 @@ function findBlockByEvidence(evidence: string, blocks: SourceBlock[]): number {
 }
 
 /** 摘录横跨两个条款块时，挑"落在本块的字最多"的那一块（没有整块命中的退路）。
- *  缺字段类风险的摘录是"锚点句左右取窗口"拼出来的，常从「前言」伸进「一、」，
+ *  缺字段类风险的摘录是"定位词句左右取窗口"拼出来的，常从「前言」伸进「一、」，
  *  整段在任何一个块里都找不到——只比整段就会一路退到纯文本、连高亮都没有。 */
 function findBlockByOverlap(evidence: string, blocks: SourceBlock[]): number {
   let best = -1
@@ -786,7 +786,7 @@ onUnmounted(() => {
           <div ref="docxBox" class="docx-frame"></div>
         </div>
 
-        <!-- 条文视图：按条款块渲染（md 表格已转文本），块标题即证据定位锚点 -->
+        <!-- 条文视图：按条款块渲染（md 表格已转文本），块标题即证据定位点 -->
         <div v-else-if="tab === 'blocks' && doc" class="src-body">
           <p v-if="anyHit" class="hit-hint">
             命中条款以底色标出（红=高风险 / 琥珀=中风险），句内亮色为风险证据原文

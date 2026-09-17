@@ -1,4 +1,4 @@
-"""FastAPI 任务路由（Phase 3）测试：上传/队列/详情/审批，全部离线（假抽取）。"""
+"""FastAPI 任务路由测试：上传/队列/详情/审批，全部离线（假抽取）。"""
 
 import json
 from datetime import date

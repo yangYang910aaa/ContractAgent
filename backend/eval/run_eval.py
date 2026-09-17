@@ -1,4 +1,4 @@
-"""Phase 4 评测闭环 runner(本地评测工具, 可入库)。
+"""评测闭环 runner：检出率 / 零误报 / 风险类型 macro-F1 / 评级准确率（本地评测工具）。
 
 用途: 在"变体语料(12 份) + 合成 sample(9 份)"上跑离线流水线, 按 ground_truth
 算 检出率 / 零误报率 / 风险类型级 macro-F1 / 评级准确率, 并量化 LLM 抽取波动
@@ -23,7 +23,7 @@
 - 评级准确率: expected_grade == 实测 grade。
 - 引用正确率: 报告里带政策引用的风险中, 引用能对上政策原文(编号存在、正文可读、
   与该风险类型对应、判定阈值在原文里能找到)的比例——量的是"报告写的引用站不站得住",
-  与 run_retrieval_eval 的检索命中金标是两件事。按全部引用算(规则侧多数引用挂在
+  与 run_retrieval_eval 的检索命中标准答案是两件事。按全部引用算(规则侧多数引用挂在
   medium 上, 只算 high 会让分母经常为空), 另给 high 分项供单独观察。
 每份文件跑 N 次, 头部指标取 N 次(每次=全语料一遍)的均值与 [min,max] 波动区间。
 增列模型调用成本(metrics.llm_calls): 每次全语料跑一遍的调用总次数/每份均值/耗时/
@@ -781,7 +781,7 @@ def _main_compare(entries: list[GtEntry], judged: list[GtEntry], runs: int, out_
 
 def main(argv: list[str] | None = None) -> int:
     """CLI 入口: 校验 → 逐份跑 N 次 → 汇总指标 → 写输出文件。"""
-    parser = argparse.ArgumentParser(description="Phase 4 评测闭环(run_eval)")
+    parser = argparse.ArgumentParser(description="评测闭环(run_eval)")
     parser.add_argument("--gt", type=Path, default=DEFAULT_GT, help="ground_truth.json 路径")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="输出目录")
     parser.add_argument("--runs", type=int, default=3, help="每份文件跑几次(默认 3)")

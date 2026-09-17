@@ -1,4 +1,4 @@
-"""Phase 4 评测 runner 离线单测: 指标口径 + GT 与 rules 一致性。
+"""评测 runner 离线单测: 指标口径 + GT 与 rules 一致性。
 
 不调 LLM(纯函数 + 读本地 GT JSON); 与既有测试一致, 本地语料不入库。
 """

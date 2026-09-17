@@ -137,7 +137,7 @@ def test_extract_text_unsupported_suffix(tmp_path: Path) -> None:
         extract_text(p)
 
 
-# ---- 扫描件/图片 OCR 通路（第 5 步）----
+# ---- 扫描件/图片 OCR 通路 ----
 # 单测只用假 OCR 引擎：真实 rapidocr 跑一页要数秒且依赖字体/模型，不适合放进常规测试；
 # 真机效果由 backend/eval/run_ocr_eval.py 的离线扫描件跑批负责。
 

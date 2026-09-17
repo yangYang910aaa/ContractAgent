@@ -301,7 +301,7 @@ def test_drop_legacy_idempotent_and_memory_backend(corpus_dir: Path, capsys) -> 
 
 
 def _drafts_dir_with(tmp_path: Path, count: int) -> Path:
-    """造 count 份起稿产物，修改时间递增（最早的排最后）。"""
+    """造 count 份起稿输出文件，修改时间递增（最早的排最后）。"""
     drafts = tmp_path / "_drafts"
     drafts.mkdir()
     for index in range(count):
@@ -313,7 +313,7 @@ def _drafts_dir_with(tmp_path: Path, count: int) -> Path:
 
 
 def test_prune_drafts_lists_then_removes_oldest(tmp_path: Path, capsys) -> None:
-    """起稿产物按时间留最近几份：默认只列，--yes 才删，且只删超出的那几份。"""
+    """起稿输出文件按时间留最近几份：默认只列，--yes 才删，且只删超出的那几份。"""
     drafts = _drafts_dir_with(tmp_path, 5)
     plan = admin.plan_draft_prune(drafts, keep=2)
     assert [path.name for path in plan["keep"]] == ["P-14_旧稿_000004", "P-13_旧稿_000003"]
@@ -327,7 +327,7 @@ def test_prune_drafts_lists_then_removes_oldest(tmp_path: Path, capsys) -> None:
 
     # 情况：给了 --yes → 删掉超出的 3 份，最近 2 份留着
     assert admin.main(["--prune-drafts", "2", "--drafts-dir", str(drafts), "--yes"]) == 0
-    assert "已删除 3 份历史产物" in capsys.readouterr().out
+    assert "已删除 3 份历史文件" in capsys.readouterr().out
     assert sorted(path.name for path in drafts.iterdir()) == [
         "P-13_旧稿_000003",
         "P-14_旧稿_000004",
@@ -339,7 +339,7 @@ def test_prune_drafts_noop_when_under_keep(tmp_path: Path, capsys) -> None:
     drafts = _drafts_dir_with(tmp_path, 2)
     assert admin.main(["--prune-drafts", "--drafts-dir", str(drafts), "--yes"]) == 0
     out = capsys.readouterr().out
-    assert "没有需要清理的产物" in out and "未执行" not in out
+    assert "没有需要清理的输出文件" in out and "未执行" not in out
     assert len(list(drafts.iterdir())) == 2
     # 目录不存在时当没事发生（首次起稿前就会走到这条）
     assert admin.main(["--prune-drafts", "--drafts-dir", str(tmp_path / "none")]) == 0

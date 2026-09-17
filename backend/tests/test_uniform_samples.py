@@ -94,7 +94,7 @@ def test_defect_sample07_hits_warranty_and_penalty() -> None:
 
 @pytest.mark.parametrize("idx", range(len(UNIFORM_SPECS)))
 def test_uniform_specs_render_docx_pdf_roundtrip(tmp_path: Path, idx: int) -> None:
-    """两版校服样本都能出 md/docx/pdf，且关键锚点（编号/章节头/总价款/质保句）不丢。"""
+    """两版校服样本都能出 md/docx/pdf，且关键内容（编号/章节头/总价款/质保句）不丢。"""
     spec = UNIFORM_SPECS[idx]
     body = _body_for(spec)
     docx_path = tmp_path / f"{spec.sample_id}.docx"

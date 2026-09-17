@@ -228,7 +228,7 @@ export async function clearChat(
   )
 }
 
-// ---- 政策库起稿（只读起稿：不写政策库，产物落草稿目录）----
+// ---- 政策库起稿（只读起稿：不写政策库，输出文件落草稿目录）----
 
 /** 起稿：文件与粘贴正文二选一；返回摘要与 draft_id。 */
 export async function createPolicyDraft(input: {

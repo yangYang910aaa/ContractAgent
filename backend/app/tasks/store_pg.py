@@ -2,7 +2,7 @@
 
 让服务重启后任务列表/报告/待审批闸口仍在, 审批可继续。
 PgThreadStore 与内存 ThreadStore 接口一致, 路由与队列层无感切换。
-连接串取 settings.database_url; 易错点见 docs/问题与踩坑记录.md(Postgres 持久化落地)。
+连接串取 settings.database_url; 未配置时调用方走内存登记簿, 这里不兜底。
 """
 
 from __future__ import annotations

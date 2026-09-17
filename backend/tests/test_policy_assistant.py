@@ -1,4 +1,4 @@
-"""政策库运维助手（轻档）单测：解析/体例重排/重叠分级/可核对冲突/产物落盘，全部离线。"""
+"""政策库运维助手（轻档）单测：解析/体例重排/重叠分级/可核对冲突/输出文件落盘，全部离线。"""
 
 from __future__ import annotations
 
@@ -107,7 +107,7 @@ def test_run_assist_writes_artifacts(tmp_path: Path) -> None:
 
 
 def test_draft_dir_name_strips_draft_suffix(tmp_path: Path, monkeypatch) -> None:
-    """来源名以 _draft 结尾（把上一次的产物再喂回来）时，目录名不再重复带 _draft。"""
+    """来源名以 _draft 结尾（把上一次的输出文件再喂回来）时，目录名不再重复带 _draft。"""
     monkeypatch.setattr(drafts, "DRAFTS_DIR", tmp_path / "drafts")
     source = tmp_path / "P-29_draft.md"
     source.write_text(_DRAFT, encoding="utf-8")

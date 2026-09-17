@@ -10,8 +10,8 @@
 [![Node.js](https://img.shields.io/badge/Node.js-20.19%2B-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 ![平台](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows-0078D6?style=flat-square)
 
-![后端测试](https://img.shields.io/badge/%E5%90%8E%E7%AB%AF%E6%B5%8B%E8%AF%95-459%20%E9%A1%B9%E5%85%A8%E7%BB%BF-brightgreen?style=flat-square&logo=pytest&logoColor=white)
-![前端测试](https://img.shields.io/badge/%E5%89%8D%E7%AB%AF%E6%B5%8B%E8%AF%95-16%20%E9%A1%B9%E9%80%9A%E8%BF%87-brightgreen?style=flat-square&logo=vitest&logoColor=white)
+![后端测试](https://img.shields.io/badge/%E5%90%8E%E7%AB%AF%E6%B5%8B%E8%AF%95-474%20%E9%A1%B9%E5%85%A8%E7%BB%BF-brightgreen?style=flat-square&logo=pytest&logoColor=white)
+![前端测试](https://img.shields.io/badge/%E5%89%8D%E7%AB%AF%E6%B5%8B%E8%AF%95-20%20%E9%A1%B9%E9%80%9A%E8%BF%87-brightgreen?style=flat-square&logo=vitest&logoColor=white)
 ![政策库](https://img.shields.io/badge/%E6%94%BF%E7%AD%96%E5%BA%93-15%20%E4%BB%BD%20%2F%2072%20%E6%9D%A1-blueviolet?style=flat-square)
 ![最近提交](https://img.shields.io/github/last-commit/yangYang910aaa/ContractAgent?label=%E6%9C%80%E8%BF%91%E6%8F%90%E4%BA%A4&color=blue&style=flat-square&logo=git&logoColor=white)
 
@@ -148,13 +148,13 @@ flowchart TD
 系统因此带了一条政策语料线：把制度细则（md）放进 `data/policies/`，
 起稿页会做体例重排、与现有政策的重叠分级与冲突初筛；确认后一键入库（预览 → 增量同步 → 核对，
 核对不过自动退回）。也可以只给一段需求，让模型按现有体例起草条文，并把**该挂的风险类型、
-建议造的验证样本、建议的检索金标**一并给出来当草稿。
+建议造的验证样本、建议的检索标准答案**一并给出来当草稿。
 
 <div align="center">
 
 ![模型起草与配套建议](assets/screenshots/08_policy_draft.png)
 
-*模型起草的条文与配套建议：该挂的既有风险类型编码、建议造的验证样本、建议的检索金标；*
+*模型起草的条文与配套建议：该挂的既有风险类型编码、建议造的验证样本、建议的检索标准答案；*
 *右边是重叠分级与冲突初筛，底部是入库预览——确认之前不动真库。*
 
 </div>
@@ -206,6 +206,15 @@ flowchart TD
 ```
 
 本机试一下：`claude --mcp-config <上面的 json> --strict-mcp-config -p "用 ask_policy 查预付款比例上限"`。
+
+<div align="center">
+
+![MCP 客户端调用](assets/screenshots/09_mcp.png)
+
+*一次真实会话：客户端按工具描述自己选中 `ask_policy`，子进程就是上面这个 MCP 服务端；*
+*工具返回的是政策库真实命中的条文（编号、出处、融合分），回答里的政策编号与阈值都来自它。*
+
+</div>
 
 ## 设计取舍
 
@@ -267,7 +276,7 @@ python -m pytest backend/tests -q                 # 后端测试
 cd frontend && pnpm lint && pnpm build            # 前端静态检查与构建
 python -m backend.app.review.pipeline data/contracts/sample_01.md --out reports   # 离线跑一份合同
 python -m backend.eval.run_eval --check           # 校验评测集（不调用模型）
-python -m backend.eval.run_retrieval_eval         # 检索金标（只花 embedding）
+python -m backend.eval.run_retrieval_eval         # 检索标准答案（只花 embedding）
 python backend/app/mcp_server.py                  # MCP 服务端（stdio，供 AI 客户端调用）
 ```
 
@@ -282,7 +291,7 @@ backend/app/
   policy/                 政策库：检索、语料核对、入库、命令行、起草与引用核对
   assistant/              对话助手：工具、引用汇总、流式输出
   tasks/                  任务队列与登记簿：worker 池、内存 / Postgres 登记簿、上传目录清理
-backend/eval/             评测闭环（语料指标、检索金标、扫描件字段准确率）
+backend/eval/             评测闭环（语料指标、检索标准答案、扫描件字段准确率）
 backend/tests/            离线可跑的测试
 frontend/src/             上传 / 队列 / 详情 / 政策库四个视图与各面板组件
 ```

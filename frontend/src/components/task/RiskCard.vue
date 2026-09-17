@@ -40,7 +40,7 @@ const emit = defineEmits<{
       >
         {{ risk.clause_ref ? `条款：${risk.clause_ref} · 原文定位` : '原文定位' }}
       </button>
-      <!-- 这种情况是：既无条款号也无摘录（字段类规则没抽到原文锚点）→
+      <!-- 这种情况是：既无条款号也无摘录（字段类规则没抽到原文定位词）→
            明说"定位不了"，别让人以为是功能坏了 -->
       <p v-else class="clause-none">正文里没有可直接指路的表述，请人工通读核对</p>
       <button class="clause-link ask" title="让助手解释这条判定" @click="emit('ask', risk)">
@@ -109,7 +109,7 @@ const emit = defineEmits<{
   text-decoration: none;
 }
 
-/* 无原文定位时的说明：字段类风险找不到锚点，明说"指不了路"而不是留白 */
+/* 无原文定位时的说明：字段类风险找不到定位词，明说"指不了路"而不是留白 */
 .clause-none {
   margin: 6px 0 0;
   font-size: 12.5px;

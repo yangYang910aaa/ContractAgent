@@ -169,7 +169,7 @@ def test_draft_detail_rejects_unknown_and_traversal(client: TestClient) -> None:
 
 
 def test_draft_does_not_touch_policy_library(client: TestClient) -> None:
-    """只读边界：起稿只在草稿目录留产物，语料目录一个文件都不动。"""
+    """只读边界：起稿只在草稿目录留输出文件，语料目录一个文件都不动。"""
     before = sorted(path.name for path in POLICY_DIR.glob("*.md"))
     assert client.post("/api/policy/drafts", data={"text": _DRAFT_TEXT}).status_code == 200
     assert sorted(path.name for path in POLICY_DIR.glob("*.md")) == before

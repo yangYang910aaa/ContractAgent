@@ -1,6 +1,6 @@
 <!--
-  模型起草的配套建议：这条政策该挂哪些风险类型、建议造什么验证样本、建议的检索金标。
-  都是草稿——风险类型编码不在册的单列红字等人定，样本与金标照着改就行。
+  模型起草的配套建议：这条政策该挂哪些风险类型、建议造什么验证样本、建议的检索标准答案。
+  都是草稿——风险类型编码不在册的单列红字等人定，样本与标准答案照着改就行。
 -->
 <script setup lang="ts">
 import { gradeDisplay, kindLabel } from '../../labels'
@@ -13,7 +13,7 @@ defineProps<{ suggestions: AiDraftSuggestions }>()
   <section class="card pad">
     <div class="head">
       <span class="title serif">配套建议</span>
-      <span class="muted note">起草时一并给出的落地下手处：先定风险类型，再造样本与检索金标</span>
+      <span class="muted note">起草时一并给出的落地下手处：先定风险类型，再造样本与检索标准答案</span>
     </div>
 
     <p v-if="suggestions.notes.length" class="warn">
@@ -54,7 +54,7 @@ defineProps<{ suggestions: AiDraftSuggestions }>()
     </div>
 
     <div class="group">
-      <span class="tag">检索金标建议</span>
+      <span class="tag">检索标准答案建议</span>
       <ul class="list">
         <li v-for="(item, index) in suggestions.retrievals" :key="index" class="row">
           <p class="r-head">
@@ -64,7 +64,7 @@ defineProps<{ suggestions: AiDraftSuggestions }>()
           <p v-if="item.expect" class="muted hint">期望命中：{{ item.expect }}</p>
         </li>
       </ul>
-      <p v-if="!suggestions.retrievals.length" class="muted empty">模型没给检索金标建议</p>
+      <p v-if="!suggestions.retrievals.length" class="muted empty">模型没给检索标准答案建议</p>
     </div>
   </section>
 </template>

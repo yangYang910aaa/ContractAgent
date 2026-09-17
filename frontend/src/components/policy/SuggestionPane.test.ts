@@ -32,7 +32,7 @@ describe('SuggestionPane', () => {
     const text = wrapper.text()
     expect(text).toContain('建议挂的风险类型')
     expect(text).toContain('建议造的验证样本')
-    expect(text).toContain('检索金标建议')
+    expect(text).toContain('检索标准答案建议')
     expect(text).toContain('prepayment_ratio_high')
     expect(text).toContain('政府采购 / 校服') // 品类机器码不直接展示
     expect(text).toContain('评级待定') // 取值被归位后留空
@@ -53,7 +53,7 @@ describe('SuggestionPane', () => {
     })
     expect(wrapper.text()).toContain('模型没给风险类型建议')
     expect(wrapper.text()).toContain('模型没给样本建议')
-    expect(wrapper.text()).toContain('模型没给检索金标建议')
+    expect(wrapper.text()).toContain('模型没给检索标准答案建议')
     // notes 为空时不显示"取值被归位"那行
     expect(wrapper.find('.warn').exists()).toBe(false)
   })

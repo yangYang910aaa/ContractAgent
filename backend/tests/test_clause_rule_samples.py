@@ -117,7 +117,7 @@ def test_new_samples_registered_in_gt() -> None:
 
 
 def test_new_specs_render_docx_pdf_roundtrip(tmp_path) -> None:
-    """新 spec（企业式 + 技术式）都能出 md/docx/pdf，关键锚点（编号/双方/总额）不丢。"""
+    """新 spec（企业式 + 技术式）都能出 md/docx/pdf，关键内容（编号/双方/总额）不丢。"""
     for spec in NEW_SPECS:
         body = _body_for(spec)
         docx_path = tmp_path / f"{spec.sample_id}.docx"

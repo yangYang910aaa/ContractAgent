@@ -1,6 +1,6 @@
 <!--
   政策库起稿视图：上传或粘贴一份新政策 → 规范化草稿 + 重叠分级 + 冲突列表 + 配套清单。
-  只起稿、不入库：本页不写政策库，产物落在草稿目录，入库仍由"批准入库"那一步单独做。
+  只起稿、不入库：本页不写政策库，输出文件落在草稿目录，入库仍由"批准入库"那一步单独做。
 -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
@@ -66,7 +66,7 @@ function onPick(e: Event) {
   el.value = '' // 清空 input 值：同一文件再选一次也能触发 change
 }
 
-/** 起稿：先拿摘要渲染概览，再取详情补全四块结果（详情要回读磁盘产物）。 */
+/** 起稿：先拿摘要渲染概览，再取详情补全四块结果（详情要回读磁盘上的文件）。 */
 async function runDraft() {
   if (busy.value || !canSubmit.value) return
   busy.value = true
@@ -274,7 +274,7 @@ function reset() {
       <div class="full">
         <TextPane
           title="配套清单"
-          note="范围卡体例骨架，待定项与样本计划由人补全"
+          note="提纲式模板骨架，待定项与样本计划由人补全"
           :text="detail.checklist"
         />
       </div>

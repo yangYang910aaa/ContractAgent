@@ -6,7 +6,7 @@
     python -m backend.app.policy.admin --sync --yes   # 执行同步（只重写有变化的文件）
     python -m backend.app.policy.admin --fingerprint  # 只打印政策库版本号
     python -m backend.app.policy.admin --drop-legacy --yes      # 删除回滚点集合（默认只报现状）
-    python -m backend.app.policy.admin --prune-drafts 10 --yes  # 起稿产物只留最近 10 份
+    python -m backend.app.policy.admin --prune-drafts 10 --yes  # 起稿输出文件只留最近 10 份
 
 同步是"按份替换"：变化的文件先按文件名删掉旧单元再重插，磁盘上已删的文件清掉库内行，
 没变化的文件一个单元都不动——不做清库重建，分条与检索仍走原实现，不动检索口径。
@@ -289,7 +289,7 @@ def _drop_legacy(store, policy_dir, confirmed: bool, as_json: bool) -> int:
 
 
 def plan_draft_prune(drafts_dir: Path, keep: int = DRAFTS_KEEP) -> dict:
-    """起稿产物保留计划：按最后修改时间倒序，返回 (保留, 待删)。
+    """起稿输出文件保留计划：按最后修改时间倒序，返回 (保留, 待删)。
 
     只认目录下的直接子目录（一次起稿一个目录）；目录不存在时返回空计划。
     """
@@ -301,9 +301,9 @@ def plan_draft_prune(drafts_dir: Path, keep: int = DRAFTS_KEEP) -> dict:
 
 
 def _prune_drafts(drafts_dir: Path, keep: int, confirmed: bool, as_json: bool) -> int:
-    """清理起稿产物：默认只列要删的目录，加 --yes 才真删。
+    """清理起稿输出文件：默认只列要删的目录，加 --yes 才真删。
 
-    产物是本地历史记录，删了不影响政策库（正文在 data/policies/ 的 md 里）；
+    这些文件是本地历史记录，删了不影响政策库（正文在 data/policies/ 的 md 里）；
     所以这里不做自动清理——列出来给人看一眼再删，避免把还在用的草稿扫掉。
     """
     plan = plan_draft_prune(drafts_dir, keep)
@@ -321,11 +321,11 @@ def _prune_drafts(drafts_dir: Path, keep: int, confirmed: bool, as_json: bool) -
             indent=2,
         ))
     else:
-        print(f"起稿产物目录 {drafts_dir}：保留最近 {keep} 份，现有 {len(plan['keep']) + len(remove)} 份")
+        print(f"草稿目录 {drafts_dir}：保留最近 {keep} 份，现有 {len(plan['keep']) + len(remove)} 份")
         for path in remove:
             print(f"  待删 {path.name}")
         if not remove:
-            print("没有需要清理的产物")
+            print("没有需要清理的输出文件")
     if not confirmed or not remove:
         if not as_json and remove:
             print("（未执行：确认无误后加 --yes）")
@@ -339,13 +339,13 @@ def _prune_drafts(drafts_dir: Path, keep: int, confirmed: bool, as_json: bool) -
         shutil.rmtree(path)
         removed += 1
     if not as_json:
-        print(f"已删除 {removed} 份历史产物")
+        print(f"已删除 {removed} 份历史文件")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     """CLI 入口：--check 核对 / --sync 按份同步 / --fingerprint 打印版本号 /
-    --drop-legacy 删回滚点 / --prune-drafts 清理起稿产物。"""
+    --drop-legacy 删回滚点 / --prune-drafts 清理起稿输出文件。"""
     parser = argparse.ArgumentParser(description="政策库语料指纹、一致性核对与按份同步")
     parser.add_argument("--check", action="store_true", help="核对文件与索引是否一致（默认动作）")
     parser.add_argument("--sync", action="store_true", help="按份同步有变化的语料")
@@ -359,17 +359,17 @@ def main(argv: list[str] | None = None) -> int:
         const=DRAFTS_KEEP,
         default=None,
         metavar="N",
-        help=f"清理起稿产物，保留最近 N 份（默认 {DRAFTS_KEEP}；默认只列不删）",
+        help=f"清理起稿输出文件，保留最近 N 份（默认 {DRAFTS_KEEP}；默认只列不删）",
     )
     parser.add_argument("--yes", action="store_true", help="与 --sync / --drop-legacy 同用：确认执行，否则只报计划")
     parser.add_argument("--json", action="store_true", help="以 JSON 输出（脚本/评测引用）")
     parser.add_argument("--backend", default=None, choices=["auto", "memory", "milvus"], help="检索后端")
     parser.add_argument("--policy-dir", default=None, help="语料目录（默认 data/policies；演练可指到副本）")
-    parser.add_argument("--drafts-dir", default=None, help="起稿产物目录（默认 data/policies/_drafts）")
+    parser.add_argument("--drafts-dir", default=None, help="草稿目录（默认 data/policies/_drafts）")
     args = parser.parse_args(argv)
     policy_dir = Path(args.policy_dir) if args.policy_dir else None
 
-    # 分支：清理起稿产物 → 纯读盘/删目录，不连向量库
+    # 分支：清理起稿输出文件 → 纯读盘/删目录，不连向量库
     if args.prune_drafts is not None:
         drafts_dir = Path(args.drafts_dir) if args.drafts_dir else DRAFTS_DIR
         return _prune_drafts(drafts_dir, args.prune_drafts, args.yes, args.json)

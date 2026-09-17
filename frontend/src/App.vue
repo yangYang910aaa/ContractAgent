@@ -39,7 +39,7 @@ function go(viewName: View) {
     <!-- 顶栏：品牌（点回上传页）+ 导航 -->
     <header class="top">
       <div class="brand" @click="go('upload')">
-        <!-- 品牌标：文档 + 核对勾（方向 C：靛蓝线性小标，无图标库依赖） -->
+        <!-- 品牌标：文档 + 核对勾（靛蓝线性小标，不引图标库） -->
         <svg class="emblem" viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
           <path
             d="M9 3.8h9.6l6 6V26a2.2 2.2 0 0 1-2.2 2.2H9A2.2 2.2 0 0 1 6.8 26V6A2.2 2.2 0 0 1 9 3.8z"

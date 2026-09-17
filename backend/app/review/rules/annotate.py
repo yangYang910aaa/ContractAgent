@@ -71,7 +71,7 @@ def annotate_open_ended_risks(risks: list[RiskItem], text: str) -> list[RiskItem
     合同写"按实结算/长期有效/签字盖章之日起生效"时，抽不到金额或日期是常态，
     判高风险会误停闸口。降级会在建议里写明，不静默。返回新列表，不修改入参。
     """
-    # 扫描件/PDF 文本先做统一清洗：去掉页标记、接回硬换行——后面的锚点与窗口判定、
+    # 扫描件/PDF 文本先做统一清洗：去掉页标记、接回硬换行——后面的定位词与窗口判定、
     # 以及给用户看的摘录都按干净正文来（页标记占窗口预算，硬换行会把关键词切开）
     text = clean_rule_text(text)
     if not text:
@@ -94,7 +94,7 @@ def annotate_open_ended_risks(risks: list[RiskItem], text: str) -> list[RiskItem
     # 放在开放式降级之前，且不受下方早退分支影响（没有开放式语境时也要修）
     risks = _refine_confidentiality_wording(risks, text)
     # 缺必填的原文定位：字段没抽到 → 证据天然为空，风险卡上就没有"原文定位"。
-    # 这里按字段类型补"该去哪找"的锚点
+    # 这里按字段类型补"该去哪找"的定位词
     risks = _annotate_missing_locators(risks, text)
     # 条款号幻觉纠正：放在定位补完之后，因为纠正要用到摘录，而摘录可能正是上一步补上的
     risks = _normalize_clause_refs(risks, text)

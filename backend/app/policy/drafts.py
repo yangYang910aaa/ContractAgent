@@ -1,12 +1,12 @@
 """政策库运维助手（轻档：确定性起稿，不调模型）。
 
-把一份新政策文档变成三样待审产物：
+把一份新政策文档变成三样待审输出文件：
 - 规范化草稿：解析标题/编号/版本/生效日期/归口/适用范围与条文，按现有体例重排；
 - 重叠报告：逐条用向量检索现有政策（余弦分，可读），标出与既有条文高度相近的；
 - 冲突提示：编号撞号、元信息缺失、同主题阈值数字不一致这类**可核对**的矛盾单列。
-另附一份配套改动清单骨架（范围卡体例：风险类型候选/规则待定项/样本/金标/验收）。
+另附一份配套改动清单骨架（提纲式模板：风险类型候选/规则待定项/样本/标准答案/验收）。
 
-产物落 `data/policies/_drafts/<来源名>_<时分秒>/`，另写一份 meta.json 存解析结果与冲突条目
+输出文件落 `data/policies/_drafts/<来源名>_<时分秒>/`，另写一份 meta.json 存解析结果与冲突条目
 （清单里是人类可读的句子，回读要的是原始条目）。这里只起稿，入库另走 policy 命令行。
 """
 
@@ -25,7 +25,7 @@ from backend.app.policy.rag import POLICY_DIR, PolicyHit, get_store, load_polici
 
 DRAFTS_DIR = POLICY_DIR / "_drafts"
 
-# 起稿产物默认保留份数：一次起稿一个目录，日积月累只占地方；清理命令按这个默认值留最近几份
+# 起稿输出文件默认保留份数：一次起稿一个目录，日积月累只占地方；清理命令按这个默认值留最近几份
 DRAFTS_KEEP = 10
 
 # 元信息行：「文件编号：P-15　　版本：V1.0　　生效日期：2026年9月14日」等，一行可有多项
@@ -183,7 +183,7 @@ def detect_conflicts(parsed: dict, overlaps: list[dict], policy_dir: Path | None
 
 
 def build_checklist(parsed: dict, overlaps: list[dict], conflicts: list[dict]) -> str:
-    """生成配套改动清单骨架（范围卡体例），供人补全口径与样本计划。"""
+    """生成配套改动清单骨架（提纲式模板），供人补全口径与样本计划。"""
     high = [item for item in overlaps if item["level"] == "high"]
     medium = [item for item in overlaps if item["level"] == "medium"]
     lines = [
@@ -214,19 +214,19 @@ def build_checklist(parsed: dict, overlaps: list[dict], conflicts: list[dict]) -
         "## 三、样本与评测",
         "",
         "- 缺陷样本（正例）/ 正常对照样本（反例）：",
-        "- 检索金标要补的查询：",
+        "- 检索标准答案要补的查询：",
         "- 零新增命中回归范围：",
         "",
         "## 四、验收",
         "",
-        "- 离线：现有语料零新增命中 / 检索金标对照 / 单测",
+        "- 离线：现有语料零新增命中 / 检索标准答案对照 / 单测",
         "- 入库：`python -m backend.app.policy.admin --check` 核对后 `--sync --yes` 按单元增量写入",
     ])
     return "\n".join(lines) + "\n"
 
 
 def run_assist(path: str | Path, retriever=None, out_dir: Path | None = None) -> dict:
-    """按文件跑一遍起稿流程：读取 → 起稿落盘，返回产物路径与摘要。"""
+    """按文件跑一遍起稿流程：读取 → 起稿落盘，返回输出文件路径与摘要。"""
     source = Path(path)
     return write_draft(extract_text(source), source=source.name, retriever=retriever, out_dir=out_dir)
 
@@ -283,12 +283,12 @@ def write_draft(
 
 
 def load_draft(draft_id: str) -> dict | None:
-    """回读一份草稿的全部产物；目录名不合法、不是草稿目录或 meta 缺失时返回 None。"""
+    """回读一份草稿的全部输出文件；目录名不合法、不是草稿目录或 meta 缺失时返回 None。"""
     directory = _draft_dir(draft_id)
     if directory is None:
         return None
     meta_file = directory / "meta.json"
-    # 这种情况是：目录在但不是起稿产物（meta 缺失）→ 当作不存在
+    # 这种情况是：目录在但不是起稿输出文件（meta 缺失）→ 当作不存在
     if not meta_file.is_file():
         return None
     meta = json.loads(meta_file.read_text(encoding="utf-8"))
@@ -306,7 +306,7 @@ def load_draft(draft_id: str) -> dict | None:
         "parsed": meta.get("parsed", {}),
         "conflicts": meta.get("conflicts", []),
         "overlaps": _read_json(directory / "overlaps.json", []),
-        # 文件名按 name 取：meta 是本地产物，仍不当可信路径用
+        # 文件名按 name 取：meta 是本地文件，仍不当可信路径用
         "draft": _read_text(directory / Path(str(meta.get("draft_file") or "")).name),
         "checklist": _read_text(directory / "checklist.md"),
         "files": sorted(item.name for item in directory.iterdir() if item.is_file()),
@@ -344,7 +344,7 @@ def _draft_dir(draft_id: str) -> Path | None:
 
 def _unique_draft_dir(source: str) -> Path:
     """草稿目录名：来源名 + 时分秒；同一秒内重复起稿时加序号，避免互相覆盖。"""
-    # 来源名以 draft 结尾说明喂进来的是上一次的产物：目录名再带一遍 _draft 只会更难认
+    # 来源名以 draft 结尾说明喂进来的是上一次的输出文件：目录名再带一遍 _draft 只会更难认
     stem = re.sub(r"[_\-\s]?draft$", "", Path(source).stem, flags=re.IGNORECASE) or "draft"
     base = f"{stem}_{datetime.now().strftime('%H%M%S')}"
     target = DRAFTS_DIR / base
@@ -356,7 +356,7 @@ def _unique_draft_dir(source: str) -> Path:
 
 
 def _read_json(path: Path, fallback):
-    """读一个 JSON 产物；缺失或解析失败时返回兜底值（回读不因半截文件报错）。"""
+    """读一个 JSON 文件；缺失或解析失败时返回兜底值（回读不因半截文件报错）。"""
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -364,7 +364,7 @@ def _read_json(path: Path, fallback):
 
 
 def _read_text(path: Path) -> str:
-    """读一个文本产物；缺失时返回空串。"""
+    """读一个文本文件；缺失时返回空串。"""
     try:
         return path.read_text(encoding="utf-8")
     except OSError:
@@ -395,7 +395,7 @@ def _ref_from_name(name: str) -> str:
 def _value(raw: str) -> str:
     """元信息取值：占位符「（待填）」不是真值，按空处理。
 
-    起稿产物里缺项就写着它，若不还原成空，回读时会把占位符当成填好的版本号/生效日期。
+    起稿输出文件里缺项就写着它，若不还原成空，回读时会把占位符当成填好的版本号/生效日期。
     """
     return "" if _PLACEHOLDER_RE.match(raw or "") else raw
 
@@ -467,7 +467,7 @@ def _safe_retrieve(retriever, query: str, k: int) -> list[PolicyHit]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI 入口：对一份或多份政策文件起稿，打印摘要与产物路径。"""
+    """CLI 入口：对一份或多份政策文件起稿，打印摘要与输出文件路径。"""
     parser = argparse.ArgumentParser(description="政策库运维助手（起稿，不改库）")
     parser.add_argument("paths", nargs="+", help="政策文件（md/txt/pdf/docx）")
     parser.add_argument("--out", type=Path, default=None, help="草稿输出目录（默认 data/policies/_drafts/）")

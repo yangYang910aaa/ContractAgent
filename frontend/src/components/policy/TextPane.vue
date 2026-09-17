@@ -1,6 +1,6 @@
 <!--
-  文本产物面板：规范化草稿与配套清单共用（都是 markdown 文本 + 一键复制）。
-  渲染成元素而不是 innerHTML——起稿产物含用户粘贴内容，不给注入面。
+  文本面板：规范化草稿与配套清单共用（都是 markdown 文本 + 一键复制）。
+  渲染成元素而不是 innerHTML——起稿输出文件含用户粘贴内容，不给注入面。
 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue'

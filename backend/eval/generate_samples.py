@@ -199,7 +199,7 @@ class UniformSampleSpec:
     与 SampleSpec 的关系：企业样本逐条字段驱动「第X条」模板；校服正文是
     章节式固定骨架（一、二、…章节 + 1、2、3 子条 + 明细表 + 附件清单），
     只有缺陷载荷字段参数化，保证同骨架可复现 normal / defect 两版对比。
-    骨架内容与填充口径见 docs/合同模板观察笔记.md 第一、二节（本地）。
+    骨架按公开的校服采购示范文本整理：章节头 + 子条编号 + 明细表 + 附件清单。
     """
 
     sample_id: str  # 样本编号（sample_06/07，评测对齐用）
@@ -215,7 +215,7 @@ class UniformSampleSpec:
     note: str = ""  # 缺陷说明（写进生成清单）
 
 
-# 校服明细表（合成数据）：数量×单价加总须等于全校总价 198,400（金额一致锚点）
+# 校服明细表（合成数据）：数量×单价加总须等于全校总价 198,400（金额一致的依据）
 _DETAIL_HEADERS = ("序号", "品名", "面料/规格", "单价（元）", "数量（套）", "金额（元）")
 _DETAIL_ROWS = (
     # (序号, 品名, 面料/规格, 单价, 数量, 金额) —— 640×150+320×200+320×120=198,400
@@ -290,7 +290,7 @@ class TechServiceSampleSpec:
     ip_to_supplier: bool = False  # True=成果 IP 归乙方（构造缺陷）；False=归甲方（正常）
     note: str = ""  # 缺陷说明（写进生成清单）
 # 发票与保函合规章节开关：技术骨架固定 14 条，开票/保函句并入费用条款内
-    # （不新增条款，保持既有 parser 测试"第X条 1..14"锚点不变）
+    # （不新增条款，保持既有 parser 测试"第X条 1..14"定位词不变）
     invoice_clause: bool = True  # False=费用条款不写开票句（P-07 缺陷）
     bond_clause: bool = True  # False=费用条款不写履约保函句（P-08 缺陷，大额 120 万）
 
@@ -1014,7 +1014,7 @@ def _md_table(headers: tuple[str, ...], rows: tuple[tuple[str, ...], ...]) -> li
     """markdown 明细表块（表头 + 分隔行 + 数据行）。
 
     约定：行首以 | 开头、连续成块，docx/pdf 渲染器据此识别为真表格，
-    parser 对 md 原样读取不受影响。表内金额不进 rules 抽取锚点（见 D2 取舍）。
+    parser 对 md 原样读取不受影响。表内金额不进 rules 的字段抽取（只作明细展示）。
     """
     parts = ["| " + " | ".join(headers) + " |"]
     parts.append("| " + " | ".join("---" for _ in headers) + " |")
@@ -1283,7 +1283,7 @@ def _penalty_lines(spec: SampleSpec) -> list[str]:
 def _exemption_lines(mode: str) -> list[str]:
     """免责与责任限制条款正文。
 
-    "reasonable" 是本批的防误报对照：不可抗力、对方违约在先、买方索赔范围、买方退货
+    "reasonable" 是防误报对照：不可抗力、对方违约在先、买方索赔范围、买方退货
     与解除后返还——都属正当约定，规则不得报。`supplier_blanket` 才是缺陷形态。
     """
     # 分支：正当免责（正常对照）——把真实合同里常见的正当写法集中放进来
@@ -1354,7 +1354,7 @@ def render_contract(spec: SampleSpec) -> str:
         (
             "合同标的与总价款",
             [
-                # 大小写并用贴近真实合同；小写金额保留千分位作抽取锚点
+                # 大小写并用贴近真实合同；小写金额保留千分位作抽取依据
                 f"乙方向甲方供应本合同项下货物/服务。合同总价款为人民币（大写）"
                 f"{_cn_upper_amount(spec.total_amount)}"
                 f"（小写：{_money(spec.total_amount)}；币种：{spec.currency}）。"

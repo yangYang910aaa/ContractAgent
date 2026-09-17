@@ -322,7 +322,7 @@ def test_missing_field_gets_text_locator() -> None:
         "第二条 合同总价款为人民币 1,000,000 元（币种：人民币）。\n"
         "第七条 本合同有效期至 2027 年 3 月 9 日。\n"
     )
-    # 期望值是"定位到的原句里应当出现的关键词"（锚点是先具体后笼统，命中的是"合同总价款"）
+    # 期望值是"定位到的原句里应当出现的关键词"（定位词是先具体后笼统，命中的是"合同总价款"）
     for field, expect_in in (("total_amount", "总价款"), ("expiry_date", "有效期"), ("currency", "币种")):
         risks = [
             RiskItem(
@@ -356,7 +356,7 @@ def test_missing_field_locator_keeps_existing_evidence() -> None:
 
 
 def test_field_rule_quote_stays_inside_referenced_clause() -> None:
-    """条款号能定位时摘录必须取自该条款：泛词锚点在全文的第一处命中常与本条风险无关。
+    """条款号能定位时摘录必须取自该条款：泛词定位在全文的第一处命中常与本条风险无关。
 
     实测预付款超限的定位跳到别处的"审核和签发付款凭证"，与预付款毫无关系。
     """
@@ -383,7 +383,7 @@ def test_field_rule_quote_stays_inside_referenced_clause() -> None:
 
 
 def test_field_rule_quote_skips_same_numbered_clause_without_anchor() -> None:
-    """同一条款号出现两次（通用条款与专用条款各编一套号）→ 取真含锚点的那处。"""
+    """同一条款号出现两次（通用条款与专用条款各编一套号）→ 取真含定位词的那处。"""
     text = (
         "第十四条为监理机构指定具有检验、试验资质的机构。\n"
         "第十五条维护监理机构工作的独立性。\n"
@@ -406,7 +406,7 @@ def test_field_rule_quote_skips_same_numbered_clause_without_anchor() -> None:
 
 
 def test_field_rule_quote_empty_when_referenced_clause_has_no_anchor() -> None:
-    """所引条款内找不到锚点就留空（前端退到整块高亮），不拿别处的同名泛词顶替。"""
+    """所引条款内找不到定位词就留空（前端退到整块高亮），不拿别处的同名泛词顶替。"""
     text = "第八条审核和签发付款凭证；\n第十条本合同自签字之日起生效。\n"
     risks = [
         RiskItem(

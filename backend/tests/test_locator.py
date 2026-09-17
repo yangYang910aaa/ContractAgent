@@ -26,7 +26,7 @@ def test_locate_missing_expiry_skips_others_validity() -> None:
 
 
 def test_locate_missing_expiry_prefers_contract_term_sentence() -> None:
-    """保函有效期与合同有效期同时出现时，指向合同那一句（锚点按"先具体后笼统"排序）。"""
+    """保函有效期与合同有效期同时出现时，指向合同那一句（定位词按"先具体后笼统"排序）。"""
     text = (
         "第三条 付款方式\n1、买方要求卖方开具有效期略长于质保期的银行履约保函。\n"
         "第十条 合同期限\n本合同有效期自二〇二〇年一月一日起至二〇二〇年十二月三十一日止。"
@@ -57,7 +57,7 @@ def test_locate_missing_field_stays_inside_indented_clause() -> None:
     """后一条款标题带前导空白时，范围仍要收在它前面（真实购销合同形态）。
 
     起点判定容忍行首空白、终点判定不容忍，范围会一路划到文末，
-    泛词锚点就会抓到后面毫不相干的条款。
+    泛词定位就会抓到后面毫不相干的条款。
     """
     text = (
         "　　第五条   货款的结算\n"
@@ -79,6 +79,6 @@ def test_locate_missing_field_stays_inside_indented_clause() -> None:
 
 
 def test_clause_ref_at_returns_full_header_when_anchor_inside_header() -> None:
-    """锚点词落在条款标题行里时，回指完整标题而不是被截断的半行。"""
+    """定位词落在条款标题行里时，回指完整标题而不是被截断的半行。"""
     text = "第五条   货款的结算\n在签订本合同之日付款。"
     assert _clause_ref_at(text, text.index("结算")) == "第五条   货款的结算"

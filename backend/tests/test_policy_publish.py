@@ -58,7 +58,7 @@ class _FlakyStore(MemoryStore):
         self.boom_source = boom_source
 
     def add_docs(self, docs) -> int:
-        # 分支：这批里含"注定失败"的来源 → 模拟写库报错
+        # 分支：这组来源里含"注定失败"的那一份 → 模拟写库报错
         if any(doc.source == self.boom_source for doc in docs):
             raise RuntimeError("模拟写库失败")
         return super().add_docs(docs)

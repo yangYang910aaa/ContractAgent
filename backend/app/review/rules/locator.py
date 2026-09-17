@@ -1,5 +1,5 @@
 """
-定位编排:原文摘录、缺必填锚点、条款号纠正、文本清洗(OCR 页标记 / 硬换行)
+定位编排:原文摘录、缺必填字段的定位、条款号纠正、文本清洗(OCR 页标记 / 硬换行)
 """
 from __future__ import annotations
 
@@ -31,23 +31,23 @@ def _locate_missing_field(text: str, field: str | None, scope_ref: str = "") -> 
 
     字段没抽到时证据天然为空、风险卡上就没有"原文定位"，而缺字段恰恰最需要指路。
     这里按字段类型在正文里找最可能写该字段的句子（总额→"合同总价款"、币种→"人民币"、
-    到期日→"有效期"）当定位锚点；找不到锚点返回空，不硬编造位置。
+    到期日→"有效期"）当定位词；找不到就返回空，不硬编造位置。
     给了 scope_ref 则只在该条款范围内找——见下方分支说明。
     """
     anchors = _MISSING_FIELD_ANCHORS.get(field or "")
     if not anchors:
         return "", ""
     # 分支：本字段的关键词一个都没出现（如合同通篇只写"价格条款"没写"人民币/币种"）
-    # → 退回到"同类字段"的锚点（币种缺失该补在金额条款，不是没地方可指）
+    # → 退回到"同类字段"的定位词（币种缺失该补在金额条款，不是没地方可指）
     fallback = _MISSING_FIELD_FALLBACK.get(field or "")
     if fallback and not any(re.search(k, text) for k in anchors):
         anchors = _MISSING_FIELD_ANCHORS.get(fallback, anchors)
-    # 分支：能定出条款范围 → 只在该条款里找锚点。锚点多为"付款"这类泛词，全篇取第一个
+    # 分支：能定出条款范围 → 只在该条款里找定位词。定位词多为"付款"这类泛词，全篇取第一个
     # 命中会落到毫不相干的条款上（风险说预付款超限，却定位到"审核和签发付款凭证"），
     # 而条款内找不到时留空更可信：前端会退到该条款整块高亮，不会把人带偏。
     spans = _clause_spans(text, scope_ref) if scope_ref else []
     if spans:
-        # 同一条款号可能有好几处（通用条款与专用条款各编一套号）→ 取真能找到锚点的那处，
+        # 同一条款号可能有好几处（通用条款与专用条款各编一套号）→ 取真能找到定位词的那处，
         # 而不是第一处：先命中的可能是编号相同、内容完全无关的另一套条款
         for span in spans:
             for keyword in anchors:
@@ -59,7 +59,7 @@ def _locate_missing_field(text: str, field: str | None, scope_ref: str = "") -> 
                         continue
                     return _clause_ref_at(text, pos), quote
         return "", ""
-    # 分支：没有可用条款号 → 全文找第一个锚点（缺字段类风险此时还没有条款号可依）
+    # 分支：没有可用条款号 → 全文找第一个定位词（缺字段类风险此时还没有条款号可依）
     for keyword in anchors:
         for match in re.finditer(keyword, text):
             quote = sentence_quote(text, match.start())
@@ -70,14 +70,14 @@ def _locate_missing_field(text: str, field: str | None, scope_ref: str = "") -> 
     return "", ""
 
 
-# 缺必填字段 → 正文锚点关键词（按"先具体后笼统"排序，避免"金额"把无关句子捞出来）
+# 缺必填字段 → 用来定位的关键词（按"先具体后笼统"排序，避免"金额"把无关句子捞出来）
 _MISSING_FIELD_ANCHORS: dict[str, tuple[str, ...]] = {
     "total_amount": ("合同总价款", "合同总价", "合同金额", "合同价款", "总金额", "金额为", "货款"),
     "currency": ("币种", "人民币", "合同总价款", "合同金额"),
     "signature_date": ("签订时间", "签署日期", "签订日期", "签字盖章"),
     "effective_date": ("之日起生效", "生效条件", "签署并生效", "生效"),
     # 易错点：别用裸"合同期"——"履行合同期间"这类表述会误命中（实测指到了权利义务条款）；
-    # 也别把"保修期/工期"当锚点——那是标的质量与进度，不是合同到期日（实测指到了质保条款）
+    # 也别把"保修期/工期"当定位词——那是标的质量与进度，不是合同到期日（实测指到了质保条款）
     "expiry_date": (
         r"(?:合同|协议|服务|合作)有效期",
         "合同期限", "服务期限", "合作期限", "有效期限",
@@ -98,7 +98,7 @@ _MISSING_FIELD_ANCHORS: dict[str, tuple[str, ...]] = {
 }
 
 
-# 同类字段回落：本字段关键词全无时，指向"该字段本该写在哪儿"的同类锚点
+# 同类字段回落：本字段关键词全无时，指向"该字段本该写在哪儿"的同类定位词
 _MISSING_FIELD_FALLBACK: dict[str, str] = {
     "currency": "total_amount",
     "payment_schedule": "total_amount",
@@ -112,8 +112,8 @@ _PERIOD_NOISE: tuple[str, ...] = (
 
 
 def _period_quote_ok(field: str | None, quote: str) -> bool:
-    """这句摘录能不能当该字段的定位锚点：到期日要排开别人家的期限，也要真的带日期。"""
-    # 分支：只有到期日有这个坑（其余字段的锚点词本身就有主语，如"质保""保密"）
+    """这句摘录能不能当该字段的定位点：到期日要排开别人家的期限，也要真的带日期。"""
+    # 分支：只有到期日有这个坑（其余字段的定位词本身就有主语，如"质保""保密"）
     if field != "expiry_date":
         return True
     if any(word in quote for word in _PERIOD_NOISE):
@@ -145,7 +145,7 @@ def _annotate_missing_locators(risks: list[RiskItem], text: str) -> list[RiskIte
         if not risk.evidence_quote and risk.evidence and risk.evidence in text:
             out.append(risk.model_copy(update={"evidence_quote": risk.evidence}))
             continue
-        # 分支：说明句不在正文里 → 按字段锚点找一句真正的原文当摘录。
+        # 分支：说明句不在正文里 → 按字段定位词找一句真正的原文当摘录。
         # 带上条款号限定范围：这类风险的证据句是规则拼的（正文里搜不到），
         # 只有"该条款内"的命中才和这条风险对得上。
         if not risk.evidence_quote:
@@ -282,7 +282,7 @@ def _text_excerpt(text: str, pos: int, width: int = 120) -> str:
 
 def _clause_ref_at(text: str, pos: int) -> str:
     """找 pos 前的最后一个条款/章节标题作 clause_ref（无标题返回空串）。"""
-    # 锚点词可能正好落在条款标题行里（"第五条 货款的结算"里的"结算"）——
+    # 定位词可能正好落在条款标题行里（"第五条 货款的结算"里的"结算"）——
     # 按 pos 截断会得到半行标题，先看整行是不是标题，是就回指完整标题
     line_start = text.rfind("\n", 0, pos) + 1
     line_end = text.find("\n", pos)
@@ -299,7 +299,7 @@ def _clause_ref_at(text: str, pos: int) -> str:
 # 长度上限是"条款标题"的判定口径，拿来划范围会把写得长的条款拦腰截断
 # 易错点：行首允许空白（PDF/docx 抽取常在条款号前留全角空格）。起点判定用 strip() 容忍
 # 空白、终点判定不容忍，同一份文本就会"认得出起点、找不到终点"，范围一路划到文末，
-# 泛词锚点于是抓到后面毫不相干的条款
+# 泛词定位于是抓到后面毫不相干的条款
 _CLAUSE_START_RE = re.compile(r"(?m)^[^\S\n]*第[一二三四五六七八九十百\d]+条")
 
 

@@ -1,7 +1,7 @@
 """P-15 过度免责规则单测（离线，无 API）。
 
 覆盖三类形态（概括免责 / 数据安全责任免除 / 买方自担使用风险）、正当免责护栏、
-主体方向性判定、以及"现有语料零新增命中"这条批4 的硬口径。
+主体方向性判定、以及"现有语料里除新造的 sample_25 外零新增命中"这条硬口径。
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ def test_supplier_blanket_exemption_is_medium() -> None:
 
 
 def test_data_liability_exemption_is_high() -> None:
-    """数据/个人信息安全责任免除是本批唯一闸口点。"""
+    """数据/个人信息安全责任免除是这组规则里唯一的闸口点（high）。"""
     risks = _risks("乙方对数据泄露、个人信息被非法使用不承担赔偿责任。")
     assert [(r.risk_type, r.severity.value) for r in risks] == [
         ("unfair_exemption_clause", "high")
@@ -100,7 +100,7 @@ def test_buyer_side_exemptions_are_not_reported() -> None:
 
 
 def test_corpus_has_no_new_hits_except_sample_25() -> None:
-    """批4 硬口径：现有合成语料里除新造的 sample_25 外，零新增命中。"""
+    """硬口径：现有合成语料里除新造的 sample_25 外，零新增命中。"""
     hits: dict[str, list[str]] = {}
     for path in sorted(SAMPLES_DIR.glob("sample_*.md")):
         risks = [r for r in _check_unfair_exemption(extract_text(path))]
