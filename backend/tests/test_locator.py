@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from backend.app.rules.locator import (
+from backend.app.review.rules.locator import (
     _clause_ref_at,
     _clause_spans,
     _locate_missing_field,
@@ -17,6 +17,23 @@ def test_unwrap_hard_wraps_joins_split_words() -> None:
     joined = _unwrap_hard_wraps(text)
     assert "乙方不得将本合同项下义务转包。" in joined
     assert "not subcontract" in joined
+
+
+def test_locate_missing_expiry_skips_others_validity() -> None:
+    """正文只有保函/质保的"有效期"时，缺到期日宁可留空，也不把人指到保函条款。"""
+    text = "第三条 付款方式\n1、买方可要求卖方开具有效期略长于质保期的银行履约保函。"
+    assert _locate_missing_field(text, "expiry_date") == ("", "")
+
+
+def test_locate_missing_expiry_prefers_contract_term_sentence() -> None:
+    """保函有效期与合同有效期同时出现时，指向合同那一句（锚点按"先具体后笼统"排序）。"""
+    text = (
+        "第三条 付款方式\n1、买方要求卖方开具有效期略长于质保期的银行履约保函。\n"
+        "第十条 合同期限\n本合同有效期自二〇二〇年一月一日起至二〇二〇年十二月三十一日止。"
+    )
+    ref, quote = _locate_missing_field(text, "expiry_date")
+    assert "合同有效期" in quote
+    assert ref.startswith("第十条")
 
 
 def test_unwrap_hard_wraps_keeps_clause_headers_on_own_line() -> None:

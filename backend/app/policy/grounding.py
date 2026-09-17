@@ -12,8 +12,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from backend.app.policy_rag import POLICY_DIR
-from backend.app.rules import (
+from backend.app.policy.rag import POLICY_DIR
+from backend.app.review.rules import (
     CONFIDENTIALITY_MAX_MONTHS,
     LIABILITY_CAP_MIN_PERCENT,
     PENALTY_CAP_MIN_DAILY_PERCENT,

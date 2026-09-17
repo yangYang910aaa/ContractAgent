@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 import json
 
-from backend.app.extractor import (
+from backend.app.review.extractor import (
     _parse_amount,
     _parse_cn_date,
     _parse_int,
@@ -26,6 +26,22 @@ def test_parse_amount_variants() -> None:
     assert _parse_amount(None) is None
 
 
+def test_parse_amount_units_and_chinese_numerals() -> None:
+    """金额的三种真实写法都要认：万元后缀、票据式大写、小写中文数字；认不出的字宁可留空。"""
+    assert _parse_amount("442.02万元") == Decimal("4420200")
+    assert _parse_amount("15.50万元") == Decimal("155000")
+    assert _parse_amount("1.2亿元") == Decimal("120000000")
+    assert _parse_amount("壹拾伍万伍仟元整") == Decimal("155000")
+    assert _parse_amount("贰佰壹拾柒万伍仟元") == Decimal("2175000")
+    assert _parse_amount("壹佰贰拾叁元肆角伍分") == Decimal("123.45")
+    assert _parse_amount("十五万元") == Decimal("150000")
+    assert _parse_amount("人民币壹佰万元整") == Decimal("1000000")
+    # 阿拉伯数字与括号里的大写并列：按数字算，别被括号里的"万"再乘一次
+    assert _parse_amount("500,000.00元（大写：伍拾万元整）") == Decimal("500000")
+    # OCR 认花的字（案/任）一律留空，不折出错数
+    assert _parse_amount("贰佰壹拾案万伍任元整") is None
+
+
 def test_parse_cn_date_variants() -> None:
     expect = date(2026, 3, 10)
     assert _parse_cn_date("2026年3月10日") == expect
@@ -33,6 +49,42 @@ def test_parse_cn_date_variants() -> None:
     assert _parse_cn_date("2026/3/10") == expect
     assert _parse_cn_date("未约定") is None
     assert _parse_cn_date("") is None
+
+
+def test_parse_cn_date_chinese_numerals() -> None:
+    """中文数字日期要认：真实合同的期限句常写"自二○一四年五月一日起至…止"。"""
+    assert _parse_cn_date("二〇一四年五月一日") == date(2014, 5, 1)
+    assert _parse_cn_date("二○一五年四月三十日") == date(2015, 4, 30)
+    assert _parse_cn_date("二零一四年十二月三十一日") == date(2014, 12, 31)
+    assert _parse_cn_date("一九九八年十月一日") == date(1998, 10, 1)
+    assert _parse_cn_date("二〇一四年二月三十日") is None  # 越界日期不硬造
+    assert _parse_cn_date("长期有效") is None
+
+
+def test_build_reads_chinese_numeral_term_range() -> None:
+    """模型原样抄回中文数字日期时，生效日与到期日都要落成日期（真实合同的期限句，见 20_设备 合同）。"""
+    clause = "十、合同期限：\n本合同有效期自二○一四年五月一日起至二○一五年四月三十日止。"
+    model = build_contract_model(
+        {
+            "effective_date": "二○一四年五月一日",
+            "expiry_date": "二○一五年四月三十日",
+            "evidence": {
+                "effective_date": {
+                    "quote": "本合同有效期自二○一四年五月一日起至二○一五年四月三十日止。",
+                    "clause_ref": "十、合同期限",
+                    "confidence": 0.9,
+                },
+                "expiry_date": {
+                    "quote": "本合同有效期自二○一四年五月一日起至二○一五年四月三十日止。",
+                    "clause_ref": "十、合同期限",
+                    "confidence": 0.9,
+                },
+            },
+        },
+        clause,
+    )
+    assert model.effective_date == date(2014, 5, 1)
+    assert model.expiry_date == date(2015, 4, 30)
 
 
 def test_parse_percent_variants() -> None:
@@ -203,7 +255,7 @@ def test_build_warranty_in_years_converts_to_months() -> None:
 
 def test_extraction_schema_tolerates_numeric_months() -> None:
     """json_mode 输出里月数可能是数字（质保 24/6）而非字符串，schema 应放行。"""
-    from backend.app.extractor import ExtractionSchema
+    from backend.app.review.extractor import ExtractionSchema
 
     raw = ExtractionSchema(
         contract_kind="gov_goods",
@@ -221,7 +273,7 @@ def test_extraction_schema_tolerates_numeric_months() -> None:
 
 def test_build_normalizes_evidence_wrapped_drift() -> None:
     """漂移形态归一化：字段值=evidence 对象 → 值取 quote，引用回填 evidence。"""
-    from backend.app.extractor import _normalize_drifted
+    from backend.app.review.extractor import _normalize_drifted
 
     raw = {
         "buyer": {"quote": "星辰智造科技有限公司", "clause_ref": "甲方（采购方）", "confidence": 1.0},
@@ -275,7 +327,7 @@ class _DriftLLMDotSeparator(_DriftLLM):
 
 def test_extract_fallback_rescues_evidence_wrapped_drift() -> None:
     """parse 失败时能从报错还原 completion 并走漂移归一化，合同不再整体 error。"""
-    from backend.app.extractor import extract_contract
+    from backend.app.review.extractor import extract_contract
 
     completion = json.dumps(
         {
@@ -295,7 +347,7 @@ def test_extract_fallback_rescues_evidence_wrapped_drift() -> None:
 
 def test_extract_fallback_rescues_dot_separator_drift() -> None:
     """报错形如 '}. Got:'（带句点）也能还原 completion，合同不再整体 error。"""
-    from backend.app.extractor import extract_contract
+    from backend.app.review.extractor import extract_contract
 
     completion = json.dumps(
         {
@@ -321,7 +373,7 @@ def test_extract_fallback_rescues_dot_separator_drift() -> None:
 
 def test_extract_raises_when_completion_not_recoverable() -> None:
     """报错里没有 completion JSON（如网络/接口异常）→ 原样抛出，走 error 报告。"""
-    from backend.app.extractor import extract_contract
+    from backend.app.review.extractor import extract_contract
 
     class _PlainErrorLLM:
         def with_structured_output(self, schema, method=None):

@@ -12,9 +12,9 @@ from typing import Callable
 
 from pydantic import BaseModel, Field
 
-from backend.app import policy_assistant
+from backend.app.policy import drafts
 from backend.app.llm import get_chat_model
-from backend.app.rules import RISK_LABELS
+from backend.app.review.rules import RISK_LABELS
 from backend.app.usage import STAGE_DRAFT, llm_call
 
 # 阈值数字：与冲突检测同一口径（百分比、月数），用来比对"模型有没有自己造数"
@@ -160,7 +160,7 @@ def draft_policy(
     drafted = (drafter or _default_drafter())(brief, meta_line)
     text = render_ai_draft(drafted, ref=ref, group=group, effective_date=effective_date)
     # 来源与人问的原话一并留档：回看时要知道这份条文是怎么来的、当时提了什么要求
-    return policy_assistant.write_draft(
+    return drafts.write_draft(
         text,
         source=source_name or f"{ref or '新政策'}_AI起草.md",
         retriever=retriever,

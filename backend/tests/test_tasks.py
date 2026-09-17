@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from backend.app import tasks as tasks_mod
-from backend.app.graph import ReviewRunner
+from backend.app.tasks import manager as tasks_mod
+from backend.app.review.graph import ReviewRunner
 from backend.app.schemas import ContractModel
-from backend.app.store import ThreadStore
-from backend.app.tasks import TaskManager, wait_until_settled
+from backend.app.tasks.store import ThreadStore
+from backend.app.tasks.manager import TaskManager, wait_until_settled
 
 
 def _zero_risk_model(text: str) -> ContractModel:

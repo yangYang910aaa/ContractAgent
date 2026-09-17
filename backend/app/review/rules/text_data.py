@@ -7,8 +7,8 @@ from __future__ import annotations
 import re
 
 from backend.app.schemas import RiskItem, Severity
-from backend.app.rules.constants import RISK_LABELS
-from backend.app.rules.locator import _clause_ref_at, _text_excerpt
+from backend.app.review.rules.constants import RISK_LABELS
+from backend.app.review.rules.locator import _clause_ref_at, _text_excerpt
 
 
 # ---- 数据与个人信息合规文本规则 ----

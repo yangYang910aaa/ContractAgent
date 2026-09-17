@@ -1,10 +1,10 @@
 """单份合同审核流水线。
 
 链路：文件 → parser 取全文 → extractor 抽取(LLM) → rules 规则审查 →
-policy_rag 为带政策引用的风险检索政策原文 → 汇总成 report dict。
+policy.rag 为带政策引用的风险检索政策原文 → 汇总成 report dict。
 
 用法：
-    python -m backend.app.pipeline data/contracts/sample_01_*.md [更多文件] [--out reports_dir]
+    python -m backend.app.review.pipeline data/contracts/sample_01_*.md [更多文件] [--out reports_dir]
 不带文件时默认处理 data/contracts/*.md 全部样本。
 """
 
@@ -17,19 +17,12 @@ import sys
 from pathlib import Path
 
 from backend.app.config import BASE_DIR
-from backend.app.extractor import DOUBLE_READ_FIELDS, extract_contract
-from backend.app.parser import NO_TEXT_ERROR, extract_text
-from backend.app.policy_corpus import report_policy_library
-from backend.app.policy_grounding import check_citations
-from backend.app.policy_rag import PolicyHit, load_policy_full, retrieve_policies_many
-from backend.app.rules import (
-    annotate_open_ended_risks,
-    annotate_template_risks,
-    evaluate,
-    grade_report,
-    infer_effective_from_signature,
-    text_rules,
-)
+from backend.app.review.extractor import DOUBLE_READ_FIELDS, extract_contract
+from backend.app.review.parser import NO_TEXT_ERROR, extract_text
+from backend.app.policy.corpus import report_policy_library
+from backend.app.policy.grounding import check_citations
+from backend.app.policy.rag import PolicyHit, load_policy_full, retrieve_policies_many
+from backend.app.review.rules import grade_report, infer_effective_from_signature, run_rules
 from backend.app.schemas import ContractModel, RiskItem
 from backend.app.usage import track_usage
 
@@ -249,16 +242,12 @@ def run_review(
                 llm=usage.to_dict(),
                 error=f"抽取失败：{exc}",
             )
-        # 先跑规则引擎（字段级 evaluate + 文本级 text_rules），再叠加开放式条款/模板标注；
-        # 文本级检查不依赖抽取字段，两个 annotate 只做"降级 + 附提示"，不改判定口径
-        risks = annotate_template_risks(
-            annotate_open_ended_risks(evaluate(extracted) + text_rules(text, extracted.contract_kind), text),
-            text,
-        )
+        # 规则链只在 rules.run_rules 里定义一次，与在线图链路共用
+        risks = run_rules(extracted, text)
         review: dict | None = None
         # 这种情况是：双审模式 → 盲审复核并与主审合并（合并后的新增 high 也参与检索引用）
         if review_mode == "double":
-            from backend.app.reviewer import double_review  # 延迟导入：双审才拉 reviewer 链
+            from backend.app.review.reviewer import double_review  # 延迟导入：双审才拉 reviewer 链
 
             risks, review = double_review(
                 risks, text, llm=llm, retriever=retriever, contract_kind=extracted.contract_kind

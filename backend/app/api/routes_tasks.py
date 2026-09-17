@@ -21,8 +21,8 @@ from pydantic import BaseModel, Field
 
 from backend.app import assistant
 from backend.app.config import BASE_DIR
-from backend.app.parser import split_clauses
-from backend.app.tasks import TaskManager
+from backend.app.review.parser import split_clauses
+from backend.app.tasks.manager import TaskManager
 
 router = APIRouter(prefix="/api", tags=["tasks"])
 

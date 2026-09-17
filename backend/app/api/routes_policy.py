@@ -1,7 +1,7 @@
 """政策库只读起稿接口：上传或粘贴一份新政策 → 规范化草稿 + 重叠分级 + 冲突初筛 + 配套清单。
 
 只起稿、不改库：不写向量库、不写 data/policies/*.md，产物只落 data/policies/_drafts/；
-入库仍走 `policy_admin --sync`（前端"批准入库"是后续单独一批）。
+入库仍走 `python -m backend.app.policy.admin --sync`（前端"批准入库"是后续单独一批）。
 """
 
 from __future__ import annotations
@@ -13,10 +13,10 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from backend.app import policy_assistant, policy_drafter, policy_publish
-from backend.app.parser import extract_text
-from backend.app.policy_corpus import corpus_fingerprint
-from backend.app.policy_rag import POLICY_DIR, get_store
+from backend.app.policy import drafts, drafter, publish
+from backend.app.review.parser import extract_text
+from backend.app.policy.corpus import corpus_fingerprint
+from backend.app.policy.rag import POLICY_DIR, get_store
 from backend.app.usage import track_usage
 
 router = APIRouter(prefix="/api/policy", tags=["policy"])
@@ -26,7 +26,7 @@ ALLOWED_SUFFIXES = {".md", ".txt", ".pdf", ".docx"}
 # 粘贴文本的兜底来源名：编号从文件名前缀解析，兜底名不带编号时按正文里的「文件编号」认
 PASTED_NAME = "粘贴政策.md"
 # 上传原件暂存目录：解析完即删，草稿目录里只留起稿产物
-INCOMING_DIR = policy_assistant.DRAFTS_DIR / "_incoming"
+INCOMING_DIR = drafts.DRAFTS_DIR / "_incoming"
 
 
 def _policy_dir() -> Path:
@@ -63,7 +63,7 @@ def _draft_summary(result: dict) -> dict:
         "title": parsed["title"],
         "articles": len(parsed["articles"]),
         "missing": parsed["missing"],
-        "suggested_file": policy_assistant.suggest_file_name(parsed),
+        "suggested_file": drafts.suggest_file_name(parsed),
         "overlap": _overlap_counts(result["overlaps"]),
         "conflicts": result["conflicts"],
     }
@@ -125,7 +125,7 @@ async def create_draft(
     if not content.strip():
         raise HTTPException(status_code=400, detail="没有读到政策正文（文件为空或无法解析）")
     # 起稿里的逐条向量检索是阻塞活（每条一次 embedding 往返）→ 同样丢线程池
-    result = await run_in_threadpool(policy_assistant.write_draft, content, source)
+    result = await run_in_threadpool(drafts.write_draft, content, source)
     return _draft_summary(result)
 
 
@@ -144,7 +144,7 @@ def create_ai_draft(
     if not brief.strip():
         raise HTTPException(status_code=400, detail="请先写清要起草什么（需求或要点）")
     with track_usage() as usage:
-        result = policy_drafter.draft_policy(
+        result = drafter.draft_policy(
             brief.strip(),
             ref=ref.strip(),
             group=group.strip(),
@@ -152,7 +152,7 @@ def create_ai_draft(
             drafter=_drafter(),
         )
     summary = _draft_summary(result)
-    detail = policy_assistant.load_draft(result["draft_id"]) or {}
+    detail = drafts.load_draft(result["draft_id"]) or {}
     summary["origin"] = "ai"
     summary["new_numbers"] = (detail.get("ai") or {}).get("new_numbers", [])
     summary["suggestions"] = (detail.get("ai") or {}).get("suggestions", {})
@@ -164,7 +164,7 @@ def create_ai_draft(
 @router.get("/drafts/{draft_id}")
 def get_draft(draft_id: str) -> dict:
     """草稿详情：回读磁盘产物（草稿全文 / 重叠分级 / 冲突 / 配套清单）。"""
-    detail = policy_assistant.load_draft(draft_id)
+    detail = drafts.load_draft(draft_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="草稿不存在或已被清理")
     return detail
@@ -198,7 +198,7 @@ def apply_draft(draft_id: str, payload: PublishIn) -> dict:
 
     这是整页唯一会改真库的动作（改 data/policies/ 与向量库）；核对不过或中途报错会自动退回。
     """
-    draft = policy_assistant.load_draft(draft_id)
+    draft = drafts.load_draft(draft_id)
     if draft is None:
         raise HTTPException(status_code=404, detail="草稿不存在或已被清理")
     # 分支：调用方没给正文 → 用在页面上过的那份草稿（含按体例重排的结果）
@@ -207,7 +207,7 @@ def apply_draft(draft_id: str, payload: PublishIn) -> dict:
     # 分支：预览 → 只返回计划，落盘与库都不动
     if not payload.confirm:
         try:
-            plan = policy_publish.plan_publish(
+            plan = publish.plan_publish(
                 content, file_name, policy_dir=_policy_dir(), store=_publish_store()
             )
         except Exception as exc:  # noqa: BLE001
@@ -215,16 +215,16 @@ def apply_draft(draft_id: str, payload: PublishIn) -> dict:
         return {"applied": False, "plan": plan}
 
     try:
-        result = policy_publish.publish(
+        result = publish.publish(
             content,
             file_name,
             policy_dir=_policy_dir(),
             store=_publish_store(),
             allow_missing_meta=payload.allow_missing_meta,
         )
-    except policy_publish.PublishBlocked as exc:
+    except publish.PublishBlocked as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    policy_assistant.mark_applied(draft_id, result)  # 给这份草稿记上"已入库"
+    drafts.mark_applied(draft_id, result)  # 给这份草稿记上"已入库"
     return result

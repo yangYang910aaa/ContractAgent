@@ -30,8 +30,8 @@ from backend.app.assistant import (
     policy_directory,
     summarize_citations,
 )
-from backend.app.policy_rag import PolicyHit
-from backend.app.store import TaskRecord
+from backend.app.policy.rag import PolicyHit
+from backend.app.tasks.store import TaskRecord
 
 # 两份合同文本：一份有「第X条」结构，一份按 PDF 习惯硬换行且汉字间有空格
 CONTRACT_TEXT = """采购合同

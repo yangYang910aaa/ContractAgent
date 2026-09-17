@@ -8,12 +8,12 @@ from decimal import Decimal
 import re
 
 from backend.app.schemas import RiskItem, Severity
-from backend.app.rules.constants import PERFORMANCE_BOND_MIN_TOTAL, RISK_LABELS, SUBCONTRACT_KINDS, TEXT_RULE_KINDS
-from backend.app.rules.locator import _clause_ref_at, _text_excerpt, clean_rule_text
-from backend.app.rules.template import is_blank_template_suspect, is_supplementary_agreement
-from backend.app.rules.text_data import _DATA_INVOLVED_RE, _check_cross_border, _check_data_deletion, _check_data_processing_terms, _check_personal_info_missing
-from backend.app.rules.text_penalty import _check_confidentiality_no_exception, _check_penalty_basis_unclear, _check_penalty_cap_missing
-from backend.app.rules.text_terms import _check_unfair_exemption
+from backend.app.review.rules.constants import PERFORMANCE_BOND_MIN_TOTAL, RISK_LABELS, SUBCONTRACT_KINDS, TEXT_RULE_KINDS
+from backend.app.review.rules.locator import _clause_ref_at, _text_excerpt, clean_rule_text
+from backend.app.review.rules.template import is_blank_template_suspect, is_supplementary_agreement
+from backend.app.review.rules.text_data import _DATA_INVOLVED_RE, _check_cross_border, _check_data_deletion, _check_data_processing_terms, _check_personal_info_missing
+from backend.app.review.rules.text_penalty import _check_confidentiality_no_exception, _check_penalty_basis_unclear, _check_penalty_cap_missing
+from backend.app.review.rules.text_terms import _check_unfair_exemption
 
 
 # 判定"有验收安排"的信号：验收词出现后，其附近 ±_ACCEPT_WINDOW 内要有"标准/依据"类

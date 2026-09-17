@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from backend.app.config import BASE_DIR
-from backend.app.parser import split_clauses
+from backend.app.review.parser import split_clauses
 from backend.eval.generate_samples import OUTPUT_DIR, SPECS, render_contract
 
 

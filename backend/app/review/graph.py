@@ -15,24 +15,18 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
-from backend.app.parser import NO_TEXT_ERROR, extract_text
-from backend.app.pipeline import (
+from backend.app.review.parser import NO_TEXT_ERROR, extract_text
+from backend.app.review.pipeline import (
     _contract_kind,
     build_report,
     enrich_policy_hits,
     infer_effective_from_signature,
 )
-from backend.app.reviewer import BlindReviewOutput, blind_review, merge_review
-from backend.app.rules import (
-    annotate_open_ended_risks,
-    annotate_template_risks,
-    evaluate,
-    grade_report,
-    text_rules,
-)
+from backend.app.review.reviewer import BlindReviewOutput, blind_review, merge_review
+from backend.app.review.rules import grade_report, run_rules
 from backend.app.schemas import ContractModel, RiskItem
 from backend.app.usage import current_usage, merge_usage, track_usage
-from backend.app.store import ThreadStore
+from backend.app.tasks.store import ThreadStore
 
 
 class ReviewState(TypedDict, total=False):
@@ -120,7 +114,7 @@ def build_review_graph(
     抽取器、检索器、复核器、检查点都可注入，不传则用真实实现；检查点不传也能跑，
     但需要中断恢复（人工审批）时必须配上。返回编译好的图。
     """
-    from backend.app.extractor import extract_contract  # 延迟导入：防循环
+    from backend.app.review.extractor import extract_contract  # 延迟导入：防循环
 
     extract = extractor or (lambda text: extract_contract(text=text))
 
@@ -156,12 +150,7 @@ def build_review_graph(
         """
         model = ContractModel.model_validate(state["extracted"])
         text = state.get("text") or ""
-        risks = annotate_template_risks(
-            annotate_open_ended_risks(
-                evaluate(model) + text_rules(text, model.contract_kind), text
-            ),
-            text,
-        )
+        risks = run_rules(model, text)
         return {"risks": [r.model_dump(mode="json") for r in risks], "rerun": False}
 
     def review_node(state: ReviewState) -> dict:

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from backend.app.parser import extract_text, split_clauses
-from backend.app.rules import evaluate, grade_report
+from backend.app.review.parser import extract_text, split_clauses
+from backend.app.review.rules import evaluate, grade_report
 from backend.app.schemas import ContractModel, Grade, PaymentTerm, Severity
 from backend.eval.generate_samples import UNIFORM_SPECS, _body_for, _warranty_text, render_docx, render_pdf
 

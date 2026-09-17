@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from backend.app.policy_rag import (
+from backend.app.policy.rag import (
     BM25Index,
     IndexDoc,
     HybridRetriever,

@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from backend.app import routes_tasks, uploads_admin
+from backend.app.api import routes_tasks
+from backend.app.tasks import uploads_admin
 from backend.app.config import settings
 
 

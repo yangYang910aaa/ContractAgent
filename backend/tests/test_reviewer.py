@@ -3,14 +3,14 @@
 from datetime import date
 from decimal import Decimal
 
-from backend.app.graph import ReviewRunner
-from backend.app.reviewer import (
+from backend.app.review.graph import ReviewRunner
+from backend.app.review.reviewer import (
     BlindReviewOutput,
     ReviewFinding,
     merge_review,
     normalize_findings,
 )
-from backend.app.policy_rag import PolicyHit
+from backend.app.policy.rag import PolicyHit
 from backend.app.schemas import ContractModel, PaymentTerm, RiskItem, Severity
 
 
@@ -454,7 +454,7 @@ def test_double_graph_passes_gov_kind_to_gate() -> None:
     assert report["review"]["stats"]["noted"] == 1
 def test_verify_high_accepts_penalty_cap_missing() -> None:
     """按日 ≥0.1% 且无上限的违约金反馈 → 复核门放行（此前漏登记白名单）。"""
-    from backend.app.reviewer import ReviewFinding, Severity, _verify_high
+    from backend.app.review.reviewer import ReviewFinding, Severity, _verify_high
 
     daily_uncapped = ReviewFinding(
         risk_type="penalty_cap_missing",

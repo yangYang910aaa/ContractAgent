@@ -3,7 +3,7 @@
 输入合同模型与原文 → 输出风险清单 + 评级。纯函数、不调大模型，可离线单测。
 风险等级约定：存在 high → 人工审批闸口；只有 medium/low → 有条件通过。
 
-规则按类别拆成子模块，本文件只做门面，对外仍可 `from backend.app.rules import evaluate, ...`：
+规则按类别拆成子模块，本文件只做门面，对外仍可 `from backend.app.review.rules import evaluate, ...`：
 
 | 模块 | 职责 |
 | --- | --- |
@@ -15,14 +15,16 @@
 | text_data.py | 数据与个人信息合规 |
 | text_penalty.py | 保密例外、违约金基数与上限 |
 | annotate.py | 语境降级、文案修正、定位编排 |
+| chain.py | 规则链入口：字段级 + 文本级 + 两道标注，一次跑完 |
 
 依赖方向单向；新增规则按类别落到对应模块，不要写在本文件里。
 """
 
 from __future__ import annotations
 
-from backend.app.rules.annotate import annotate_open_ended_risks
-from backend.app.rules.constants import (
+from backend.app.review.rules.annotate import annotate_open_ended_risks
+from backend.app.review.rules.chain import run_rules
+from backend.app.review.rules.constants import (
     AMOUNT_TOLERANCE_RATIO,
     CONFIDENTIALITY_MAX_MONTHS,
     CORE_REQUIRED,
@@ -40,13 +42,13 @@ from backend.app.rules.constants import (
     TEXT_RULE_TYPES,
     WARRANTY_MIN_MONTHS,
 )
-from backend.app.rules.fields import evaluate, infer_effective_from_signature
-from backend.app.rules.template import (
+from backend.app.review.rules.fields import evaluate, infer_effective_from_signature
+from backend.app.review.rules.template import (
     annotate_template_risks,
     is_blank_template_suspect,
     is_supplementary_agreement,
 )
-from backend.app.rules.text_checks import text_rules
+from backend.app.review.rules.text_checks import text_rules
 from backend.app.schemas import Grade, RiskItem, Severity
 
 __all__ = [
@@ -56,6 +58,7 @@ __all__ = [
     "grade_report",
     "annotate_template_risks",
     "annotate_open_ended_risks",
+    "run_rules",
     "infer_effective_from_signature",
     "is_blank_template_suspect",
     "is_supplementary_agreement",

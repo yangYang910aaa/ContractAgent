@@ -7,11 +7,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.app import policy_assistant, routes_policy
+from backend.app.api import routes_policy
+from backend.app.policy import drafts
 from backend.app.main import create_app
-from backend.app.policy_corpus import corpus_units
-from backend.app.policy_rag import POLICY_DIR, MemoryStore, PolicyHit
-from backend.app.tasks import TaskManager
+from backend.app.policy.corpus import corpus_units
+from backend.app.policy.rag import POLICY_DIR, MemoryStore, PolicyHit
+from backend.app.tasks.manager import TaskManager
 
 _DRAFT_TEXT = """# 采购合同审核制度 · 细则 P-29：示例政策
 
@@ -93,12 +94,12 @@ def library(tmp_path: Path) -> tuple[Path, MemoryStore]:
 @pytest.fixture()
 def client(tmp_path: Path, monkeypatch, library) -> TestClient:
     """app：草稿目录/语料目录/检索库全指到临时与内存对象——不连向量库、不花调用、不写真语料。"""
-    drafts = tmp_path / "_drafts"
+    drafts_dir = tmp_path / "_drafts"
     policy_dir, store = library
-    monkeypatch.setattr(policy_assistant, "DRAFTS_DIR", drafts)
-    monkeypatch.setattr(policy_assistant, "_default_retriever", lambda: _retriever)
+    monkeypatch.setattr(drafts, "DRAFTS_DIR", drafts_dir)
+    monkeypatch.setattr(drafts, "_default_retriever", lambda: _retriever)
     monkeypatch.setattr(routes_policy, "_drafter", lambda: _fake_drafter)
-    monkeypatch.setattr(routes_policy, "INCOMING_DIR", drafts / "_incoming")
+    monkeypatch.setattr(routes_policy, "INCOMING_DIR", drafts_dir / "_incoming")
     monkeypatch.setattr(routes_policy, "_policy_dir", lambda: policy_dir)
     monkeypatch.setattr(routes_policy, "_publish_store", lambda: store)
     return TestClient(create_app(manager=TaskManager(worker=False)))

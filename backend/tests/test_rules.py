@@ -3,12 +3,23 @@
 from datetime import date
 from decimal import Decimal
 
-from backend.app.rules import annotate_template_risks, evaluate, grade_report
+from backend.app.review.rules import annotate_template_risks, evaluate, grade_report, run_rules
 from backend.app.schemas import ContractModel, Evidence, Grade, PaymentTerm, Severity
 
 
 def _term(name: str, amount: str, percent: float | None) -> PaymentTerm:
     return PaymentTerm(name=name, amount=Decimal(amount), percent=percent)
+
+
+def test_run_rules_runs_both_field_and_text_rules() -> None:
+    """规则链一次跑完字段级与文本级：链的组合与顺序只写在 rules.chain 里，漏跑一类会在这里露出来。"""
+    risks = run_rules(
+        ContractModel(contract_kind="enterprise_goods"),
+        "第一条 货物交付：乙方于签订后三十日内交付并验收。",
+    )
+    types = {risk.risk_type for risk in risks}
+    assert "missing_required_field" in types  # 字段级：必填缺失
+    assert "confidentiality_missing" in types  # 文本级：条款缺失
 
 
 def _normal() -> ContractModel:
@@ -70,7 +81,7 @@ def test_risks_carry_chinese_label_and_field_name() -> None:
 
 def test_blank_template_text_downgrades_missing_and_adds_notice() -> None:
     """空白模板（多类占位）→ 缺必填 high 降 medium + 追加"疑似空白模板"风险。"""
-    from backend.app.rules import is_blank_template_suspect
+    from backend.app.review.rules import is_blank_template_suspect
 
     blank_text = (
         "甲方（采购方）：＿＿＿＿＿＿\n"
@@ -289,7 +300,7 @@ def _with_sig(effective=None, signature=None, text=""):
 def test_infer_effective_from_signature_fills_when_wording_matches() -> None:
     """正文写"自双方签字盖章之日起生效"且签署日已有 → 生效日回填为签署日。"""
     from datetime import date
-    from backend.app.rules import infer_effective_from_signature
+    from backend.app.review.rules import infer_effective_from_signature
     model, text = _with_sig(
         effective=None,
         signature=date(2026, 3, 10),
@@ -302,7 +313,7 @@ def test_infer_effective_from_signature_fills_when_wording_matches() -> None:
 def test_infer_effective_covers_signature_and_party_variants() -> None:
     """"签名（盖章）之日"与"经签约各方签字盖章后生效"两种真实措辞同样回填。"""
     from datetime import date
-    from backend.app.rules import infer_effective_from_signature
+    from backend.app.review.rules import infer_effective_from_signature
     variants = [
         "本合同自甲、乙双方签名（盖章）之日起成立并生效。",
         "本合同经签约各方签字盖章后生效。",
@@ -317,7 +328,7 @@ def test_infer_effective_covers_signature_and_party_variants() -> None:
 def test_infer_effective_keeps_explicit_effective_date() -> None:
     """生效日已显式抽到 → 不被覆盖（即使正文同时有"签字盖章生效"句）。"""
     from datetime import date
-    from backend.app.rules import infer_effective_from_signature
+    from backend.app.review.rules import infer_effective_from_signature
     model, text = _with_sig(
         effective=date(2026, 4, 1),
         signature=date(2026, 3, 10),
@@ -330,7 +341,7 @@ def test_infer_effective_keeps_explicit_effective_date() -> None:
 def test_infer_effective_noop_without_signature_or_wording() -> None:
     """签署日缺失，或正文没有"签字盖章生效"句式 → 不推断（宁缺毋滥）。"""
     from datetime import date
-    from backend.app.rules import infer_effective_from_signature
+    from backend.app.review.rules import infer_effective_from_signature
     # 情况 1：没有签署日
     model, text = _with_sig(effective=None, signature=None,
                             text="本合同自双方签字盖章之日起生效。")
@@ -540,7 +551,7 @@ def test_prepayment_within_limit_with_blank_total_stays_silent() -> None:
 
 def test_open_ended_amount_downgrades_missing_total_with_explicit_notice() -> None:
     """月结/按实结算合同无总额：缺必填 high → medium，且建议里显式写明"已降为提示级"。"""
-    from backend.app.rules import annotate_open_ended_risks
+    from backend.app.review.rules import annotate_open_ended_risks
 
     model = _with(total_amount=None, effective_date=None, expiry_date=None)
     text = "双方每月结算一次，每月30日前结清当月货款。"
@@ -556,7 +567,7 @@ def test_open_ended_amount_downgrades_missing_total_with_explicit_notice() -> No
 
 def test_open_ended_term_and_signing_downgrade_with_notice() -> None:
     """有效期"N 年"/签字盖章生效无日期：对应缺必填降 medium 并附明确提示。"""
-    from backend.app.rules import annotate_open_ended_risks
+    from backend.app.review.rules import annotate_open_ended_risks
 
     model = _with(effective_date=None, expiry_date=None)
     text = "本合同自双方签字盖章之日起生效，有效期暂定为4年。"
@@ -570,7 +581,7 @@ def test_open_ended_term_and_signing_downgrade_with_notice() -> None:
 
 def test_open_ended_annotation_keeps_normal_missing_high() -> None:
     """普通合同（无按实结算/无固定期限/无签字盖章生效句式）的缺必填保持 high。"""
-    from backend.app.rules import annotate_open_ended_risks
+    from backend.app.review.rules import annotate_open_ended_risks
 
     model = _with(total_amount=None)
     risks = annotate_open_ended_risks(evaluate(model), "甲方应于2026年12月31日前交付货物。")
@@ -579,7 +590,7 @@ def test_open_ended_annotation_keeps_normal_missing_high() -> None:
 
 def test_open_ended_order_based_total_medium() -> None:
     """按订单结算（无固定总额）→ 缺总额降 medium 并附提示。"""
-    from backend.app.rules import annotate_open_ended_risks
+    from backend.app.review.rules import annotate_open_ended_risks
 
     model = _with(total_amount=None)
     text = "二、订单要求：买方订单均以书面传真/邮件形式通知卖方，卖方收到订单后两个工作日内回复。"
@@ -590,7 +601,7 @@ def test_open_ended_order_based_total_medium() -> None:
 
 def test_open_ended_effective_and_expiry_without_concrete_date() -> None:
     """生效日"自合同签订之日起"、到期日以验收为界（无"至 YYYY 年"）→ 均降提示级。"""
-    from backend.app.rules import annotate_open_ended_risks
+    from backend.app.review.rules import annotate_open_ended_risks
 
     model = _with(effective_date=None, expiry_date=None)
     text = "2.3 服务期限：自合同签订之日起至本项目验收合格之日止。"
@@ -602,7 +613,7 @@ def test_open_ended_effective_and_expiry_without_concrete_date() -> None:
 
 def test_missing_expiry_with_concrete_end_date_stays_high() -> None:
     """正文写了"至 2027 年"却抽不到到期日 → 保留 high（提示人工核对抽取）。"""
-    from backend.app.rules import annotate_open_ended_risks
+    from backend.app.review.rules import annotate_open_ended_risks
 
     model = _with(expiry_date=None)
     risks = annotate_open_ended_risks(evaluate(model), "本合同有效期至 2027 年 3 月 9 日。")
@@ -614,7 +625,7 @@ def test_missing_expiry_with_concrete_end_date_stays_high() -> None:
 
 def test_filled_contract_with_signature_date_blank_not_template() -> None:
     """已签合同仅署名页/页脚日期空白 + 排版空格 → 不得判"疑似空白模板"。"""
-    from backend.app.rules import is_blank_template_suspect
+    from backend.app.review.rules import is_blank_template_suspect
 
     signed = (
         "软件开发合同（2025 年升级改造）\n"
@@ -628,7 +639,7 @@ def test_filled_contract_with_signature_date_blank_not_template() -> None:
 
 def test_unfilled_gf_style_templates_still_detected() -> None:
     """未填写文本仍按原口径识别：点线+选框式、纯空格填空式（防误伤官方模板）。"""
-    from backend.app.rules import is_blank_template_suspect
+    from backend.app.review.rules import is_blank_template_suspect
 
     gf_style = (
         "甲方（出卖人）:………… … …\n"

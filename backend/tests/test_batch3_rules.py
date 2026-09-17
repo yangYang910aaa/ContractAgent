@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from datetime import date
 
-from backend.app.extractor import build_contract_model
+from backend.app.review.extractor import build_contract_model
 from backend.app.schemas import ContractModel
-from backend.app.rules import (
+from backend.app.review.rules import (
     annotate_open_ended_risks,
     infer_effective_from_signature,
     is_blank_template_suspect,
@@ -18,7 +18,7 @@ from backend.app.rules import (
 )
 # 口径正则统一放在 rules.constants（拆分后跨模块共用，避免两处漂移）：
 # 用例要证明"页标记会吃掉窗口"
-from backend.app.rules.constants import SIGNING_EFFECT_RE
+from backend.app.review.rules.constants import SIGNING_EFFECT_RE
 from backend.app.schemas import RiskItem, Severity
 
 # 企业合同底稿：验收/发票/担保/转包/法律条款齐全，只让保密与违约金两句可替换，

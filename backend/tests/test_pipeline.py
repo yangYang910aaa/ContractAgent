@@ -1,7 +1,7 @@
 """pipeline 纯逻辑单测（不调 LLM / 不联网）：报告组装 + 政策检索去重 + 空正文护栏。"""
 
-from backend.app.pipeline import _policy_snippet, build_report, enrich_policy_hits, run_review
-from backend.app.policy_rag import PolicyHit
+from backend.app.review.pipeline import _policy_snippet, build_report, enrich_policy_hits, run_review
+from backend.app.policy.rag import PolicyHit
 from backend.app.schemas import ContractModel, RiskItem, Severity
 
 
@@ -70,7 +70,7 @@ def test_enrich_policy_hits_dedup_and_skip_nonpolicy() -> None:
 
 def test_enrich_policy_hits_batch_path_matches_loop(monkeypatch) -> None:
     """默认路径走批量检索，结果必须与逐条检索完全一致（加速不改引用内容）。"""
-    from backend.app import pipeline
+    from backend.app.review import pipeline
 
     risks = [
         _risk("P-01", evidence="预付款比例 60%"),
@@ -200,7 +200,7 @@ def test_run_review_double_passes_kind_to_review_gate(monkeypatch, tmp_path) -> 
     抽取与盲审都换桩（不调模型）：主审在政采品类下本就不跑文本级规则，复核报的
     违约金上限属该组口径 → 只记提示，不进风险清单。
     """
-    from backend.app import pipeline, reviewer
+    from backend.app.review import pipeline, reviewer
 
     contract = tmp_path / "gov.md"
     contract.write_text("第一条 交付与验收：甲方组织验收，验收标准以双方确认的技术规范为准。\n", encoding="utf-8")

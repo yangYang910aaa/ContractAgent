@@ -1,6 +1,6 @@
 """关键字段双读单测：二次抽取比对、不一致标人工、第二读失败不阻断。"""
 
-from backend.app.extractor import (
+from backend.app.review.extractor import (
     _second_read_scope,
     _field_equal,
     _merge_double_read,

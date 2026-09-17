@@ -1,12 +1,12 @@
 """政策库命令行：政策库版本、文件 ↔ 索引一致性核对、按份同步。
 
 用法：
-    python -m backend.app.policy_admin --check        # 核对一致性（只读，0 次模型调用）
-    python -m backend.app.policy_admin --sync         # 只打印同步计划，不改库
-    python -m backend.app.policy_admin --sync --yes   # 执行同步（只重写有变化的文件）
-    python -m backend.app.policy_admin --fingerprint  # 只打印政策库版本号
-    python -m backend.app.policy_admin --drop-legacy --yes      # 删除回滚点集合（默认只报现状）
-    python -m backend.app.policy_admin --prune-drafts 10 --yes  # 起稿产物只留最近 10 份
+    python -m backend.app.policy.admin --check        # 核对一致性（只读，0 次模型调用）
+    python -m backend.app.policy.admin --sync         # 只打印同步计划，不改库
+    python -m backend.app.policy.admin --sync --yes   # 执行同步（只重写有变化的文件）
+    python -m backend.app.policy.admin --fingerprint  # 只打印政策库版本号
+    python -m backend.app.policy.admin --drop-legacy --yes      # 删除回滚点集合（默认只报现状）
+    python -m backend.app.policy.admin --prune-drafts 10 --yes  # 起稿产物只留最近 10 份
 
 同步是"按份替换"：变化的文件先按文件名删掉旧单元再重插，磁盘上已删的文件清掉库内行，
 没变化的文件一个单元都不动——不做清库重建，分条与检索仍走原实现，不动检索口径。
@@ -21,14 +21,14 @@ import shutil
 import sys
 from pathlib import Path
 
-from backend.app.policy_corpus import (
+from backend.app.policy.corpus import (
     compare_corpus_and_index,
     corpus_fingerprint,
     corpus_units,
 )
-from backend.app.policy_assistant import DRAFTS_DIR, DRAFTS_KEEP
+from backend.app.policy.drafts import DRAFTS_DIR, DRAFTS_KEEP
 from backend.app.config import settings
-from backend.app.policy_rag import MilvusStore, get_store, unit_id
+from backend.app.policy.rag import MilvusStore, get_store, unit_id
 
 # 业务键改造后的物理集合与回滚用旧名：检索侧一直认 settings.milvus_collection（别名）
 REBUILD_COLLECTION = "contract_policies_biz"

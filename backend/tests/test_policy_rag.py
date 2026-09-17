@@ -1,7 +1,7 @@
-"""policy_rag 单测：内存检索 + 政策入库 + store 工厂（用确定性假向量，离线可跑）。"""
+"""policy.rag 单测：内存检索 + 政策入库 + store 工厂（用确定性假向量，离线可跑）。"""
 
-from backend.app import policy_rag as pr
-from backend.app.policy_rag import (
+from backend.app.policy import rag as pr
+from backend.app.policy.rag import (
     IndexDoc,
     MemoryStore,
     _split_doc_articles,

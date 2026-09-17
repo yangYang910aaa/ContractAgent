@@ -1,8 +1,12 @@
 """
 模型工厂：统一对外暴露 get_chat_model / get_embedding_model。
+
+另放一件跨模块共用的模型输出工具：recover_completion——从结构化输出的解析报错里
+还原模型原始 JSON（抽取与盲审都要用，不各留一份副本）。
 """
 
 from __future__ import annotations
+import json
 from typing import Any, List
 
 import httpx
@@ -104,3 +108,24 @@ def check_env_ready() -> dict[str, Any]:
         "embedding_model": settings.embedding_model,
         "embedding_api_key_set": bool(settings.embedding_api_key),
     }
+
+
+def recover_completion(exc: Exception) -> dict | None:
+    """从 with_structured_output 的解析报错里还原模型原始 JSON。
+
+    解析失败时报错文本通常带着原始 completion，能捞出 dict 就返回它，捞不到返回 None
+    （接口、超时这类异常根本没有 completion）。抽取与盲审共用这一份。
+    """
+    text = str(exc)
+    marker = text.find("completion ")
+    # 这种情况是：报错里没有 completion 字样 → 不是解析问题，无法还原
+    if marker < 0:
+        return None
+    start = text.find("{", marker)
+    if start < 0:
+        return None
+    try:
+        raw, _ = json.JSONDecoder().raw_decode(text, start)
+    except Exception:  # noqa: BLE001 — 报错文本形态不可控，捞不出来就当没得还原
+        return None
+    return raw if isinstance(raw, dict) else None

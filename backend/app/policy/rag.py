@@ -581,11 +581,11 @@ def _sha256_text(text: str) -> str:
 def _doc_meta() -> dict[str, dict]:
     """磁盘语料台账：来源文件名 → {sha256, version, effective_date}。
 
-    延迟导入 policy_corpus（它反过来要 import 本模块，模块级导入会成环）；拿不到就写空值，
+    延迟导入 policy.corpus（它反过来要 import 本模块，模块级导入会成环）；拿不到就写空值，
     写入本身不受影响——标量字段只是让核对与将来的按日期检索少读正文。
     """
     try:
-        from backend.app.policy_corpus import policy_documents
+        from backend.app.policy.corpus import policy_documents
 
         return {doc["source"]: doc for doc in policy_documents()}
     except Exception:  # noqa: BLE001  台账缺失不该阻断入库

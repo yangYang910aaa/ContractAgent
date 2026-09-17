@@ -47,7 +47,7 @@ def _amount(value: str) -> str:
 
 def _date(value: str) -> str:
     """中文日期（2026年3月10日）→ ISO（2026-03-10）；复用 extractor 同一解析口径。"""
-    from backend.app.extractor import _parse_cn_date
+    from backend.app.review.extractor import _parse_cn_date
 
     return _parse_cn_date(value).isoformat()
 

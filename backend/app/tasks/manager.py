@@ -18,7 +18,7 @@ import time
 from typing import Any
 
 from backend.app.config import settings
-from backend.app.graph import ReviewRunner
+from backend.app.review.graph import ReviewRunner
 
 # 瞬时失败自动重试：最多尝试 3 次（2 次重试），退避按 2s 指数增长（2/4/…）
 MAX_ATTEMPTS = 3

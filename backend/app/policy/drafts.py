@@ -7,7 +7,7 @@
 另附一份配套改动清单骨架（范围卡体例：风险类型候选/规则待定项/样本/金标/验收）。
 
 产物落 `data/policies/_drafts/<来源名>_<时分秒>/`，另写一份 meta.json 存解析结果与冲突条目
-（清单里是人类可读的句子，回读要的是原始条目）。这里只起稿，入库仍走 `policy_admin --sync`。
+（清单里是人类可读的句子，回读要的是原始条目）。这里只起稿，入库另走 policy 命令行。
 """
 
 from __future__ import annotations
@@ -19,9 +19,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from backend.app.parser import extract_text
-from backend.app.policy_corpus import corpus_fingerprint
-from backend.app.policy_rag import POLICY_DIR, PolicyHit, get_store, load_policies
+from backend.app.review.parser import extract_text
+from backend.app.policy.corpus import corpus_fingerprint
+from backend.app.policy.rag import POLICY_DIR, PolicyHit, get_store, load_policies
 
 DRAFTS_DIR = POLICY_DIR / "_drafts"
 
@@ -220,7 +220,7 @@ def build_checklist(parsed: dict, overlaps: list[dict], conflicts: list[dict]) -
         "## 四、验收",
         "",
         "- 离线：现有语料零新增命中 / 检索金标对照 / 单测",
-        "- 入库：`policy_admin --check` 核对后 `--sync --yes` 按单元增量写入",
+        "- 入库：`python -m backend.app.policy.admin --check` 核对后 `--sync --yes` 按单元增量写入",
     ])
     return "\n".join(lines) + "\n"
 

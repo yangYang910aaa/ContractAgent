@@ -7,8 +7,8 @@ from decimal import Decimal
 import re
 
 from backend.app.schemas import ContractModel, PaymentTerm, RiskItem, Severity
-from backend.app.rules.constants import AMOUNT_TOLERANCE_RATIO, CONFIDENTIALITY_MAX_MONTHS, CORE_REQUIRED, FIELD_LABELS, HIGH_IF_MISSING, KIND_BASELINE, LIABILITY_CAP_MIN_PERCENT, PENALTY_DAILY_MAX_PERCENT, PREPAY_MAX_PERCENT, RISK_LABELS, WARRANTY_MIN_MONTHS, _BUYER_KEYWORDS, _PREPAY_NAME_KEYWORDS
-from backend.app.rules.locator import _clean_page_marks
+from backend.app.review.rules.constants import AMOUNT_TOLERANCE_RATIO, CONFIDENTIALITY_MAX_MONTHS, CORE_REQUIRED, FIELD_LABELS, HIGH_IF_MISSING, KIND_BASELINE, LIABILITY_CAP_MIN_PERCENT, PENALTY_DAILY_MAX_PERCENT, PREPAY_MAX_PERCENT, RISK_LABELS, WARRANTY_MIN_MONTHS, _BUYER_KEYWORDS, _PREPAY_NAME_KEYWORDS
+from backend.app.review.rules.locator import _clean_page_marks
 
 
 def _quote(model: ContractModel, field: str) -> str:

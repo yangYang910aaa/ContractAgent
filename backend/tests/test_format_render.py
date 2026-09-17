@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.app.parser import extract_text
+from backend.app.review.parser import extract_text
 from backend.eval.generate_samples import (
     SPECS,
     _cn_upper_amount,

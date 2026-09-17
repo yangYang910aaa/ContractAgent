@@ -1,6 +1,6 @@
 """政策入库：把一份政策正文落成语料文件并同步进检索库（写操作，幂等、可回滚）。
 
-和命令行 `policy_admin --sync` 是同一套按单元增量（只重算变化的条文），区别只在入口面向
+和命令行 `python -m backend.app.policy.admin --sync` 是同一套按单元增量（只重算变化的条文），区别只在入口面向
 "刚起稿的一份政策"：先校验（文件名、编号撞号、元信息缺项）→ 落盘 → 同步 → 核对，
 核对不过就把文件与库一起退回去。核对与预览都只读，不花模型调用。
 """
@@ -11,15 +11,15 @@ import hashlib
 import re
 from pathlib import Path
 
-from backend.app import policy_assistant
-from backend.app.policy_admin import plan_unit_sync
-from backend.app.policy_corpus import (
+from backend.app.policy import drafts
+from backend.app.policy.admin import plan_unit_sync
+from backend.app.policy.corpus import (
     compare_corpus_and_index,
     corpus_fingerprint,
     corpus_units,
     policy_documents,
 )
-from backend.app.policy_rag import POLICY_DIR, _split_doc_articles, get_store
+from backend.app.policy.rag import POLICY_DIR, _split_doc_articles, get_store
 
 # 语料文件名形态：入库靠文件名前缀认编号，不符合的文件会被 load_policies 直接跳过
 _FILE_RE = re.compile(r"^P-\d+_[^\\/:*?\"<>|]+\.md$")
@@ -122,7 +122,7 @@ def plan_publish(
         "write_units": len(plan["write"]),
         "delete_units": len(plan["delete"]),
         "delete_sources": sorted({plan["index_source"].get(key, "") for key in plan["delete"]}),
-        "missing": policy_assistant.parse_policy(content, source=file_name)["missing"],
+        "missing": drafts.parse_policy(content, source=file_name)["missing"],
         "version": corpus_fingerprint(policy_dir=directory)["version"],
         "next_version": _next_version(content, file_name, directory),
         "blockers": _collision_reasons(ref, file_name, directory),

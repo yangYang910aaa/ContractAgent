@@ -9,9 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from backend.eval.run_eval import SAMPLES_DIR
-from backend.app.parser import extract_text
-from backend.app.rules import text_rules
-from backend.app.rules.text_terms import _check_unfair_exemption
+from backend.app.review.parser import extract_text
+from backend.app.review.rules import text_rules
+from backend.app.review.rules.text_terms import _check_unfair_exemption
 
 # 企业合同底稿：验收/发票/担保/转包/保密/违约金/法律条款齐全，只替换免责句，
 # 这样断言不会被其它规则干扰（底稿本身应零风险）

@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from backend.app.config import BASE_DIR
-from backend.app import parser
-from backend.app.parser import Clause, chunk_for_index, extract_text, split_clauses
+from backend.app.review import parser
+from backend.app.review.parser import Clause, chunk_for_index, extract_text, split_clauses
 
 
 def _sample01_text() -> str:

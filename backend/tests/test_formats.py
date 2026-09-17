@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.app.parser import extract_text
+from backend.app.review.parser import extract_text
 from backend.eval.generate_samples import SPECS, _cjk_font_path, render_docx, render_pdf
 
 

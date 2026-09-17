@@ -24,8 +24,8 @@ from backend.app.assistant.context import (
     first_line_title,
     policy_title,
 )
-from backend.app.policy_rag import POLICY_DIR, load_policy_full, retrieve_policies
-from backend.app.rules.locator import clean_rule_text, find_quote_pos, sentence_quote
+from backend.app.policy.rag import POLICY_DIR, load_policy_full, retrieve_policies
+from backend.app.review.rules.locator import clean_rule_text, find_quote_pos, sentence_quote
 
 # 政策检索取几条：够模型判断即可，多取只会把上下文撑长、引用栏变噪声
 POLICY_SEARCH_K = 3
@@ -37,7 +37,7 @@ class PolicyRetriever(BaseRetriever):
     """政策检索器的 LangChain 适配：把项目现成的混合检索（向量+BM25+RRF）包成检索器。
 
     命中统一转成 Document（正文进 page_content，编号/来源/标题进 metadata），框架的
-    检索工具与 tracing 都按这套惯例走；检索实现仍是 policy_rag 自己那一套。
+    检索工具与 tracing 都按这套惯例走；检索实现仍是 policy.rag 自己那一套。
     """
 
     k: int = POLICY_SEARCH_K  # 取几条命中

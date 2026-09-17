@@ -6,8 +6,8 @@ from decimal import Decimal
 import pytest
 
 from backend.app.config import BASE_DIR
-from backend.app.graph import ReviewRunner
-from backend.app.policy_rag import PolicyHit
+from backend.app.review.graph import ReviewRunner
+from backend.app.policy.rag import PolicyHit
 from backend.app.schemas import ContractModel, PaymentTerm
 from backend.app.usage import STAGE_EXTRACT, llm_call
 
@@ -234,7 +234,7 @@ def test_empty_text_goes_error_report_without_llm() -> None:
 
 def test_error_report_sections_match_pipeline(tmp_path) -> None:
     """两条链路的报告由同一个拼装口产出：错误出口带的段也一致（改口径只改一处）。"""
-    from backend.app.pipeline import run_review
+    from backend.app.review.pipeline import run_review
 
     empty = tmp_path / "empty.md"
     empty.write_text("   \n", encoding="utf-8")
@@ -265,7 +265,7 @@ def test_resume_on_non_gate_raises() -> None:
         runner.resume(runner.last_thread_id, action="approved")
 def test_gate_payload_carries_review_and_quote() -> None:
     """闸口载荷带上复核结论与原文摘录：审批人在放行前能看到盲审发现并做原文定位。"""
-    from backend.app.graph import _build_gate_payload
+    from backend.app.review.graph import _build_gate_payload
 
     state = {
         "risks": [

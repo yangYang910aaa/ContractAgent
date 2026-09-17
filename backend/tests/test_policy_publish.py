@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from backend.app import policy_publish
-from backend.app.policy_corpus import corpus_fingerprint, corpus_units
-from backend.app.policy_rag import MemoryStore
+from backend.app.policy import publish
+from backend.app.policy.corpus import corpus_fingerprint, corpus_units
+from backend.app.policy.rag import MemoryStore
 
 _EXISTING = """# 采购合同审核制度 · 细则 P-01：预付款比例
 
@@ -79,7 +79,7 @@ def test_plan_reports_new_file_without_touching_anything(library) -> None:
     """预览：给出去向与要写/要删的条数，磁盘与库都不动。"""
     policy_dir, store = library
     before = corpus_fingerprint(policy_dir=policy_dir)["version"]
-    plan = policy_publish.plan_publish(_NEW, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
+    plan = publish.plan_publish(_NEW, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
     assert plan["blockers"] == []
     assert plan["exists"] is False
     assert plan["write_units"] == 3  # 文件头 + 两条条文
@@ -92,8 +92,8 @@ def test_plan_reports_new_file_without_touching_anything(library) -> None:
 def test_publish_writes_file_and_syncs_index(library) -> None:
     """入库：文件落盘、单元写进索引、执行后核对一致、版本号与预览的预估一致。"""
     policy_dir, store = library
-    plan = policy_publish.plan_publish(_NEW, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
-    result = policy_publish.publish(_NEW, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
+    plan = publish.plan_publish(_NEW, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
+    result = publish.publish(_NEW, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
     assert result["applied"] is True and result["updated"] is False
     assert result["written"] == 3 and result["removed"] == 0 and result["check_ok"] is True
     assert result["version"] == plan["next_version"]
@@ -104,20 +104,20 @@ def test_publish_writes_file_and_syncs_index(library) -> None:
 def test_publish_is_idempotent(library) -> None:
     """再入一次同样的内容：算出无需同步，不重复写单元。"""
     policy_dir, store = library
-    policy_publish.publish(_NEW, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
-    again = policy_publish.publish(_NEW, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
+    publish.publish(_NEW, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
+    again = publish.publish(_NEW, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
     assert again["written"] == 0 and again["removed"] == 0 and again["check_ok"] is True
 
 
 def test_publish_updates_existing_file_by_unit(library) -> None:
     """同名文件 = 更新那份政策：只重写变化的那一条，删掉消失的那一条。"""
     policy_dir, store = library
-    policy_publish.publish(_NEW, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
+    publish.publish(_NEW, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
     edited = _NEW.replace("解除生效后三十日内完成结算、返还与款项清退。", "解除生效后十五日内完成结算、返还与款项清退。")
-    plan = policy_publish.plan_publish(edited, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
+    plan = publish.plan_publish(edited, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
     assert plan["exists"] is True
     assert plan["write_units"] == 1 and plan["delete_units"] == 1
-    result = policy_publish.publish(edited, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
+    result = publish.publish(edited, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
     assert result["updated"] is True and result["written"] == 1 and result["removed"] == 1
     texts = [row["text"] for row in store.iter_rows() if row["source"] == "P-16_解除与善后.md"]
     assert any("十五日内" in text for text in texts) and not any("三十日内" in text for text in texts)
@@ -126,8 +126,8 @@ def test_publish_updates_existing_file_by_unit(library) -> None:
 def test_publish_blocks_duplicate_ref(library) -> None:
     """编号撞号：另一份文件已用 P-01 → 硬阻止（不然检索引用分不清是哪份）。"""
     policy_dir, store = library
-    with pytest.raises(policy_publish.PublishBlocked) as caught:
-        policy_publish.publish(_EXISTING, "P-01_另一份.md", policy_dir=policy_dir, store=store)
+    with pytest.raises(publish.PublishBlocked) as caught:
+        publish.publish(_EXISTING, "P-01_另一份.md", policy_dir=policy_dir, store=store)
     assert caught.value.reasons[0]["kind"] == "编号重复"
     assert not (policy_dir / "P-01_另一份.md").exists()
 
@@ -136,10 +136,10 @@ def test_publish_blocks_missing_meta_unless_allowed(library) -> None:
     """缺元信息默认拦下；显式放行时才入库。"""
     policy_dir, store = library
     thin = "# 采购合同审核制度 · 细则 P-17：无元信息\n\n## 第一条 只有正文\n\n一句话。\n"
-    with pytest.raises(policy_publish.PublishBlocked) as caught:
-        policy_publish.publish(thin, "P-17_无元信息.md", policy_dir=policy_dir, store=store)
+    with pytest.raises(publish.PublishBlocked) as caught:
+        publish.publish(thin, "P-17_无元信息.md", policy_dir=policy_dir, store=store)
     assert caught.value.reasons[0]["kind"] == "元信息缺失"
-    result = policy_publish.publish(
+    result = publish.publish(
         thin, "P-17_无元信息.md", policy_dir=policy_dir, store=store, allow_missing_meta=True
     )
     assert result["applied"] is True and (policy_dir / "P-17_无元信息.md").is_file()
@@ -149,7 +149,7 @@ def test_publish_rejects_bad_file_name(library) -> None:
     """文件名不合法（带目录、形态不对）时直接拦下，不落盘。"""
     policy_dir, store = library
     for bad in ("../P-16_逃逸.md", "P-16.md", "新政策.md"):
-        plan = policy_publish.plan_publish(_NEW, bad, policy_dir=policy_dir, store=store)
+        plan = publish.plan_publish(_NEW, bad, policy_dir=policy_dir, store=store)
         assert plan["blockers"] and plan["blockers"][0]["kind"] == "文件名不合法"
     assert [path.name for path in policy_dir.glob("*")] == ["P-01_预付款比例.md"]
 
@@ -163,7 +163,7 @@ def test_publish_rolls_back_when_sync_fails(tmp_path: Path) -> None:
     store.add_docs(corpus_units(policy_dir=policy_dir))
     before = corpus_fingerprint(policy_dir=policy_dir)["version"]
     with pytest.raises(RuntimeError):
-        policy_publish.publish(_NEW, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
+        publish.publish(_NEW, "P-16_解除与善后.md", policy_dir=policy_dir, store=store)
     assert not (policy_dir / "P-16_解除与善后.md").exists()
     assert corpus_fingerprint(policy_dir=policy_dir)["version"] == before
     assert {row["source"] for row in store.iter_rows()} == {"P-01_预付款比例.md"}

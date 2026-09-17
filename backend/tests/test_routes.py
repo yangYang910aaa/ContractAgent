@@ -12,11 +12,11 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatGenerationChunk
 
 from backend.app.config import BASE_DIR
-from backend.app.graph import ReviewRunner
+from backend.app.review.graph import ReviewRunner
 from backend.app.main import create_app
-from backend.app.policy_rag import PolicyHit
+from backend.app.policy.rag import PolicyHit
 from backend.app.schemas import ContractModel, PaymentTerm
-from backend.app.tasks import TaskManager
+from backend.app.tasks.manager import TaskManager
 
 
 def _defect_model() -> ContractModel:
@@ -44,7 +44,7 @@ def _fake_retriever(query: str) -> list[PolicyHit]:
 @pytest.fixture()
 def client(tmp_path: Path, monkeypatch) -> TestClient:
     """app：worker=False + 假抽取；上传目录指到临时路径，测完不留文件。"""
-    import backend.app.routes_tasks as routes
+    import backend.app.api.routes_tasks as routes
 
     monkeypatch.setattr(routes, "UPLOAD_DIR", tmp_path)
     runner = ReviewRunner(extractor=lambda text: _defect_model(), retriever=_fake_retriever)
@@ -179,7 +179,7 @@ def test_edit_patch_reruns_and_second_gate(client: TestClient) -> None:
 
 def test_upload_saves_readable_file_name(client: TestClient) -> None:
     """上传落盘文件名 = 任务号 + 原文件名：出问题时对着 uploads 目录能认出是哪份。"""
-    import backend.app.routes_tasks as routes
+    import backend.app.api.routes_tasks as routes
 
     tid = client.post(
         "/api/tasks", files={"file": ("学生校服采购合同.md", _sample_bytes(), "text/markdown")}

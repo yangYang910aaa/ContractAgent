@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from backend.app.rules import RISK_LABELS, Severity, text_rules
+from backend.app.review.rules import RISK_LABELS, Severity, text_rules
 
 
 def _types(text: str, kind: str | None = "enterprise_goods") -> dict[str, str]:

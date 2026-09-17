@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from backend.app import policy_admin, policy_corpus
+from backend.app.policy import admin, corpus
 from backend.app.config import settings
-from backend.app.pipeline import build_report
-from backend.app.policy_rag import IndexDoc, MemoryStore
+from backend.app.review.pipeline import build_report
+from backend.app.policy.rag import IndexDoc, MemoryStore
 from backend.app.schemas import ContractModel
 
 _POLICY_A = """# 采购合同审核制度 · 细则 P-01：预付款管理
@@ -65,20 +65,20 @@ def corpus_dir(tmp_path: Path) -> Path:
 def _store_with_corpus(corpus_dir: Path) -> MemoryStore:
     """把磁盘语料灌进内存库，得到一个与文件一致的索引。"""
     store = MemoryStore(embedding_model=FakeEmbeddings())
-    store.add_docs(policy_corpus.corpus_units(policy_dir=corpus_dir))
+    store.add_docs(corpus.corpus_units(policy_dir=corpus_dir))
     return store
 
 
 def test_fingerprint_stable_and_version_changes_with_content(corpus_dir: Path) -> None:
-    first = policy_corpus.corpus_fingerprint(policy_dir=corpus_dir)
-    assert first["version"] == policy_corpus.corpus_fingerprint(policy_dir=corpus_dir)["version"]
+    first = corpus.corpus_fingerprint(policy_dir=corpus_dir)
+    assert first["version"] == corpus.corpus_fingerprint(policy_dir=corpus_dir)["version"]
     assert first["files"] == 2
     assert {doc["ref"] for doc in first["documents"]} == {"P-01", "P-02"}
 
     # 改一个字 → 文件哈希与总版本号都要变，且只影响这一份文件
     target = corpus_dir / "P-01_预付款比例.md"
     target.write_text(_POLICY_A.replace("30%", "20%"), encoding="utf-8")
-    after = policy_corpus.corpus_fingerprint(policy_dir=corpus_dir)
+    after = corpus.corpus_fingerprint(policy_dir=corpus_dir)
     assert after["version"] != first["version"]
     hashes = {doc["ref"]: doc["sha256"] for doc in after["documents"]}
     assert hashes["P-01"] != {doc["ref"]: doc["sha256"] for doc in first["documents"]}["P-01"]
@@ -87,7 +87,7 @@ def test_fingerprint_stable_and_version_changes_with_content(corpus_dir: Path) -
 
 def test_compare_ok_then_reports_drift(corpus_dir: Path) -> None:
     store = _store_with_corpus(corpus_dir)
-    state = policy_corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)
+    state = corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)
     assert state["ok"] is True
     assert state["disk_units"] == state["index_units"]
     assert all(item["same"] for item in state["files_detail"])
@@ -96,7 +96,7 @@ def test_compare_ok_then_reports_drift(corpus_dir: Path) -> None:
     (corpus_dir / "P-01_预付款比例.md").write_text(
         _POLICY_A.replace("30%", "20%"), encoding="utf-8"
     )
-    drifted = policy_corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)
+    drifted = corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)
     assert drifted["ok"] is False
     detail = {item["source"]: item for item in drifted["files_detail"]}
     assert detail["P-01_预付款比例.md"]["same"] is False
@@ -107,10 +107,10 @@ def test_compare_ok_then_reports_drift(corpus_dir: Path) -> None:
 
 def test_compare_reports_missing_and_orphan(corpus_dir: Path) -> None:
     store = MemoryStore(embedding_model=FakeEmbeddings())
-    store.add_docs(policy_corpus.corpus_units(policy_dir=corpus_dir))
+    store.add_docs(corpus.corpus_units(policy_dir=corpus_dir))
     # 索引里多出一份磁盘上没有的文件 → 孤儿行（删掉语料文件后库里残留的旧单元）
     store.add_docs([IndexDoc(text="旧条文", source="P-09_已删除.md", policy_ref="P-09")])
-    state = policy_corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)
+    state = corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)
     assert state["ok"] is False
     assert state["orphan_sources"] == ["P-09_已删除.md"]
 
@@ -118,15 +118,15 @@ def test_compare_reports_missing_and_orphan(corpus_dir: Path) -> None:
 def test_unit_sync_plan_only_touches_changed_units(corpus_dir: Path) -> None:
     """增量口径精确到单元：改一条条文只重写那一条，同文件里没变的条文不动。"""
     store = _store_with_corpus(corpus_dir)
-    units = policy_corpus.corpus_units(policy_dir=corpus_dir)
-    plan = policy_admin.plan_unit_sync(units, store.iter_rows())
+    units = corpus.corpus_units(policy_dir=corpus_dir)
+    plan = admin.plan_unit_sync(units, store.iter_rows())
     assert plan["write"] == [] and plan["delete"] == []
 
     (corpus_dir / "P-02_质量保证期.md").write_text(
         _POLICY_B.replace("12 个月", "24 个月"), encoding="utf-8"
     )
-    plan = policy_admin.plan_unit_sync(
-        policy_corpus.corpus_units(policy_dir=corpus_dir), store.iter_rows()
+    plan = admin.plan_unit_sync(
+        corpus.corpus_units(policy_dir=corpus_dir), store.iter_rows()
     )
     # 只写"改过的那一条"：P-02 的文件头单元正文没变，不该被重写
     assert {unit.source for unit in plan["write"]} == {"P-02_质量保证期.md"}
@@ -146,13 +146,13 @@ def test_unit_sync_restores_consistency_and_touches_only_changed(corpus_dir: Pat
     )
     before_untouched = [row for row in store.iter_rows() if row["source"] == "P-02_质量保证期.md"]
 
-    plan = policy_admin.plan_unit_sync(
-        policy_corpus.corpus_units(policy_dir=corpus_dir), store.iter_rows()
+    plan = admin.plan_unit_sync(
+        corpus.corpus_units(policy_dir=corpus_dir), store.iter_rows()
     )
     assert store.add_docs(plan["write"]) == 1  # 只有改过的那一条要重写
     assert store.delete_units(plan["delete"]) == 2  # 旧条文 + 孤儿行
 
-    after = policy_corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)
+    after = corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)
     assert after["ok"] is True
     assert after["orphan_sources"] == []
     # 替换后的 P-01 是新正文，旧正文一条不剩（业务键变了：新写一条 + 删掉旧的一条）
@@ -167,8 +167,8 @@ def test_unit_id_stable_and_rewrite_is_idempotent(corpus_dir: Path) -> None:
     """业务键由内容决定：同内容同主键，重复写入不累积（upsert 语义）。"""
     store = _store_with_corpus(corpus_dir)
     before = store.doc_count
-    units = policy_corpus.corpus_units(policy_dir=corpus_dir)
-    assert policy_admin.unit_id(units[0].source, units[0].text) == policy_admin.unit_id(
+    units = corpus.corpus_units(policy_dir=corpus_dir)
+    assert admin.unit_id(units[0].source, units[0].text) == admin.unit_id(
         units[0].source, units[0].text
     )
     store.add_docs(units)  # 再灌一遍完全相同的内容
@@ -177,29 +177,29 @@ def test_unit_id_stable_and_rewrite_is_idempotent(corpus_dir: Path) -> None:
 
 def test_cli_check_and_sync_exit_codes(corpus_dir: Path, monkeypatch, capsys) -> None:
     store = _store_with_corpus(corpus_dir)
-    monkeypatch.setattr(policy_admin, "get_store", lambda backend=None: store)
+    monkeypatch.setattr(admin, "get_store", lambda backend=None: store)
 
-    assert policy_admin.main(["--check", "--policy-dir", str(corpus_dir)]) == 0
+    assert admin.main(["--check", "--policy-dir", str(corpus_dir)]) == 0
     assert "一致" in capsys.readouterr().out
 
     (corpus_dir / "P-01_预付款比例.md").write_text(
         _POLICY_A.replace("30%", "20%"), encoding="utf-8"
     )
-    assert policy_admin.main(["--check", "--policy-dir", str(corpus_dir)]) == 1
+    assert admin.main(["--check", "--policy-dir", str(corpus_dir)]) == 1
 
     # 不带 --yes 只出计划、不改库 → 仍然不一致
-    assert policy_admin.main(["--sync", "--policy-dir", str(corpus_dir)]) == 0
+    assert admin.main(["--sync", "--policy-dir", str(corpus_dir)]) == 0
     assert "未执行" in capsys.readouterr().out
-    assert policy_corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)["ok"] is False
+    assert corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)["ok"] is False
 
-    assert policy_admin.main(["--sync", "--yes", "--policy-dir", str(corpus_dir)]) == 0
-    assert policy_corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)["ok"] is True
+    assert admin.main(["--sync", "--yes", "--policy-dir", str(corpus_dir)]) == 0
+    assert corpus.compare_corpus_and_index(store=store, policy_dir=corpus_dir)["ok"] is True
 
 
 def test_fingerprint_cli_prints_version_only(corpus_dir: Path, capsys) -> None:
-    assert policy_admin.main(["--fingerprint", "--policy-dir", str(corpus_dir)]) == 0
+    assert admin.main(["--fingerprint", "--policy-dir", str(corpus_dir)]) == 0
     printed = capsys.readouterr().out.strip()
-    assert printed == policy_corpus.corpus_fingerprint(policy_dir=corpus_dir)["version"]
+    assert printed == corpus.corpus_fingerprint(policy_dir=corpus_dir)["version"]
 
 
 class FakeMilvusClient:
@@ -245,28 +245,28 @@ def _store_with_client(corpus_dir: Path, client: FakeMilvusClient) -> MemoryStor
 def test_drop_legacy_reports_only_without_yes(corpus_dir: Path, capsys) -> None:
     """不带 --yes 只看现状：报告检索名字指向哪、回滚点多少行，不动库。"""
     client = FakeMilvusClient(
-        collections=["contract_policies_biz", policy_admin.LEGACY_COLLECTION],
+        collections=["contract_policies_biz", admin.LEGACY_COLLECTION],
         aliases={settings.milvus_collection: "contract_policies_biz"},
     )
     store = _store_with_client(corpus_dir, client)
-    assert policy_admin._drop_legacy(store, corpus_dir, False, False) == 0
+    assert admin._drop_legacy(store, corpus_dir, False, False) == 0
     out = capsys.readouterr().out
     assert "未执行" in out and "72 行" in out
     assert client.ops == []
-    assert client.has_collection(policy_admin.LEGACY_COLLECTION)
+    assert client.has_collection(admin.LEGACY_COLLECTION)
 
 
 def test_drop_legacy_removes_alias_first_then_collection(corpus_dir: Path, capsys) -> None:
     """回滚点上还挂着别名：必须先摘别名再删集合（否则 Milvus 拒绝删除）。"""
     client = FakeMilvusClient(
-        collections=["contract_policies_biz", policy_admin.LEGACY_COLLECTION],
-        aliases={settings.milvus_collection: "contract_policies_biz", "old_name": policy_admin.LEGACY_COLLECTION},
+        collections=["contract_policies_biz", admin.LEGACY_COLLECTION],
+        aliases={settings.milvus_collection: "contract_policies_biz", "old_name": admin.LEGACY_COLLECTION},
     )
     store = _store_with_client(corpus_dir, client)
-    assert policy_admin._drop_legacy(store, corpus_dir, True, False) == 0
+    assert admin._drop_legacy(store, corpus_dir, True, False) == 0
     assert client.ops == [
         ("drop_alias", "old_name"),
-        ("drop_collection", policy_admin.LEGACY_COLLECTION),
+        ("drop_collection", admin.LEGACY_COLLECTION),
     ]
     # 检索用的别名没被动过，线上仍指向业务键集合
     assert client.aliases[settings.milvus_collection] == "contract_policies_biz"
@@ -276,14 +276,14 @@ def test_drop_legacy_removes_alias_first_then_collection(corpus_dir: Path, capsy
 def test_drop_legacy_blocked_when_live_name_is_not_business_key_alias(corpus_dir: Path, capsys) -> None:
     """检索名字没指向业务键集合（没迁移完或已回滚）→ 中止，回滚点是唯一退路。"""
     client = FakeMilvusClient(
-        collections=["contract_policies_biz", policy_admin.LEGACY_COLLECTION],
-        aliases={settings.milvus_collection: policy_admin.LEGACY_COLLECTION},
+        collections=["contract_policies_biz", admin.LEGACY_COLLECTION],
+        aliases={settings.milvus_collection: admin.LEGACY_COLLECTION},
     )
     store = _store_with_client(corpus_dir, client)
-    assert policy_admin._drop_legacy(store, corpus_dir, True, False) == 1
+    assert admin._drop_legacy(store, corpus_dir, True, False) == 1
     assert "中止理由" in capsys.readouterr().out
     assert client.ops == []
-    assert client.has_collection(policy_admin.LEGACY_COLLECTION)
+    assert client.has_collection(admin.LEGACY_COLLECTION)
 
 
 def test_drop_legacy_idempotent_and_memory_backend(corpus_dir: Path, capsys) -> None:
@@ -293,10 +293,10 @@ def test_drop_legacy_idempotent_and_memory_backend(corpus_dir: Path, capsys) -> 
         aliases={settings.milvus_collection: "contract_policies_biz"},
     )
     store = _store_with_client(corpus_dir, client)
-    assert policy_admin._drop_legacy(store, corpus_dir, True, False) == 0
+    assert admin._drop_legacy(store, corpus_dir, True, False) == 0
     assert "不存在，无需删除" in capsys.readouterr().out
 
-    assert policy_admin.main(["--drop-legacy", "--backend", "memory"]) == 0
+    assert admin.main(["--drop-legacy", "--backend", "memory"]) == 0
     assert "无需删除回滚点" in capsys.readouterr().out
 
 
@@ -315,18 +315,18 @@ def _drafts_dir_with(tmp_path: Path, count: int) -> Path:
 def test_prune_drafts_lists_then_removes_oldest(tmp_path: Path, capsys) -> None:
     """起稿产物按时间留最近几份：默认只列，--yes 才删，且只删超出的那几份。"""
     drafts = _drafts_dir_with(tmp_path, 5)
-    plan = policy_admin.plan_draft_prune(drafts, keep=2)
+    plan = admin.plan_draft_prune(drafts, keep=2)
     assert [path.name for path in plan["keep"]] == ["P-14_旧稿_000004", "P-13_旧稿_000003"]
     assert len(plan["remove"]) == 3
 
     # 情况：没给 --yes → 只列待删，目录一个不少
-    assert policy_admin.main(["--prune-drafts", "2", "--drafts-dir", str(drafts)]) == 0
+    assert admin.main(["--prune-drafts", "2", "--drafts-dir", str(drafts)]) == 0
     out = capsys.readouterr().out
     assert "待删 P-10_旧稿_000000" in out and "未执行" in out
     assert len(list(drafts.iterdir())) == 5
 
     # 情况：给了 --yes → 删掉超出的 3 份，最近 2 份留着
-    assert policy_admin.main(["--prune-drafts", "2", "--drafts-dir", str(drafts), "--yes"]) == 0
+    assert admin.main(["--prune-drafts", "2", "--drafts-dir", str(drafts), "--yes"]) == 0
     assert "已删除 3 份历史产物" in capsys.readouterr().out
     assert sorted(path.name for path in drafts.iterdir()) == [
         "P-13_旧稿_000003",
@@ -337,16 +337,16 @@ def test_prune_drafts_lists_then_removes_oldest(tmp_path: Path, capsys) -> None:
 def test_prune_drafts_noop_when_under_keep(tmp_path: Path, capsys) -> None:
     """份数没超过保留数 → 什么也不删（也不打印"未执行"这种催促）。"""
     drafts = _drafts_dir_with(tmp_path, 2)
-    assert policy_admin.main(["--prune-drafts", "--drafts-dir", str(drafts), "--yes"]) == 0
+    assert admin.main(["--prune-drafts", "--drafts-dir", str(drafts), "--yes"]) == 0
     out = capsys.readouterr().out
     assert "没有需要清理的产物" in out and "未执行" not in out
     assert len(list(drafts.iterdir())) == 2
     # 目录不存在时当没事发生（首次起稿前就会走到这条）
-    assert policy_admin.main(["--prune-drafts", "--drafts-dir", str(tmp_path / "none")]) == 0
+    assert admin.main(["--prune-drafts", "--drafts-dir", str(tmp_path / "none")]) == 0
 
 
 def test_report_carries_policy_library() -> None:
-    library = policy_corpus.report_policy_library()
+    library = corpus.report_policy_library()
     assert library["version"].startswith("PL-")
     assert library["files"] >= 1
     assert all(" " in revision for revision in library["revisions"])

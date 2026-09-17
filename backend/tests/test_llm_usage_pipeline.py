@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backend.app.pipeline import build_report, run_review
+from backend.app.review.pipeline import build_report, run_review
 from backend.app.schemas import ContractModel
 
 # 迷你合同文本：只为走通 parser → 抽取 → 规则 → 报告链路，内容不参与断言

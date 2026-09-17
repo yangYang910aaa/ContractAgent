@@ -13,7 +13,7 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 
-from backend.app import routes_tasks
+from backend.app.api import routes_tasks
 from backend.app.config import settings
 
 
@@ -45,7 +45,7 @@ def _records_store():
     # 分支：没配数据库 → 读不到登记簿，调用方必须放弃判断（否则空登记簿会把在用的原件全当孤儿）
     if not settings.database_url:
         return None
-    from backend.app.store_pg import PgPersistence
+    from backend.app.tasks.store_pg import PgPersistence
 
     return PgPersistence().store
 

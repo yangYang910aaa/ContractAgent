@@ -11,9 +11,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from backend.app.parser import split_clauses
-from backend.app.policy_rag import POLICY_DIR
-from backend.app.rules.constants import FIELD_LABELS
+from backend.app.review.parser import split_clauses
+from backend.app.policy.rag import POLICY_DIR
+from backend.app.review.rules.constants import FIELD_LABELS
 
 # 政策文件名的编号前缀（与入库时的 policy_ref 同一出处）；忽略大小写——模型会写 p-02
 POLICY_FILE_RE = re.compile(r"(P-\d+)", re.IGNORECASE)

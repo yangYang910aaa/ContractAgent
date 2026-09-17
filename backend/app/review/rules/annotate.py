@@ -8,15 +8,15 @@ from __future__ import annotations
 
 import re
 
-from backend.app.rules.constants import EFFECTIVE_FROM_SIGN_RE, SIGNING_EFFECT_RE
+from backend.app.review.rules.constants import EFFECTIVE_FROM_SIGN_RE, SIGNING_EFFECT_RE
 from backend.app.schemas import RiskItem, Severity
-from backend.app.rules.locator import (
+from backend.app.review.rules.locator import (
     _annotate_missing_locators,
     _normalize_clause_refs,
     clean_rule_text,
 )
-from backend.app.rules.template import is_supplementary_agreement
-from backend.app.rules.text_penalty import _CONF_OBLIGATION_RE
+from backend.app.review.rules.template import is_supplementary_agreement
+from backend.app.review.rules.text_penalty import _CONF_OBLIGATION_RE
 
 
 # 补充/变更协议里"由原合同继承"的必填字段：在补充件里缺席是常态，不是缺陷。

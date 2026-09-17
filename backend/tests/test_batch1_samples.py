@@ -9,10 +9,10 @@ from __future__ import annotations
 import json
 
 from backend.app.config import BASE_DIR
-from backend.app.rules import Severity, text_rules
+from backend.app.review.rules import Severity, text_rules
 from backend.eval.format_render import render_docx, render_pdf
 from backend.eval.generate_samples import NEW_SPECS, _body_for
-from backend.app.parser import extract_text
+from backend.app.review.parser import extract_text
 
 SAMPLES_DIR = BASE_DIR / "data" / "contracts"
 GT_PATH = BASE_DIR / "data/素材/合同变体/out/ground_truth.json"

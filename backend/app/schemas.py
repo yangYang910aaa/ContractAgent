@@ -1,6 +1,6 @@
 """核心数据结构。
 
-约定:extract / rules / policy_rag / graph / report 全部只依赖本模块，
+约定:review/ 与 policy/ 下的模块只依赖本模块，
 字段增删必须同步更新评测 ground truth 与前端展示。
 """
 

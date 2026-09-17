@@ -23,9 +23,9 @@ from langchain_core.messages import AIMessage
 from backend.app.assistant import build_chat_agent, chat_config, chat_session_key
 from backend.app.assistant.context import ContractContext
 from backend.app.config import settings
-from backend.app.graph import ReviewRunner, build_review_graph
+from backend.app.review.graph import ReviewRunner, build_review_graph
 from backend.app.schemas import ContractModel, PaymentTerm
-from backend.app.store_pg import PgPersistence
+from backend.app.tasks.store_pg import PgPersistence
 from langgraph.types import Command
 
 pytestmark = pytest.mark.skipif(

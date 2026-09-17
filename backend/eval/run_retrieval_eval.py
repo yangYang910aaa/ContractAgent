@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from backend.app.config import BASE_DIR
-from backend.app.policy_rag import retrieve_policies
+from backend.app.policy.rag import retrieve_policies
 
 # 标准答案集：(查询, 期望政策编号)。查询取自各政策/风险类型的典型表述，覆盖 P-01~P-12。
 GOLD: list[tuple[str, str]] = [

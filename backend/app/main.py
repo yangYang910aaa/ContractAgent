@@ -19,12 +19,12 @@ from fastapi import FastAPI, Request
 
 from backend.app import llm
 from backend.app.config import settings
-from backend.app.graph import ReviewRunner
-from backend.app.policy_corpus import report_policy_library
-from backend.app.routes_policy import router as policy_router
-from backend.app.routes_tasks import router as tasks_router
-from backend.app.store_pg import PgPersistence
-from backend.app.tasks import TaskManager
+from backend.app.review.graph import ReviewRunner
+from backend.app.policy.corpus import report_policy_library
+from backend.app.api.routes_policy import router as policy_router
+from backend.app.api.routes_tasks import router as tasks_router
+from backend.app.tasks.store_pg import PgPersistence
+from backend.app.tasks.manager import TaskManager
 
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator

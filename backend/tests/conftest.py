@@ -19,7 +19,7 @@ os.environ.setdefault("LANGSMITH_TRACING", "false")
 @pytest.fixture(autouse=True)
 def _isolate_ocr_cache(tmp_path_factory, monkeypatch):
     """把 OCR 缓存目录指到临时目录：测试不该往仓库里写缓存，也不会被旧缓存影响。"""
-    from backend.app import parser
+    from backend.app.review import parser
 
     monkeypatch.setattr(
         parser, "OCR_CACHE_DIR", tmp_path_factory.mktemp("ocr_cache")

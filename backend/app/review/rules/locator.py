@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import re
 
-from backend.app.rules.constants import PAGE_MARK_RE
+from backend.app.review.rules.constants import PAGE_MARK_RE
 from backend.app.schemas import RiskItem
 
 
@@ -51,16 +51,22 @@ def _locate_missing_field(text: str, field: str | None, scope_ref: str = "") -> 
         # 而不是第一处：先命中的可能是编号相同、内容完全无关的另一套条款
         for span in spans:
             for keyword in anchors:
-                match = re.search(keyword, text[span[0] : span[1]])
-                if match:
+                for match in re.finditer(keyword, text[span[0] : span[1]]):
                     pos = span[0] + match.start()
-                    return _clause_ref_at(text, pos), sentence_quote(text, pos)
+                    quote = sentence_quote(text, pos)
+                    # 分支：这句说的是别的东西的期限（保函/质保）→ 换下一处，别把人指错
+                    if not _period_quote_ok(field, quote):
+                        continue
+                    return _clause_ref_at(text, pos), quote
         return "", ""
     # 分支：没有可用条款号 → 全文找第一个锚点（缺字段类风险此时还没有条款号可依）
     for keyword in anchors:
-        match = re.search(keyword, text)
-        if match:
-            return _clause_ref_at(text, match.start()), sentence_quote(text, match.start())
+        for match in re.finditer(keyword, text):
+            quote = sentence_quote(text, match.start())
+            # 分支：同上，被别家"有效期"命中的句子跳过；全跳完仍没有就留空
+            if not _period_quote_ok(field, quote):
+                continue
+            return _clause_ref_at(text, match.start()), quote
     return "", ""
 
 
@@ -70,8 +76,14 @@ _MISSING_FIELD_ANCHORS: dict[str, tuple[str, ...]] = {
     "currency": ("币种", "人民币", "合同总价款", "合同金额"),
     "signature_date": ("签订时间", "签署日期", "签订日期", "签字盖章"),
     "effective_date": ("之日起生效", "生效条件", "签署并生效", "生效"),
-    # 易错点：别用裸"合同期"——"履行合同期间"这类表述会误命中（实测指到了权利义务条款）
-    "expiry_date": ("有效期", "合同期限", "服务期限", "合作期限", "保修期", "工期"),
+    # 易错点：别用裸"合同期"——"履行合同期间"这类表述会误命中（实测指到了权利义务条款）；
+    # 也别把"保修期/工期"当锚点——那是标的质量与进度，不是合同到期日（实测指到了质保条款）
+    "expiry_date": (
+        r"(?:合同|协议|服务|合作)有效期",
+        "合同期限", "服务期限", "合作期限", "有效期限",
+        # 兜底：裸"有效期"，命中后由 _PERIOD_NOISE 滤掉"保函/质保自己的有效期"
+        "有效期",
+    ),
     "buyer": ("甲方", "需方", "买方", "采购人", "委托人", "发包人"),
     "supplier": ("乙方", "供方", "卖方", "承包人", "供应商", "监理人"),
     "payment_schedule": ("付款", "支付方式", "结算", "价款支付"),
@@ -91,6 +103,24 @@ _MISSING_FIELD_FALLBACK: dict[str, str] = {
     "currency": "total_amount",
     "payment_schedule": "total_amount",
 }
+
+# 自带"有效期"却说的不是合同期限的东西：保函、质保、授权证书各有自己的期限。
+# 把这些句子当成"合同到期日该写在哪"，当事人会以为系统核验过——比留空更糟。
+_PERIOD_NOISE: tuple[str, ...] = (
+    "保函", "质保", "保修", "授权", "证书", "保险", "保密", "许可", "退换",
+)
+
+
+def _period_quote_ok(field: str | None, quote: str) -> bool:
+    """这句摘录能不能当该字段的定位锚点：到期日要排开别人家的期限，也要真的带日期。"""
+    # 分支：只有到期日有这个坑（其余字段的锚点词本身就有主语，如"质保""保密"）
+    if field != "expiry_date":
+        return True
+    if any(word in quote for word in _PERIOD_NOISE):
+        return False
+    # 期限句得带真日期信息：光出现"合同期限/服务期限"的句子多是义务或终止表述
+    # （实测指到"在合同规定的服务期限内有义务…""则依本合同期限规定终止本合同"）
+    return bool(re.search(r"[年月日]|有效期至|届满|之日起", quote))
 
 
 def _annotate_missing_locators(risks: list[RiskItem], text: str) -> list[RiskItem]:

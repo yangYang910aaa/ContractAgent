@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 
 from backend.app.schemas import RiskItem, Severity
-from backend.app.rules.constants import RISK_LABELS
+from backend.app.review.rules.constants import RISK_LABELS
 
 
 # ---- 空白模板占位检测----

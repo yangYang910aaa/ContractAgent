@@ -46,9 +46,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from backend.app.config import BASE_DIR
-from backend.app.pipeline import run_review
+from backend.app.review.pipeline import run_review
 from backend.app.schemas import Grade, Severity
-from backend.app.rules import RISK_LABELS
+from backend.app.review.rules import RISK_LABELS
 from backend.eval.field_gt import EXPECTED_FIELDS, FIELD_GROUPS
 
 # 语料根目录与 GT 默认位置(均为本地数据, 不入库; 只服务回归/评测)

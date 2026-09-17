@@ -12,7 +12,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from backend.app.policy_rag import POLICY_DIR, _split_doc_articles, get_store
+from backend.app.policy.rag import POLICY_DIR, _split_doc_articles, get_store
 
 # 文件头元信息形如「文件编号：P-01　　版本：V2.0　　生效日期：2026年9月5日」
 _META_RE = re.compile(r"(版本|生效日期)\s*[：:]\s*([^\s　]+)")

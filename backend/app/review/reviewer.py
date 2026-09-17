@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -25,10 +24,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from backend.app.llm import get_chat_model
-from backend.app.parser import Clause, split_clauses
-from backend.app.policy_rag import IndexDoc, load_policies
-from backend.app.rules import (
+from backend.app.llm import get_chat_model, recover_completion
+from backend.app.review.parser import Clause, split_clauses
+from backend.app.policy.rag import IndexDoc, load_policies
+from backend.app.review.rules import (
     PENALTY_CAP_MIN_DAILY_PERCENT,
     RISK_LABELS,
     TEXT_RULE_KINDS,
@@ -358,26 +357,6 @@ def _policy_context(
         return [], f"政策读取失败：{exc}"
 
 
-def _recover_completion(exc: Exception) -> dict | None:
-    """从 with_structured_output 的解析报错里还原模型原始 JSON（与 extractor 同法）。
-
-    extractor 里同名私有函数不便跨模块引用，此处保留最小副本（不动待审文件）。
-    """
-    text = str(exc)
-    # 分支：报错里没有 completion 字样（接口/超时类异常）→ 无法还原
-    marker = text.find("completion ")
-    if marker < 0:
-        return None
-    start = text.find("{", marker)
-    if start < 0:
-        return None
-    try:
-        raw, _ = json.JSONDecoder().raw_decode(text, start)
-    except Exception:
-        return None
-    return raw if isinstance(raw, dict) else None
-
-
 def blind_review(
     text: str,
     llm=None,
@@ -417,7 +396,7 @@ def blind_review(
             result = structured.invoke([("system", system), ("human", human)])
     except Exception as exc:
         # 这种情况是：解析失败但报错里带原始 completion → 归一化兜底后照常复核
-        raw = _recover_completion(exc)
+        raw = recover_completion(exc)
         if raw is not None:
             findings, _ = normalize_findings(raw.get("findings"), max_findings)
             return BlindReviewOutput(findings=findings, error=policy_error)

@@ -16,7 +16,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from backend.app.config import settings
-from backend.app.store import TaskRecord, new_thread_id
+from backend.app.tasks.store import TaskRecord, new_thread_id
 
 # 业务表 DDL(登记簿的库形态; 与 TaskRecord 字段一一对应, jsonb 存闸口载荷/报告)
 _TABLE_DDL = """

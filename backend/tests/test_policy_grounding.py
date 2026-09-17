@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from backend.app import policy_grounding
+from backend.app.policy import grounding
 from backend.eval.run_eval import _citation_metrics
-from backend.app.pipeline import build_report
+from backend.app.review.pipeline import build_report
 from backend.app.schemas import ContractModel, RiskItem, Severity
 
 _POLICY_01 = """# 细则 P-01：预付款管理
@@ -57,13 +57,13 @@ def _risk(**kwargs) -> RiskItem:
 
 
 def test_correct_citation_passes(corpus_dir: Path) -> None:
-    result = policy_grounding.check_citations([_risk()], policy_dir=corpus_dir)
+    result = grounding.check_citations([_risk()], policy_dir=corpus_dir)
     assert result["summary"] == {"cited": 1, "grounded": 1, "rate": 1.0, "noted": 0}
     assert result["items"][0]["issues"] == []
 
 
 def test_unknown_policy_ref_is_flagged(corpus_dir: Path) -> None:
-    item = policy_grounding.check_citations(
+    item = grounding.check_citations(
         [_risk(policy_ref="P-99")], policy_dir=corpus_dir
     )["items"][0]
     assert item["ok"] is False
@@ -72,7 +72,7 @@ def test_unknown_policy_ref_is_flagged(corpus_dir: Path) -> None:
 
 def test_wrong_policy_for_risk_type_is_flagged(corpus_dir: Path) -> None:
     # 预付款比例的风险引到转包政策 → 编号真实存在，但与结论对不上
-    item = policy_grounding.check_citations(
+    item = grounding.check_citations(
         [_risk(policy_ref="P-09")], policy_dir=corpus_dir
     )["items"][0]
     assert item["ok"] is False
@@ -86,14 +86,14 @@ def test_threshold_missing_from_policy_text_is_flagged(tmp_path: Path) -> None:
     (directory / "P-01_预付款比例.md").write_text(
         _POLICY_01.replace("不得超过合同总额的 30%", "应从严掌握"), encoding="utf-8"
     )
-    item = policy_grounding.check_citations([_risk()], policy_dir=directory)["items"][0]
+    item = grounding.check_citations([_risk()], policy_dir=directory)["items"][0]
     assert item["ok"] is False
     assert any("阈值" in issue for issue in item["issues"])
 
 
 def test_explicit_scope_exclusion_only_warns(corpus_dir: Path) -> None:
     # 政采合同引 P-09：政策自己写明这类合同不适用 → 出提示，但不算硬性不通过
-    result = policy_grounding.check_citations(
+    result = grounding.check_citations(
         [_risk(risk_type="subcontract_unrestricted", policy_ref="P-09")],
         contract_kind="gov_goods",
         policy_dir=corpus_dir,
@@ -106,14 +106,14 @@ def test_explicit_scope_exclusion_only_warns(corpus_dir: Path) -> None:
 
 def test_risks_without_policy_ref_are_not_counted(corpus_dir: Path) -> None:
     risks = [_risk(), _risk(risk_type="missing_required_field", policy_ref=None)]
-    result = policy_grounding.check_citations(risks, policy_dir=corpus_dir)
+    result = grounding.check_citations(risks, policy_dir=corpus_dir)
     assert result["summary"]["cited"] == 1
     assert len(result["items"]) == 1
 
 
 def test_review_origin_citation_is_checked_too(corpus_dir: Path) -> None:
     """复核（盲审）填的编号同样过这套检查——这正是"模型乱引"要拦的地方。"""
-    item = policy_grounding.check_citations(
+    item = grounding.check_citations(
         [_risk(origin="review", policy_ref="P-09")], policy_dir=corpus_dir
     )["items"][0]
     assert item["origin"] == "review"
@@ -122,19 +122,19 @@ def test_review_origin_citation_is_checked_too(corpus_dir: Path) -> None:
 
 def test_every_rule_policy_ref_is_known() -> None:
     """规则侧写进报告的政策编号都要在校验表里——新增规则忘了登记就会在这里挂掉。"""
-    rules_dir = Path(__file__).resolve().parents[1] / "app" / "rules"
+    rules_dir = Path(__file__).resolve().parents[1] / "app" / "review" / "rules"
     refs = set()
     for path in rules_dir.glob("*.py"):
         refs |= set(re.findall(r'policy_ref="(P-\d+)"', path.read_text(encoding="utf-8")))
     assert refs, "规则包里没有找到政策编号，检查正则"
-    known = set(policy_grounding._EXPECTED_POLICY.values())
+    known = set(grounding._EXPECTED_POLICY.values())
     assert refs <= known, f"这些编号没进校验表: {sorted(refs - known)}"
 
 
 def test_every_expected_policy_exists_in_corpus() -> None:
     """校验表里的编号都要在真实语料里有对应文件（防写错编号）。"""
-    corpus = policy_grounding.load_corpus()
-    assert set(policy_grounding._EXPECTED_POLICY.values()) <= set(corpus)
+    corpus = grounding.load_corpus()
+    assert set(grounding._EXPECTED_POLICY.values()) <= set(corpus)
 
 
 def test_report_carries_citation_checks() -> None:

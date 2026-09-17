@@ -28,8 +28,8 @@ from collections import Counter
 from pathlib import Path
 
 from backend.app.config import BASE_DIR
-from backend.app.parser import extract_text, split_clauses
-from backend.app.pipeline import run_review
+from backend.app.review.parser import extract_text, split_clauses
+from backend.app.review.pipeline import run_review
 from backend.eval.run_eval import _to_jsonable
 
 # 真实合同目录（本地、已 gitignore；含 电子版/ 与 扫描件/ 两个子目录，递归扫描）

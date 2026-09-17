@@ -9,16 +9,15 @@
 from __future__ import annotations
 
 import re
-import json
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from pydantic import BaseModel, Field
 
-from backend.app.llm import get_chat_model
-from backend.app.parser import split_clauses
-from backend.app.rules.constants import PAGE_MARK_RE
-from backend.app.rules.locator import find_quote_pos
+from backend.app.llm import get_chat_model, recover_completion
+from backend.app.review.parser import split_clauses
+from backend.app.review.rules.constants import PAGE_MARK_RE
+from backend.app.review.rules.locator import find_quote_pos
 from backend.app.schemas import ContractModel, Evidence, PaymentTerm
 from backend.app.usage import STAGE_EXTRACT, llm_call
 
@@ -171,26 +170,128 @@ def _normalize_kind(kind: str | None, text: str) -> str | None:
     return kind
 
 
+# 中文数字金额用字：票据式大写 + 常见小写混写（真实合同两种都用）
+_CN_AMOUNT_DIGITS: dict[str, int] = {
+    "零": 0, "〇": 0, "○": 0,
+    "壹": 1, "贰": 2, "貳": 2, "叁": 3, "肆": 4, "伍": 5, "陆": 6, "柒": 7, "捌": 8, "玖": 9,
+    "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+}
+_CN_AMOUNT_UNITS: dict[str, int] = {
+    "拾": 10, "佰": 100, "仟": 1000,
+    "十": 10, "百": 100, "千": 1000,
+}
+_CN_AMOUNT_SECTIONS: dict[str, int] = {"万": 10_000, "亿": 100_000_000}
+# 数字后面的单位后缀（阿拉伯数字写法：442.02万元）
+_AMOUNT_SUFFIX: dict[str, Decimal] = {
+    "万": Decimal(10_000),
+    "亿": Decimal(100_000_000),
+}
+
+
+def _cn_integer(text: str) -> int | None:
+    """中文数字整数 → int（含万/亿分节）：壹佰贰拾叁万肆仟伍佰陆拾柒 = 1234567。
+
+    出现认不出的字就返回 None——OCR 常把"柒"认成"案"、"仟"认成"任"，
+    宁可没金额，也不能折出一个错数去参与金额一致性判断。
+    """
+    total = 0
+    section = 0
+    number = 0
+    seen = False
+    for char in text:
+        # 分支：数字 → 记下来，等后面的单位或节单位来乘
+        if char in _CN_AMOUNT_DIGITS:
+            number = _CN_AMOUNT_DIGITS[char]
+            seen = True
+        # 分支：十/百/千 → 并入当前节（"十五"里"十"前面没有数字，按 1 个十算）
+        elif char in _CN_AMOUNT_UNITS:
+            section += (number or 1) * _CN_AMOUNT_UNITS[char]
+            number = 0
+            seen = True
+        # 分支：万/亿 → 当前节整体进位后归入总数，节清零继续接后面的数
+        elif char in _CN_AMOUNT_SECTIONS:
+            total += (section + number) * _CN_AMOUNT_SECTIONS[char]
+            section = 0
+            number = 0
+            seen = True
+        else:
+            return None
+    return total + section + number if seen else None
+
+
+def _cn_amount(text: str) -> Decimal | None:
+    """中文数字金额 → Decimal（元）：壹拾伍万伍仟元整 / 十五万元 / 壹佰贰拾叁元肆角伍分。"""
+    # 去掉包装词与句读，只留数字、单位与元角分
+    body = re.sub(r"(人民币|大写|小写|金额|价款|总价|整|正|[:：()（）￥$，,\s])", "", text)
+    if not body:
+        return None
+    # 元/圆 之前是整数部分，之后是角分；没写"元"时整串按整数金额看
+    head, sep, tail = re.split(r"([元圆])", body, maxsplit=1) if re.search(r"[元圆]", body) else (body, "", "")
+    yuan = _cn_integer(head)
+    if yuan is None:
+        return None
+    if not sep:
+        return Decimal(yuan)
+    jiao = _CN_AMOUNT_DIGITS.get(tail[:1], None) if tail[:1] else 0
+    fen = _CN_AMOUNT_DIGITS.get(tail[2:3], None) if len(tail) >= 3 else 0
+    # 分支：角/分位出现认不出的字 → 整条不折算，避免给出错数
+    if jiao is None or fen is None:
+        return None
+    return Decimal(yuan) + Decimal(jiao) / 10 + Decimal(fen) / 100
+
+
 def _parse_amount(value: str | int | float | None) -> Decimal | None:
-    """把各种写法的金额字符串转为Decimal(元)。容忍千分位/单位/空格"""
+    """把各种写法的金额字符串转为 Decimal（元）：1,000,000 / 1,000,000元 / 442.02万元 / 壹拾伍万伍仟元整。"""
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
-    # 只取数字主体（含千分位与小数），丢弃"元/人民币"等字样
-    match = re.search(r"\d[\d,]*(?:\.\d+)?", str(value))
-    if not match:
+    text = str(value).strip()
+    # 分支 1：阿拉伯数字写法 → 取数字本体，紧跟的"万/亿"当单位折算
+    match = re.search(r"(\d[\d,]*(?:\.\d+)?)\s*(万|亿)?", text)
+    if match:
+        try:
+            amount = Decimal(match.group(1).replace(",", ""))
+        except InvalidOperation:
+            return None
+        multiplier = _AMOUNT_SUFFIX.get(match.group(2) or "")
+        return amount * multiplier if multiplier else amount
+    # 分支 2：中文数字写法（大写或小写）
+    return _cn_amount(text)
+
+
+# 中文数字：示范文本与扫描件里"二○一四年五月一日"这种写法很常见，
+# "零"有四种写法（〇 U+3007 / ○ U+25CB / 零 / 0），其中 ○ 出现最多
+_CN_DIGIT: dict[str, int] = {
+    "〇": 0, "○": 0, "零": 0,
+    "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+    "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+}
+_CN_DATE_RE = re.compile(
+    r"([〇○零一二三四五六七八九]{2,4})年([〇○零一二三四五六七八九十]{1,3})月"
+    r"([〇○零一二三四五六七八九十]{1,3})日"
+)
+
+
+def _cn_number(token: str) -> int | None:
+    """中文数字（一~九十九）→ int：十=10、十五=15、二十三=23；认不出返回 None。"""
+    if not token:
         return None
-    try:
-        return Decimal(match.group(0).replace(",", ""))
-    except InvalidOperation:
-        return None
+    if token in _CN_DIGIT:
+        return _CN_DIGIT[token]
+    # 分支：带"十" → 十位与个位分开算
+    if "十" in token:
+        head, _, tail = token.partition("十")
+        tens = _CN_DIGIT.get(head, 1) if head else 1
+        ones = _CN_DIGIT.get(tail, 0) if tail else 0
+        return tens * 10 + ones
+    return None
 
 
 def _parse_cn_date(value: str | None) -> date | None:
-    """把中文/ISO/斜杠三种日期字符串转为date对象。"""
+    """把各种写法的日期字符串转为 date：2026年3月10日 / 2026-03-10 / 2026/3/10 / 二〇二六年三月十日。"""
     if not value:
         return None
     text = value.strip()
-    # 依次尝试：中文年月日 / ISO 短横线 / 斜杠
+    # 依次尝试：阿拉伯数字年月日 / ISO 短横线 / 斜杠
     for pattern in (r"(\d{4})年(\d{1,2})月(\d{1,2})日", r"(\d{4})-(\d{1,2})-(\d{1,2})", r"(\d{4})/(\d{1,2})/(\d{1,2})"):
         match = re.search(pattern, text)
         if match:
@@ -198,6 +299,16 @@ def _parse_cn_date(value: str | None) -> date | None:
                 return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
             except ValueError:
                 return None  # 日期越界（如 2月30日）
+    # 分支：中文数字写法 → 年份逐字折数字，月日按十进位折算，再走同一套构造
+    cn = _CN_DATE_RE.search(text)
+    if cn:
+        year_text = "".join(str(_CN_DIGIT[char]) for char in cn.group(1))
+        month, day = _cn_number(cn.group(2)), _cn_number(cn.group(3))
+        if month and day:
+            try:
+                return date(int(year_text), month, day)
+            except ValueError:
+                return None
     return None
 
 
@@ -517,25 +628,6 @@ def _normalize_drifted(raw: dict) -> dict:
     return out
 
 
-def _recover_completion(exc: Exception) -> dict | None:
-    """从 with_structured_output 的解析报错里还原模型原始 JSON。
-
-    """
-    text = str(exc)
-    # 分支 1：报错里没有 completion 字样（接口/超时类异常）→ 无法还原
-    marker = text.find("completion ")
-    if marker < 0:
-        return None
-    start = text.find("{", marker)
-    if start < 0:
-        return None
-    try:
-        raw, _ = json.JSONDecoder().raw_decode(text, start)
-    except Exception:
-        return None
-    return raw if isinstance(raw, dict) else None
-
-
 # 双读字段：字段核对中付款期次跨次漂移最大，二次抽取多数一致即可压漂移；
 # 后续可按同一机制扩展其它低置信度字段。
 DOUBLE_READ_FIELDS: tuple[str, ...] = ("payment_schedule",)
@@ -669,7 +761,7 @@ def _single_read(structured, text: str) -> ContractModel:
         with llm_call(STAGE_EXTRACT):
             result = structured.invoke([("system", _system_message()), ("human", text)])
     except Exception as exc:
-        raw = _recover_completion(exc)
+        raw = recover_completion(exc)
         # 这种情况是：解析失败但报错里带原始 completion → 归一化兜底后照常返回
         if raw is not None:
             return build_contract_model(_normalize_drifted(raw), text)

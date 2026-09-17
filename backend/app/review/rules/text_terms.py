@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import re
 
-from backend.app.rules.constants import RISK_LABELS
-from backend.app.rules.locator import _clause_ref_at
-from backend.app.rules.text_penalty import _sentence_span
+from backend.app.review.rules.constants import RISK_LABELS
+from backend.app.review.rules.locator import _clause_ref_at
+from backend.app.review.rules.text_penalty import _sentence_span
 from backend.app.schemas import RiskItem, Severity
 
 # 概括免责：只认绝对式（"概不负责/不承担任何责任"），"不承担违约责任"这类有限免责不在此列
