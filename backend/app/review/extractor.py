@@ -258,6 +258,32 @@ def _parse_amount(value: str | int | float | None) -> Decimal | None:
     return _cn_amount(text)
 
 
+# 证据句里"数字 + 万/亿"的写法：用来核对模型是否漏抄了单位
+_QUOTE_AMOUNT_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*([万亿])")
+
+
+def _amount_with_quote(raw: str | None, quote: str) -> Decimal | None:
+    """金额归一化，并用字段自己的证据句复核一次单位。
+
+    提示词要求金额"原样抄写正文"，但模型遇到"货款30万元"这种写法时常把单位吞掉、
+    只回一个 30（差一万倍），解析器无从分辨它抄的是不是原样。此时证据句里那个数字
+    与抽取值完全相等、又带单位后缀，就按证据句折算；两个条件缺一个都不动，
+    免得照别的金额把数改错。返回元（Decimal），认不出返回 None。
+    """
+    value = _parse_amount(raw)
+    if value is None:
+        return None
+    # 分支：抽取值自带单位后缀 → 解析器已折算过，不再复核
+    if re.search(r"\d\s*[万亿]", str(raw or "")):
+        return value
+    # 分支：证据句里同一数字带单位 → 按证据句折算（抽取值与证据句数不一致时不动）
+    for match in _QUOTE_AMOUNT_RE.finditer(quote or ""):
+        base = Decimal(match.group(1).replace(",", ""))
+        if base == value:
+            return base * _AMOUNT_SUFFIX[match.group(2)]
+    return value
+
+
 # 中文数字：示范文本与扫描件里"二○一四年五月一日"这种写法很常见，
 # "零"有四种写法（〇 U+3007 / ○ U+25CB / 零 / 0），其中 ○ 出现最多
 _CN_DIGIT: dict[str, int] = {
@@ -420,6 +446,8 @@ def build_contract_model(raw: dict, text: str = "") -> ContractModel:
             needs_human_review=confidence < CONFIDENCE_REVIEW_THRESHOLD,
         )
 
+    # 总额的证据句要留着：模型漏抄单位时靠它复核（见 _amount_with_quote）
+    amount_quote = meta["total_amount"].quote if "total_amount" in meta else ""
     model = ContractModel(
         # 品类先按模型/关键词判据解析，再按正文形态校正（代理销售/维修等不会被判 tech）
         contract_kind=_normalize_kind(_parse_kind(raw.get("contract_kind")), text),
@@ -428,7 +456,7 @@ def build_contract_model(raw: dict, text: str = "") -> ContractModel:
         signature_date=_parse_cn_date(_s("signature_date")),
         effective_date=_parse_cn_date(_s("effective_date")),
         expiry_date=_parse_cn_date(_s("expiry_date")),
-        total_amount=_parse_amount(_s("total_amount")),
+        total_amount=_amount_with_quote(_s("total_amount"), amount_quote),
         currency=_s("currency"),
         payment_schedule=terms,
         penalty_rate=_parse_percent(_n("penalty_rate")),

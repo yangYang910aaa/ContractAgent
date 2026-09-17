@@ -174,6 +174,39 @@ flowchart TD
 预付款合计不得超过合同总额的 30%。……
 ```
 
+## 作为 MCP 服务端
+
+**同一套审查能力，也能被 AI 客户端当工具调。**
+
+除了工作台，审查能力还以 MCP（Model Context Protocol）服务端的形式暴露出来，
+入口是 `backend/app/mcp_server.py`，传输用 **stdio**（本地单人、零部署、零鉴权）。
+四个工具：
+
+| 工具 | 做什么 |
+| --- | --- |
+| `submit_contract` | 提交本机合同文件，登记审查任务，立刻回任务号 |
+| `get_report` | 按任务号取状态与报告（评级 / 风险清单 / 关键字段；闸口态给待审高风险） |
+| `ask_policy` | 按问题检索政策库，回命中条文的编号、出处与原文 |
+| `ask_contract` | 就某份合同提问：解释判定、查政策依据、找条款原文 |
+
+一次审查要跑模型（单份 30~120 秒），所以提交与取结果分开：**提交拿任务号，再轮询取报告**，
+不阻塞客户端。服务端复用工作台那套 `TaskManager`、政策检索与对话助手，判定逻辑一行不改。
+
+在 Claude Code / Cursor 这类客户端里配 stdio 命令即可（工作目录指向仓库根）：
+
+```json
+{
+  "mcpServers": {
+    "contract-agent": {
+      "command": "D:/ContractAgent/.venv/Scripts/python.exe",
+      "args": ["backend/app/mcp_server.py"]
+    }
+  }
+}
+```
+
+本机试一下：`claude --mcp-config <上面的 json> --strict-mcp-config -p "用 ask_policy 查预付款比例上限"`。
+
 ## 设计取舍
 
 **这几条贯穿全项目，也是它跟"调个模型读合同"的区别。**
@@ -199,6 +232,7 @@ flowchart TD
 | 检索 | Milvus 政策库（向量 + BM25 混合检索），不可用时自动退回内存检索 |
 | 模型 | OpenAI 兼容的对话模型 + embedding 模型，均可在 `.env` 里替换 |
 | 持久化 | 任务与审批可存 Postgres（不配则全内存） |
+| 接入 | MCP 服务端（stdio）：提交合同 / 取报告 / 问政策库 / 问合同四个工具 |
 | 工程 | pytest（后端测试离线可跑，不依赖模型）；eslint + prettier（前端） |
 
 ## 跑起来
@@ -234,6 +268,7 @@ cd frontend && pnpm lint && pnpm build            # 前端静态检查与构建
 python -m backend.app.review.pipeline data/contracts/sample_01.md --out reports   # 离线跑一份合同
 python -m backend.eval.run_eval --check           # 校验评测集（不调用模型）
 python -m backend.eval.run_retrieval_eval         # 检索金标（只花 embedding）
+python backend/app/mcp_server.py                  # MCP 服务端（stdio，供 AI 客户端调用）
 ```
 
 ## 目录
@@ -241,6 +276,7 @@ python -m backend.eval.run_retrieval_eval         # 检索金标（只花 embedd
 ```
 backend/app/
   main.py config.py       服务入口与配置；schemas.py 跨层数据结构；llm.py / usage.py 模型调用与计数
+  mcp_server.py           MCP（stdio）服务端：把审查能力暴露成四个工具供 AI 客户端调用
   api/                    HTTP 接口：任务（上传 / 队列 / 详情 / 审批 / 对话）与政策库
   review/                 审查主链路：解析、抽取、规则（rules/）、双审、审核图与离线链路
   policy/                 政策库：检索、语料核对、入库、命令行、起草与引用核对

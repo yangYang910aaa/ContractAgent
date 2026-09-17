@@ -21,13 +21,14 @@ from pydantic import BaseModel, Field
 
 from backend.app import assistant
 from backend.app.config import BASE_DIR
-from backend.app.review.parser import split_clauses
+from backend.app.review.parser import SUPPORTED_SUFFIXES, split_clauses
 from backend.app.tasks.manager import TaskManager
 
 router = APIRouter(prefix="/api", tags=["tasks"])
 
-# 上传白名单：文本型合同 + 图片型输入（扫描件 PDF/相机拍照件/截图件，走 OCR 通路）
-ALLOWED_SUFFIXES = {".pdf", ".docx", ".md", ".txt", ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+# 上传白名单：直接用解析器认得的那份（文本型合同 + 图片型输入，扫描件/拍照件走 OCR 通路），
+# 免得解析器加了格式、这里还拦着
+ALLOWED_SUFFIXES = SUPPORTED_SUFFIXES
 UPLOAD_DIR = BASE_DIR / "data" / "uploads"
 CONTRACTS_DIR = BASE_DIR / "data" / "contracts"
 

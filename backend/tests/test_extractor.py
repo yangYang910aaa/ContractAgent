@@ -42,6 +42,42 @@ def test_parse_amount_units_and_chinese_numerals() -> None:
     assert _parse_amount("贰佰壹拾案万伍任元整") is None
 
 
+def test_total_amount_falls_back_to_his_own_quote() -> None:
+    """模型把"30万元"抄成 30 时，按它自己引的证据句把单位补回来（差一万倍的那种错）。"""
+    model = build_contract_model(
+        {
+            "total_amount": "30",
+            "evidence": {
+                "total_amount": {
+                    "quote": "甲方应当支付货款30万元",
+                    "clause_ref": "第五条",
+                    "confidence": 0.9,
+                }
+            },
+        }
+    )
+    assert model.total_amount == Decimal("300000")
+
+
+def test_total_amount_quote_fallback_stays_narrow() -> None:
+    """复核只认"抽取值与证据句里的数字完全相等"：已经带单位的不动，对不上的不猜。"""
+    def build(value, quote: str):
+        return build_contract_model(
+            {
+                "total_amount": value,
+                "evidence": {
+                    "total_amount": {"quote": quote, "clause_ref": "第五条", "confidence": 0.9}
+                },
+            }
+        ).total_amount
+
+    assert build("30万元", "甲方应当支付货款30万元") == Decimal("300000")
+    assert build("30", "甲方应当支付货款300万元") == Decimal("30")
+    assert build("30", "货款为人民币三十元整") == Decimal("30")
+    # 证据句里那个数字与抽取值对不上（30 与 300）→ 一个都不动
+    assert build("30", "预付款300万元，余款另计") == Decimal("30")
+
+
 def test_parse_cn_date_variants() -> None:
     expect = date(2026, 3, 10)
     assert _parse_cn_date("2026年3月10日") == expect

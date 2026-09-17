@@ -16,6 +16,7 @@ import hashlib
 import math
 import re
 import socket
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -302,7 +303,8 @@ class MilvusStore:
         count = self.client.get_collection_stats(self.collection_name).get("row_count", 0)
         # 分支：已有数据 → 不再重复灌入（可手动清集合后重灌）
         if count > 0:
-            print(f"{self.collection_name} 已有 {count} 条，跳过导入")
+            # 走 stderr：stdio 版 MCP 的 stdout 是协议线，任何多余输出都会污染它
+            print(f"{self.collection_name} 已有 {count} 条，跳过导入", file=sys.stderr)
             return
         self.add_docs(docs)
 
@@ -632,7 +634,7 @@ def get_store(backend: str | None = None, embedding_model=None) -> MemoryStore |
     if backend == "milvus" or (backend == "auto" and _milvus_reachable(settings.milvus_uri)):
         return MilvusStore(uri=settings.milvus_uri, embedding_model=embedding_model)
     # 分支：auto 但 Milvus 不可达 → 退回内存
-    print(f"⚠️ Milvus({settings.milvus_uri}) 不可达，退回内存检索")
+    print(f"⚠️ Milvus({settings.milvus_uri}) 不可达，退回内存检索", file=sys.stderr)
     return MemoryStore(embedding_model=embedding_model)
 
 

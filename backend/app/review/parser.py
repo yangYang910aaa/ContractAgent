@@ -24,6 +24,10 @@ _CHAPTER_HEADER_RE = re.compile(r"(?m)^\s*([一二三四五六七八九十]+、[
 # 图片后缀：相机拍照件、截图件与"图片装进 PDF"的扫描件同属无文本层输入
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
+# 可解析的输入后缀：extract_text 认得哪些，这里就收哪些。上传接口的格式校验与
+# MCP 提交工具都从这里取——两处各写一份白名单，早晚会漂
+SUPPORTED_SUFFIXES = {".pdf", ".docx", ".md", ".markdown", ".txt"} | IMAGE_SUFFIXES
+
 # 读不出正文时的统一说明：空文件、加密/损坏的 PDF、OCR 没认出字都归到这一条。
 # 服务端图链路与离线流水线共用一份，避免两处文案漂移
 NO_TEXT_ERROR = "无法解析：文件没有可读正文（空文件、加密或损坏的 PDF，或扫描件/图片未识别出文字）"

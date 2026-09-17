@@ -26,3 +26,5 @@ rapidocr-onnxruntime>=1.2
 psycopg[binary]>=3.2
 psycopg-pool>=3.2
 langgraph-checkpoint-postgres>=3.1
+# MCP 服务端（stdio 版，暴露提交/取报告/问政策库/问合同四个工具）
+mcp>=2

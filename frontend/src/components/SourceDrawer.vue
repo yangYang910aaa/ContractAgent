@@ -415,6 +415,22 @@ function findBlockByEvidence(evidence: string, blocks: SourceBlock[]): number {
   return blocks.findIndex((b) => b.text.replace(/\s+/g, '').includes(flat))
 }
 
+/** 摘录横跨两个条款块时，挑"落在本块的字最多"的那一块（没有整块命中的退路）。
+ *  缺字段类风险的摘录是"锚点句左右取窗口"拼出来的，常从「前言」伸进「一、」，
+ *  整段在任何一个块里都找不到——只比整段就会一路退到纯文本、连高亮都没有。 */
+function findBlockByOverlap(evidence: string, blocks: SourceBlock[]): number {
+  let best = -1
+  let bestLen = 0
+  blocks.forEach((b, i) => {
+    const hit = longestOverlap(evidence, b.text.replace(PAGE_MARK_ALL, '').replace(/\s+/g, ''))
+    if (hit && hit.length > bestLen) {
+      bestLen = hit.length
+      best = i
+    }
+  })
+  return best
+}
+
 // OCR 页标记（parser 逐页拼接时插入）：与后端 rules._PAGE_MARK_RE 同口径——比对原句时
 // 连同空白一起丢掉，否则"正文有页标记、摘录没有"会让句级定位失败（真实扫描件实测）
 const PAGE_MARK_SRC = String.raw`-{2,}\s*第\s*\d+\s*页\s*-{2,}`
@@ -574,6 +590,12 @@ async function locate() {
         flashTo(byQuote, evidence)
         return
       }
+      // 这种情况是：摘录跨块、两个块都对不上整段 → 落到重叠最多的那一块，不做纯文本兜底
+      const byOverlap = findBlockByOverlap(evidence, blocks)
+      if (byOverlap >= 0 && byOverlap !== i) {
+        flashTo(byOverlap, evidence)
+        return
+      }
       return
     }
   }
@@ -584,6 +606,15 @@ async function locate() {
       tab.value = 'blocks'
       await nextTick()
       flashTo(j, evidence)
+      return
+    }
+    // 这种情况是：摘录跨了两个块（"前言 + 一、"这种），整段谁都装不下 →
+    // 按最长公共片段挑块，仍能句级高亮；挑不到才退纯文本估位
+    const k = blocks.length ? findBlockByOverlap(evidence, blocks) : -1
+    if (k >= 0) {
+      tab.value = 'blocks'
+      await nextTick()
+      flashTo(k, evidence)
       return
     }
     await scrollTextTo(evidence)
