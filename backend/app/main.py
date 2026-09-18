@@ -61,7 +61,7 @@ def _build_default_manager() -> tuple[TaskManager, PgPersistence | None]:
 def create_app(manager: TaskManager | None = None) -> FastAPI:
     """建 FastAPI 应用：任务管理器挂在 app.state, 路由经 request 取用。"""
     app = FastAPI(
-        title="供应商合同智能审核 Agent",
+        title="采购合同智能审核 Agent",
         description="上传采购合同 → Agent 结构化抽取 → 规则+政策库审查 → 风险报告(HITL)。",
         version="0.3.0",
         lifespan=lifespan,

@@ -136,7 +136,7 @@ def create_server(
     server = MCPServer(
         name="contract-agent",
         instructions=(
-            "供应商合同智能审核：提交合同文件 → 轮询取风险报告；也可直接问政策库或就某份合同提问。"
+            "采购合同智能审核：提交合同文件 → 轮询取风险报告；也可直接问政策库或就某份合同提问。"
             "审查要跑模型，单份约 30~120 秒，请提交后轮询 get_report，不要期待立即拿到结果。"
         ),
         lifespan=lifespan,
